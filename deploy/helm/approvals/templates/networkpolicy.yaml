@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aag-approvals.fullname" . }}
+  labels:
+    {{- include "aag-approvals.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aag-approvals.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from gateway only
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aag-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow egress to postgres
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432

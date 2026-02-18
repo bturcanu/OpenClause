@@ -1,0 +1,35 @@
+{
+  "allowlist": {
+    "read_actions": [
+      "jira.issue.list",
+      "jira.issue.get",
+      "jira.project.list",
+      "slack.channel.list",
+      "slack.channel.info",
+      "slack.msg.list",
+      "slack.user.list"
+    ],
+    "write_actions": [
+      "slack.msg.post",
+      "jira.issue.create",
+      "jira.issue.comment",
+      "jira.issue.update"
+    ],
+    "destructive_actions": [
+      "jira.issue.delete",
+      "jira.project.delete",
+      "slack.channel.archive",
+      "slack.channel.delete"
+    ]
+  },
+  "tenants": {
+    "tenant1": {
+      "name": "Acme Corp",
+      "max_risk_auto_approve": 5
+    },
+    "tenant2": {
+      "name": "Globex Inc",
+      "max_risk_auto_approve": 3
+    }
+  }
+}

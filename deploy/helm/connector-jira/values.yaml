@@ -1,0 +1,22 @@
+fullnameOverride: "connector-jira"
+
+image:
+  repository: aag/connector-jira
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+service:
+  port: 8083
+
+env:
+  CONNECTOR_JIRA_ADDR: ":8083"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi

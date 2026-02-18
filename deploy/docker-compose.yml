@@ -1,0 +1,121 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-aag}
+    env_file: ../.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aag} -d ${POSTGRES_DB:-aag}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    env_file: ../.env
+    command: server /data
+    volumes:
+      - minio_data:/data
+
+  opa:
+    image: openpolicyagent/opa:latest
+    ports:
+      - "8181:8181"
+    command:
+      - "run"
+      - "--server"
+      - "--log-level=info"
+      - "/policy"
+    volumes:
+      - ../policy/bundles/v0:/policy:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8181/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  approvals:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: approvals
+    ports:
+      - "8081:8081"
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      APPROVALS_ADDR: :8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  connector-slack:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: connector-slack
+    ports:
+      - "8082:8082"
+    env_file: ../.env
+    environment:
+      CONNECTOR_SLACK_ADDR: :8082
+
+  connector-jira:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: connector-jira
+    ports:
+      - "8083:8083"
+    env_file: ../.env
+    environment:
+      CONNECTOR_JIRA_ADDR: :8083
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: gateway
+    ports:
+      - "8080:8080"
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      OPA_URL: http://opa:8181
+      APPROVALS_URL: http://approvals:8081
+      CONNECTOR_SLACK_URL: http://connector-slack:8082
+      CONNECTOR_JIRA_URL: http://connector-jira:8083
+      S3_ENDPOINT: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+      approvals:
+        condition: service_started
+      connector-slack:
+        condition: service_started
+      connector-jira:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  minio_data:

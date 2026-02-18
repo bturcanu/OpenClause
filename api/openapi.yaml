@@ -1,0 +1,441 @@
+openapi: "3.1.0"
+info:
+  title: Agentic Access Governance API
+  description: >
+    Single entrypoint for AI agent tool-call governance.
+    Validates requests, evaluates policy, manages approvals, and records audit evidence.
+  version: "1.0.0"
+  contact:
+    name: AAG Team
+
+servers:
+  - url: http://localhost:8080
+    description: Local gateway
+  - url: http://localhost:8081
+    description: Local approvals service
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  # ── Gateway ──────────────────────────────────────────────────────────────
+  /v1/toolcalls:
+    post:
+      operationId: submitToolCall
+      summary: Submit a tool-call request for policy evaluation and execution
+      tags: [Gateway]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolCallRequest"
+      responses:
+        "200":
+          description: Decision returned (allow, deny, or approve)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /v1/toolcalls/{event_id}:
+    get:
+      operationId: getToolCallEvent
+      summary: Fetch a tool-call event by ID
+      tags: [Gateway]
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Event found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallEnvelope"
+        "404":
+          description: Event not found
+
+  # ── Approvals ────────────────────────────────────────────────────────────
+  /v1/approvals/requests:
+    post:
+      operationId: createApprovalRequest
+      summary: Create a new approval request (called by gateway)
+      tags: [Approvals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApprovalInput"
+      responses:
+        "201":
+          description: Approval request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalRequest"
+
+  /v1/approvals/requests/{id}:
+    get:
+      operationId: getApprovalRequest
+      summary: Get an approval request
+      tags: [Approvals]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Approval request found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalRequest"
+        "404":
+          description: Not found
+
+  /v1/approvals/requests/{id}/approve:
+    post:
+      operationId: approveRequest
+      summary: Approve a pending request, creating a grant
+      tags: [Approvals]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantInput"
+      responses:
+        "201":
+          description: Grant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalGrant"
+
+  /v1/approvals/requests/{id}/deny:
+    post:
+      operationId: denyRequest
+      summary: Deny a pending request
+      tags: [Approvals]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DenyInput"
+      responses:
+        "200":
+          description: Request denied
+
+  # ── Health ───────────────────────────────────────────────────────────────
+  /healthz:
+    get:
+      operationId: healthCheck
+      summary: Liveness probe
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: OK
+
+  /readyz:
+    get:
+      operationId: readyCheck
+      summary: Readiness probe
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: Metrics in Prometheus format
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    # ── Tool Call ────────────────────────────────────────────────────────
+    ToolCallRequest:
+      type: object
+      required: [tenant_id, agent_id, tool, action, idempotency_key]
+      properties:
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        tool:
+          type: string
+          description: "Normalized lowercase, e.g. slack"
+        action:
+          type: string
+          description: "Normalized lowercase dotted, e.g. msg.post"
+        params:
+          type: object
+          description: "Arbitrary JSON, max 64KB"
+        resource:
+          type: string
+          maxLength: 2048
+        risk_score:
+          type: integer
+          minimum: 0
+          maximum: 10
+        risk_factors:
+          type: array
+          items:
+            type: string
+        user_id:
+          type: string
+        session_id:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          maxProperties: 50
+        source_ip:
+          type: string
+        trace_id:
+          type: string
+        idempotency_key:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        schema_version:
+          type: string
+          default: "1.0"
+
+    ToolCallResponse:
+      type: object
+      properties:
+        event_id:
+          type: string
+        decision:
+          type: string
+          enum: [allow, deny, approve]
+        reason:
+          type: string
+        approval_url:
+          type: string
+        result:
+          $ref: "#/components/schemas/ExecutionResult"
+
+    ToolCallEnvelope:
+      type: object
+      properties:
+        event_id:
+          type: string
+        request:
+          $ref: "#/components/schemas/ToolCallRequest"
+        decision:
+          type: string
+        policy_result:
+          $ref: "#/components/schemas/PolicyResult"
+        execution_result:
+          $ref: "#/components/schemas/ExecutionResult"
+        hash:
+          type: string
+        prev_hash:
+          type: string
+        received_at:
+          type: string
+          format: date-time
+
+    PolicyResult:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: [allow, deny, approve]
+        reason:
+          type: string
+        requirements:
+          type: object
+          additionalProperties:
+            type: string
+
+    ExecutionResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, error, timeout]
+        output_json:
+          type: object
+        error:
+          type: string
+        duration_ms:
+          type: integer
+
+    # ── Approvals ────────────────────────────────────────────────────────
+    CreateApprovalInput:
+      type: object
+      required: [event_id, tenant_id, agent_id, tool, action]
+      properties:
+        event_id:
+          type: string
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        tool:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        risk_score:
+          type: integer
+        reason:
+          type: string
+
+    ApprovalRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        event_id:
+          type: string
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        tool:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        risk_score:
+          type: integer
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, denied, expired]
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    GrantInput:
+      type: object
+      required: [approver]
+      properties:
+        approver:
+          type: string
+        max_uses:
+          type: integer
+          default: 1
+        expires_in_sec:
+          type: integer
+          description: Seconds until grant expiry
+        resource_pattern:
+          type: string
+
+    DenyInput:
+      type: object
+      required: [approver]
+      properties:
+        approver:
+          type: string
+        reason:
+          type: string
+
+    ApprovalGrant:
+      type: object
+      properties:
+        id:
+          type: string
+        request_id:
+          type: string
+        tenant_id:
+          type: string
+        approver:
+          type: string
+        scope:
+          $ref: "#/components/schemas/ApprovalScope"
+        max_uses:
+          type: integer
+        uses_left:
+          type: integer
+        expires_at:
+          type: string
+          format: date-time
+        granted_at:
+          type: string
+          format: date-time
+
+    ApprovalScope:
+      type: object
+      properties:
+        tool:
+          type: string
+        action:
+          type: string
+        resource_pattern:
+          type: string
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+
+    # ── Errors ───────────────────────────────────────────────────────────
+    APIError:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+        details:
+          type: object
