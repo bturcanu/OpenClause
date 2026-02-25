@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "aag-gateway.fullname" . }}
+  name: {{ include "oc-gateway.fullname" . }}
   labels:
-    {{- include "aag-gateway.labels" . | nindent 4 }}
+    {{- include "oc-gateway.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicas }}
   selector:
     matchLabels:
-      {{- include "aag-gateway.selectorLabels" . | nindent 6 }}
+      {{- include "oc-gateway.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "aag-gateway.selectorLabels" . | nindent 8 }}
+        {{- include "oc-gateway.selectorLabels" . | nindent 8 }}
     spec:
       containers:
         - name: gateway

@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agenticaccess/governance/pkg/connectors"
+	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )

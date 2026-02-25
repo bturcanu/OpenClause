@@ -1,6 +1,6 @@
-# Agentic Access Governance (AAG)
+# OpenClause
 
-A policy-driven governance layer for AI agent tool calls. Every action an agent takes — posting a Slack message, creating a Jira ticket, querying a database — flows through AAG, where it is validated, evaluated against OPA policy, optionally routed for human approval, executed via pluggable connectors, and recorded as tamper-evident audit evidence.
+A policy-driven governance layer for AI agent tool calls. Every action an agent takes — posting a Slack message, creating a Jira ticket, querying a database — flows through OpenClause, where it is validated, evaluated against OPA policy, optionally routed for human approval, executed via pluggable connectors, and recorded as tamper-evident audit evidence.
 
 ---
 
@@ -27,7 +27,7 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 
 ## Why
 
-AI agents are being given access to production tools — Slack, Jira, cloud APIs, databases. Without a governance layer, there is no visibility into what agents do, no way to enforce policy, and no audit trail for compliance. AAG solves this:
+AI agents are being given access to production tools — Slack, Jira, cloud APIs, databases. Without a governance layer, there is no visibility into what agents do, no way to enforce policy, and no audit trail for compliance. OpenClause solves this:
 
 - **Default-deny policy** — agents can only take actions explicitly allowed by OPA rules.
 - **Human-in-the-loop** — high-risk or destructive actions are routed for human approval before execution.
@@ -98,7 +98,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 ### 1. Clone and configure
 
 ```bash
-git clone <repo-url> && cd AgenticAccessGovernance
+git clone https://github.com/bturcanu/OpenClause.git && cd OpenClause
 cp .env.example .env
 ```
 
@@ -232,7 +232,7 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 
 ## Policy System
 
-AAG uses [Open Policy Agent](https://www.openpolicyagent.org/) with Rego policies loaded as bundles.
+OpenClause uses [Open Policy Agent](https://www.openpolicyagent.org/) with Rego policies loaded as bundles.
 
 ### Default Policy (`policy/bundles/v0/main.rego`)
 
@@ -367,13 +367,13 @@ Set `MOCK_CONNECTORS=true` in `.env` to run connectors without real credentials.
 
 Available at `GET /metrics` on the gateway. Key metrics:
 
-- `aag_decisions_total` — decisions by type (allow/deny/approve)
-- `aag_policy_eval_duration_seconds` — policy evaluation latency
-- `aag_connector_duration_seconds` — connector call latency by tool
-- `aag_connector_errors_total` — connector errors by tool
-- `aag_approvals_total` — approvals by status
-- `aag_idempotency_hits_total` — idempotency cache hit rate
-- `aag_requests_total` — request rate by tenant
+- `oc_decisions_total` — decisions by type (allow/deny/approve)
+- `oc_policy_eval_duration_seconds` — policy evaluation latency
+- `oc_connector_duration_seconds` — connector call latency by tool
+- `oc_connector_errors_total` — connector errors by tool
+- `oc_approvals_total` — approvals by status
+- `oc_idempotency_hits_total` — idempotency cache hit rate
+- `oc_requests_total` — request rate by tenant
 
 ### Tracing (OpenTelemetry)
 
@@ -393,9 +393,9 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 |---|---|---|
 | `POSTGRES_HOST` | `localhost` | Postgres host |
 | `POSTGRES_PORT` | `5432` | Postgres port |
-| `POSTGRES_USER` | `aag` | Postgres user |
+| `POSTGRES_USER` | `openclause` | Postgres user |
 | `POSTGRES_PASSWORD` | `changeme` | Postgres password |
-| `POSTGRES_DB` | `aag` | Postgres database name |
+| `POSTGRES_DB` | `openclause` | Postgres database name |
 | `OPA_URL` | `http://localhost:8181` | OPA server URL |
 | `GATEWAY_ADDR` | `:8080` | Gateway listen address |
 | `APPROVALS_ADDR` | `:8081` | Approvals service listen address |
@@ -410,14 +410,14 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `JIRA_API_TOKEN` | — | Jira API token |
 | `RATE_LIMIT_PER_TENANT` | `100` | Max requests/sec per tenant |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint for traces |
-| `OTEL_SERVICE_NAME` | `aag-gateway` | OpenTelemetry service name |
+| `OTEL_SERVICE_NAME` | `oc-gateway` | OpenTelemetry service name |
 
 ---
 
 ## Project Structure
 
 ```
-AgenticAccessGovernance/
+OpenClause/
 ├── api/
 │   └── openapi.yaml              # OpenAPI 3.1 specification
 ├── cmd/
@@ -513,10 +513,10 @@ Helm charts are in `deploy/helm/` for each service. All charts include:
 - Gateway chart includes Ingress with TLS
 
 ```bash
-helm install aag-gateway deploy/helm/gateway/ -f custom-values.yaml
-helm install aag-approvals deploy/helm/approvals/
-helm install aag-connector-slack deploy/helm/connector-slack/
-helm install aag-connector-jira deploy/helm/connector-jira/
+helm install oc-gateway deploy/helm/gateway/ -f custom-values.yaml
+helm install oc-approvals deploy/helm/approvals/
+helm install oc-connector-slack deploy/helm/connector-slack/
+helm install oc-connector-jira deploy/helm/connector-jira/
 ```
 
 ### Cloud (Terraform)
@@ -552,4 +552,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 
 ## License
 
-TBD
+Copyright © 2026 Bogdan Turcanu.
+
+Licensed under the **Apache License 2.0** with the **Commons Clause License Condition v1.0**.  
+You may use, modify, and redistribute this software under Apache 2.0, but you may **not “Sell”** the software (including offering it as part of a paid product/service) without a separate commercial license from the licensor. See the `LICENSE` file for full terms.

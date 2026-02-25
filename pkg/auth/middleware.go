@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/agenticaccess/governance/pkg/types"
+	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
 type contextKey string

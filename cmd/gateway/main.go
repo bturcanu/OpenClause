@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agenticaccess/governance/pkg/approvals"
-	"github.com/agenticaccess/governance/pkg/auth"
-	"github.com/agenticaccess/governance/pkg/connectors"
-	"github.com/agenticaccess/governance/pkg/evidence"
-	aagOtel "github.com/agenticaccess/governance/pkg/otel"
-	"github.com/agenticaccess/governance/pkg/policy"
-	"github.com/agenticaccess/governance/pkg/types"
+	"github.com/bturcanu/OpenClause/pkg/approvals"
+	"github.com/bturcanu/OpenClause/pkg/auth"
+	"github.com/bturcanu/OpenClause/pkg/connectors"
+	"github.com/bturcanu/OpenClause/pkg/evidence"
+	ocOtel "github.com/bturcanu/OpenClause/pkg/otel"
+	"github.com/bturcanu/OpenClause/pkg/policy"
+	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
@@ -38,8 +38,8 @@ func main() {
 	defer cancel()
 
 	// ── OpenTelemetry ────────────────────────────────────────────────────
-	otelShutdown, err := aagOtel.Setup(ctx, aagOtel.Config{
-		ServiceName:    envOr("OTEL_SERVICE_NAME", "aag-gateway"),
+	otelShutdown, err := ocOtel.Setup(ctx, ocOtel.Config{
+		ServiceName:    envOr("OTEL_SERVICE_NAME", "oc-gateway"),
 		OTLPEndpoint:   os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		MetricsEnabled: true,
 		TracingEnabled: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "",
@@ -52,11 +52,11 @@ func main() {
 
 	// ── Postgres ─────────────────────────────────────────────────────────
 	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		envOr("POSTGRES_USER", "aag"),
+		envOr("POSTGRES_USER", "openclause"),
 		envOr("POSTGRES_PASSWORD", "changeme"),
 		envOr("POSTGRES_HOST", "localhost"),
 		envOr("POSTGRES_PORT", "5432"),
-		envOr("POSTGRES_DB", "aag"),
+		envOr("POSTGRES_DB", "openclause"),
 	)
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {

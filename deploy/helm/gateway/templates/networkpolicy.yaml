@@ -1,13 +1,13 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "aag-gateway.fullname" . }}
+  name: {{ include "oc-gateway.fullname" . }}
   labels:
-    {{- include "aag-gateway.labels" . | nindent 4 }}
+    {{- include "oc-gateway.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "aag-gateway.selectorLabels" . | nindent 6 }}
+      {{- include "oc-gateway.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
     - Egress

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/agenticaccess/governance/pkg/types"
+	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
 // Client calls OPA over HTTP to evaluate tool-call policies.
@@ -52,7 +52,7 @@ func (c *Client) Evaluate(ctx context.Context, input types.PolicyInput) (*types.
 		return nil, fmt.Errorf("policy marshal: %w", err)
 	}
 
-	url := c.baseURL + "/v1/data/aag/main"
+	url := c.baseURL + "/v1/data/oc/main"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("policy new request: %w", err)

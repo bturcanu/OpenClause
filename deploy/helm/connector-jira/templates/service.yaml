@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "aag-connector-jira.fullname" . }}
+  name: {{ include "oc-connector-jira.fullname" . }}
   labels:
-    {{- include "aag-connector-jira.labels" . | nindent 4 }}
+    {{- include "oc-connector-jira.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   ports:
@@ -12,4 +12,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    {{- include "aag-connector-jira.selectorLabels" . | nindent 4 }}
+    {{- include "oc-connector-jira.selectorLabels" . | nindent 4 }}

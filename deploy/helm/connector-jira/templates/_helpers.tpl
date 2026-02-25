@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "aag-connector-jira.name" -}}
+{{- define "oc-connector-jira.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "aag-connector-jira.fullname" -}}
+{{- define "oc-connector-jira.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,9 +24,9 @@ Create a default fully qualified app name.
 {{/*
 Common labels
 */}}
-{{- define "aag-connector-jira.labels" -}}
-helm.sh/chart: {{ include "aag-connector-jira.name" . }}
-{{ include "aag-connector-jira.selectorLabels" . }}
+{{- define "oc-connector-jira.labels" -}}
+helm.sh/chart: {{ include "oc-connector-jira.name" . }}
+{{ include "oc-connector-jira.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
@@ -34,7 +34,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "aag-connector-jira.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "aag-connector-jira.name" . }}
+{{- define "oc-connector-jira.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "oc-connector-jira.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

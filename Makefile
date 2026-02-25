@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# Agentic Access Governance — Makefile
+# OpenClause — Makefile
 # ═══════════════════════════════════════════════════════════════════════════════
 
 .PHONY: dev dev-down test policy-test lint build clean migrate help
@@ -11,7 +11,7 @@ ENV_FILE ?= .env
 
 ## Start all services locally via Docker Compose
 dev:
-	@echo ">>> Starting AAG stack..."
+	@echo ">>> Starting OpenClause stack..."
 	@cp -n .env.example .env 2>/dev/null || true
 	docker compose -f deploy/docker-compose.yml up --build -d
 	@echo ">>> Waiting for postgres..."
@@ -44,7 +44,7 @@ migrate:
 		-d $$(grep POSTGRES_DB $(ENV_FILE) | cut -d= -f2) \
 		-f migrations/001_initial.sql \
 	|| docker compose -f deploy/docker-compose.yml exec -T postgres \
-		psql -U aag -d aag -f /dev/stdin < migrations/001_initial.sql
+		psql -U openclause -d openclause -f /dev/stdin < migrations/001_initial.sql
 	@echo "✓ Migrations complete"
 
 # ── Testing ───────────────────────────────────────────────────────────────────
@@ -80,10 +80,10 @@ build:
 
 ## Build Docker images
 docker-build:
-	docker build --build-arg SERVICE_NAME=gateway -t aag-gateway .
-	docker build --build-arg SERVICE_NAME=approvals -t aag-approvals .
-	docker build --build-arg SERVICE_NAME=connector-slack -t aag-connector-slack .
-	docker build --build-arg SERVICE_NAME=connector-jira -t aag-connector-jira .
+	docker build --build-arg SERVICE_NAME=gateway -t oc-gateway .
+	docker build --build-arg SERVICE_NAME=approvals -t oc-approvals .
+	docker build --build-arg SERVICE_NAME=connector-slack -t oc-connector-slack .
+	docker build --build-arg SERVICE_NAME=connector-jira -t oc-connector-jira .
 
 ## Clean build artifacts
 clean:
@@ -94,7 +94,7 @@ clean:
 
 ## Show this help
 help:
-	@echo "Agentic Access Governance"
+	@echo "OpenClause"
 	@echo ""
 	@echo "Usage: make <target>"
 	@echo ""

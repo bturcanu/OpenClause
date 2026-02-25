@@ -1,12 +1,12 @@
 openapi: "3.1.0"
 info:
-  title: Agentic Access Governance API
+  title: OpenClause API
   description: >
     Single entrypoint for AI agent tool-call governance.
     Validates requests, evaluates policy, manages approvals, and records audit evidence.
   version: "1.0.0"
   contact:
-    name: AAG Team
+    name: OpenClause Team
 
 servers:
   - url: http://localhost:8080

@@ -1,1 +1,8 @@
 /buildplan.md
+bin/
+.env
+*.exe
+*.dll
+*.so
+*.dylib
+__debug_bin*

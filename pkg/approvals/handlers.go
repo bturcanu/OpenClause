@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/agenticaccess/governance/pkg/types"
+	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/go-chi/chi/v5"
 )
 

@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "aag-connector-slack.name" -}}
+{{- define "oc-connector-slack.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "aag-connector-slack.fullname" -}}
+{{- define "oc-connector-slack.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,9 +24,9 @@ Create a default fully qualified app name.
 {{/*
 Common labels
 */}}
-{{- define "aag-connector-slack.labels" -}}
-helm.sh/chart: {{ include "aag-connector-slack.name" . }}
-{{ include "aag-connector-slack.selectorLabels" . }}
+{{- define "oc-connector-slack.labels" -}}
+helm.sh/chart: {{ include "oc-connector-slack.name" . }}
+{{ include "oc-connector-slack.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
@@ -34,7 +34,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "aag-connector-slack.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "aag-connector-slack.name" . }}
+{{- define "oc-connector-slack.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "oc-connector-slack.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

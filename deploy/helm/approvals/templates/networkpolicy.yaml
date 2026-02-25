@@ -1,13 +1,13 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "aag-approvals.fullname" . }}
+  name: {{ include "oc-approvals.fullname" . }}
   labels:
-    {{- include "aag-approvals.labels" . | nindent 4 }}
+    {{- include "oc-approvals.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "aag-approvals.selectorLabels" . | nindent 6 }}
+      {{- include "oc-approvals.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
     - Egress
@@ -16,7 +16,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: aag-gateway
+              app.kubernetes.io/name: oc-gateway
       ports:
         - protocol: TCP
           port: {{ .Values.service.port }}

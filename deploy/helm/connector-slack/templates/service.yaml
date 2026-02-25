@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "aag-connector-slack.fullname" . }}
+  name: {{ include "oc-connector-slack.fullname" . }}
   labels:
-    {{- include "aag-connector-slack.labels" . | nindent 4 }}
+    {{- include "oc-connector-slack.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   ports:
@@ -12,4 +12,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    {{- include "aag-connector-slack.selectorLabels" . | nindent 4 }}
+    {{- include "oc-connector-slack.selectorLabels" . | nindent 4 }}

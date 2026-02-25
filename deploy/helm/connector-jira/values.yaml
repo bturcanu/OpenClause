@@ -1,7 +1,7 @@
 fullnameOverride: "connector-jira"
 
 image:
-  repository: aag/connector-jira
+  repository: oc/connector-jira
   tag: "1.0"
   pullPolicy: IfNotPresent
 

@@ -1,9 +1,9 @@
-# Agentic Access Governance — Baseline Policy
-# Package: aag.main
+# OpenClause — Baseline Policy
+# Package: oc.main
 #
 # Default deny. Allow low-risk reads. Require approval for high-risk / destructive.
 
-package aag.main
+package oc.main
 
 import rego.v1
 

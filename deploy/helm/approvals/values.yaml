@@ -1,7 +1,7 @@
 fullnameOverride: "approvals"
 
 image:
-  repository: aag/approvals
+  repository: oc/approvals
   tag: "1.0"
   pullPolicy: IfNotPresent
 

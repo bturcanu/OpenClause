@@ -2,9 +2,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "aag-gateway.fullname" . }}
+  name: {{ include "oc-gateway.fullname" . }}
   labels:
-    {{- include "aag-gateway.labels" . | nindent 4 }}
+    {{- include "oc-gateway.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -33,7 +33,7 @@ spec:
             pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ include "aag-gateway.fullname" $ }}
+                name: {{ include "oc-gateway.fullname" $ }}
                 port:
                   number: {{ $.Values.service.port }}
           {{- end }}

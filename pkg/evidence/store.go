@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agenticaccess/governance/pkg/types"
+	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

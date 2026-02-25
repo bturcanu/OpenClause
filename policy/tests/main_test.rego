@@ -1,10 +1,10 @@
-# Tests for aag.main policy
+# Tests for oc.main policy
 
-package aag.main_test
+package oc.main_test
 
 import rego.v1
 
-import data.aag.main
+import data.oc.main
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Test: allow low-risk read action

@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "aag-approvals.name" -}}
+{{- define "oc-approvals.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "aag-approvals.fullname" -}}
+{{- define "oc-approvals.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,9 +24,9 @@ Create a default fully qualified app name.
 {{/*
 Common labels
 */}}
-{{- define "aag-approvals.labels" -}}
-helm.sh/chart: {{ include "aag-approvals.name" . }}
-{{ include "aag-approvals.selectorLabels" . }}
+{{- define "oc-approvals.labels" -}}
+helm.sh/chart: {{ include "oc-approvals.name" . }}
+{{ include "oc-approvals.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
@@ -34,7 +34,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "aag-approvals.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "aag-approvals.name" . }}
+{{- define "oc-approvals.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "oc-approvals.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

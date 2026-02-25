@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/agenticaccess/governance/pkg/types"
+	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
 // Logger wraps the Store and emits structured logs alongside DB writes.

@@ -1,7 +1,7 @@
 fullnameOverride: "connector-slack"
 
 image:
-  repository: aag/connector-slack
+  repository: oc/connector-slack
   tag: "1.0"
   pullPolicy: IfNotPresent
 
