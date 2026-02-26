@@ -92,7 +92,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- [Go 1.22+](https://go.dev/dl/) (for local development)
+- [Go 1.25+](https://go.dev/dl/) (for local development)
 - [OPA CLI](https://www.openpolicyagent.org/docs/latest/#running-opa) (for policy tests)
 
 ### 1. Clone and configure
@@ -196,7 +196,7 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 | `GET` | `/v1/approvals/requests/{id}` | Get approval request details |
 | `POST` | `/v1/approvals/requests/{id}/approve` | Approve a pending request |
 | `POST` | `/v1/approvals/requests/{id}/deny` | Deny a pending request |
-| `GET` | `/v1/approvals/pending?tenant_id=...` | List pending approvals |
+| `GET` | `/v1/approvals/pending?tenant_id=...&limit=...&offset=...` | List pending approvals (paginated, default limit 200) |
 | `GET` | `/ui/pending?tenant_id=...` | Web UI for pending approvals |
 
 ### ToolCallRequest Schema
@@ -224,8 +224,10 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 
 **Validation rules:**
 - `tenant_id`, `agent_id`, `tool`, `action`, `idempotency_key` are required.
-- `params` must be <= 64 KB, `resource` <= 2 KB, `labels` <= 50 entries.
-- `risk_score` must be 0-10.
+- `params` must be <= 64 KB, `resource` <= 2 KB (byte length), `labels` <= 50 entries.
+- `idempotency_key` must be <= 256 bytes.
+- `risk_score` must be 0–10. Omitting it will result in a policy deny (OPA comparisons against undefined produce false).
+- `schema_version` must be `"1.0"` or omitted (defaults to `"1.0"`). Unknown versions are rejected.
 - `tool` and `action` are normalized to lowercase.
 
 ---
@@ -295,11 +297,13 @@ Every tool call is recorded in the `tool_events` table with:
 
 ### Hash chain
 
+Each field is length-prefixed (8-byte big-endian) for domain separation:
+
 ```
-hash[n] = SHA-256(hash[n-1] || canonical_payload || canonical_result)
+hash[n] = SHA-256( len(hash[n-1]) || hash[n-1] || len(payload) || payload || len(result) || result )
 ```
 
-This provides tamper evidence — if any row is modified or deleted, the chain breaks. Verification:
+This provides tamper evidence — if any row is modified or deleted, the chain breaks. The hash chain is serialised per tenant via a Postgres advisory lock to prevent concurrent writers from forking it. Verification:
 
 ```go
 evidence.VerifyChain(events) // returns error if chain is broken
@@ -321,7 +325,7 @@ evidence.VerifyChain(events) // returns error if chain is broken
 
 ## Authentication
 
-### API Key Authentication (MVP)
+### API Key Authentication (Gateway)
 
 Pass tenant API keys via the `X-API-Key` header or `Authorization: Bearer <key>`.
 
@@ -331,9 +335,19 @@ Configure keys in `.env`:
 API_KEYS=tenant1:sk-test-key-1,tenant2:sk-test-key-2
 ```
 
-The middleware maps the key to a `tenant_id` and injects it into the request context.
+The middleware maps the key to a `tenant_id` and injects it into the request context. Keys are stored in memory as SHA-256 hashes — raw keys never persist.
 
 Health and metrics endpoints (`/healthz`, `/readyz`, `/metrics`) are unauthenticated.
+
+### Internal Service Authentication
+
+Approvals and connector services require an `X-Internal-Token` header for service-to-service calls. Configure via:
+
+```
+INTERNAL_AUTH_TOKEN=your-shared-secret
+```
+
+Leave empty to disable (development only). The gateway does not currently forward this header automatically — configure it in service environment variables for production.
 
 ---
 
@@ -403,6 +417,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `CONNECTOR_SLACK_URL` | `http://localhost:8082` | Slack connector URL |
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
 | `API_KEYS` | — | Comma-separated `tenant:key` pairs |
+| `INTERNAL_AUTH_TOKEN` | — | Shared secret for service-to-service auth (approvals, connectors) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
 | `SLACK_BOT_TOKEN` | — | Slack bot OAuth token |
 | `JIRA_BASE_URL` | — | Jira instance URL |
@@ -429,15 +444,17 @@ OpenClause/
 │   ├── types/                     # Canonical schema, validation, errors
 │   ├── policy/                    # OPA HTTP client
 │   ├── evidence/                  # Canonicalization, hash chain, Postgres store
-│   ├── auth/                      # API key middleware
+│   ├── auth/                      # API key middleware, internal auth
 │   ├── otel/                      # OpenTelemetry setup
+│   ├── config/                    # Shared environment variable helpers
 │   ├── connectors/                # Connector interface, registry, routing
 │   └── approvals/                 # Approval types, store, handlers
 ├── policy/
 │   ├── bundles/v0/                # OPA policy bundle (main.rego + data.json)
 │   └── tests/                     # OPA policy tests
 ├── migrations/
-│   └── 001_initial.sql            # Postgres schema + seed data
+│   ├── 001_initial.sql            # Postgres schema (DDL only)
+│   └── 002_seed.sql               # Development seed data (tenants, agents)
 ├── deploy/
 │   ├── docker-compose.yml         # Local development stack
 │   ├── helm/                      # Helm charts (gateway, approvals, connectors)
@@ -445,7 +462,7 @@ OpenClause/
 │   └── dashboards/                # Grafana dashboard JSON
 ├── .github/workflows/
 │   └── ci.yml                     # CI: test, lint, policy-test, build, deploy
-├── Dockerfile                     # Multi-stage build for all services
+├── Dockerfile                     # Multi-stage build (one binary per image, non-root)
 ├── Makefile                       # dev, test, build, deploy targets
 ├── .env.example                   # Environment variable reference
 └── readme.md                      # This file
@@ -508,8 +525,10 @@ Runs gateway, approvals, 2 connectors, OPA, Postgres, and MinIO. See `deploy/doc
 Helm charts are in `deploy/helm/` for each service. All charts include:
 
 - Deployments with liveness (`/healthz`) and readiness (`/readyz`) probes
+- Pod and container security contexts (`runAsNonRoot`, `readOnlyRootFilesystem`, `drop ALL`)
 - ClusterIP services
-- Deny-by-default NetworkPolicies
+- Deny-by-default NetworkPolicies (connectors allow TCP 443 egress for external APIs)
+- Optional `secretRef` for loading secrets from Kubernetes Secrets (`values.secretRef`)
 - Gateway chart includes Ingress with TLS
 
 ```bash
