@@ -9,6 +9,7 @@ on:
 env:
   REGISTRY: ghcr.io
   GO_VERSION: "1.25"
+  IMAGE_BASE: ghcr.io/bturcanu/openclause
 
 jobs:
   test:
@@ -92,7 +93,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          images: ${{ env.IMAGE_BASE }}
           tags: |
             type=sha,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
@@ -104,8 +105,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/gateway:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/gateway:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/gateway:latest
+            ${{ env.IMAGE_BASE }}/gateway:${{ github.sha }}
           build-args: |
             SERVICE_NAME=gateway
 
@@ -116,8 +117,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/approvals:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/approvals:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/approvals:latest
+            ${{ env.IMAGE_BASE }}/approvals:${{ github.sha }}
           build-args: |
             SERVICE_NAME=approvals
 
@@ -128,8 +129,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/connector-slack:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/connector-slack:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/connector-slack:latest
+            ${{ env.IMAGE_BASE }}/connector-slack:${{ github.sha }}
           build-args: |
             SERVICE_NAME=connector-slack
 
@@ -140,8 +141,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/connector-jira:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/connector-jira:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/connector-jira:latest
+            ${{ env.IMAGE_BASE }}/connector-jira:${{ github.sha }}
           build-args: |
             SERVICE_NAME=connector-jira
 
