@@ -43,7 +43,7 @@ services:
     volumes:
       - ../policy/bundles/v0:/policy:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8181/health"]
+      test: ["CMD", "/opa", "eval", "true"]
       interval: 5s
       timeout: 5s
       retries: 5

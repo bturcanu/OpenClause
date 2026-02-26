@@ -248,6 +248,11 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case types.DecisionApprove:
+		// Record evidence first so the tool_events row exists before
+		// approval_requests references it via FK.
+		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
+			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
+		}
 		approvalReq, err := gw.approvals.CreateRequest(ctx, approvals.CreateApprovalInput{
 			EventID:   eventID,
 			TenantID:  req.TenantID,
@@ -262,9 +267,6 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 			gw.log.ErrorContext(ctx, "create approval failed", "error", err)
 		} else {
 			resp.ApprovalURL = fmt.Sprintf("%s/v1/approvals/requests/%s", gw.approvalsURL, approvalReq.ID)
-		}
-		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
-			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
 		}
 
 	case types.DecisionAllow:
