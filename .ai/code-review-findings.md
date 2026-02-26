@@ -99,9 +99,23 @@ pkg/policy     — TestEvaluate_* (4 tests) PASS
 pkg/types      — TestValidate_*, TestNormalize, TestToolAction (12 tests) PASS
 ```
 
-### OPA Policy Tests
-OPA not installed locally; Docker not available. Policy uses `else` chains (no conflicting complete rules).
-Tests cover: conflict scenario, boundary values (risk 3/4/6/7), requirements output.
+### OPA Policy Tests (13 tests, all pass)
+```
+data.oc.main_test.test_allow_low_risk_read: PASS
+data.oc.main_test.test_approve_high_risk: PASS
+data.oc.main_test.test_approve_destructive: PASS
+data.oc.main_test.test_deny_unknown: PASS
+data.oc.main_test.test_allow_write_moderate_risk: PASS
+data.oc.main_test.test_approve_destructive_high_risk: PASS   <-- conflict scenario
+data.oc.main_test.test_reason_destructive_high_risk: PASS
+data.oc.main_test.test_read_at_boundary_risk_3: PASS
+data.oc.main_test.test_read_at_boundary_risk_4_denied: PASS
+data.oc.main_test.test_write_at_boundary_risk_6: PASS
+data.oc.main_test.test_approve_at_boundary_risk_7: PASS
+data.oc.main_test.test_deny_zero_risk_unknown_action: PASS
+data.oc.main_test.test_requirements_on_approve: PASS
+PASS: 13/13
+```
 
 ---
 
@@ -130,7 +144,6 @@ Tests cover: conflict scenario, boundary values (risk 3/4/6/7), requirements out
 
 ### Risks / Remaining Follow-ups (non-blocking)
 
-1. **OPA policy tests not run locally** — OPA CLI not installed. Tests are structurally correct. Verify in CI.
 2. **Auth-failure rate limiting (#56)** — Documented as future improvement. Consider adding IP-based throttling.
 3. **PodDisruptionBudgets** — Not added (Low priority for single-replica dev setup). Add for production.
 4. **ACM certificate validation** — Requires Route 53 hosted zone; documented with commented Terraform.
