@@ -143,7 +143,7 @@ func (s *Store) GrantRequest(ctx context.Context, requestID string, in GrantInpu
 	if err != nil {
 		return nil, fmt.Errorf("approvals.GrantRequest begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
 
 	// Lock and check status atomically inside the transaction.
 	res, err := tx.Exec(ctx, `
@@ -250,7 +250,7 @@ func (s *Store) FindAndConsumeGrant(ctx context.Context, tenantID, agentID, tool
 	if err != nil {
 		return nil, fmt.Errorf("approvals.FindAndConsumeGrant begin: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
 
 	rows, err := tx.Query(ctx, `
 		SELECT id, request_id, tenant_id, approver,

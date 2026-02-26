@@ -21,11 +21,12 @@ func ChainHash(prevHash string, canonPayload []byte, canonResult []byte) string 
 }
 
 // writeField writes a length-prefixed field to the hash.
+// sha256.Write never returns an error per the hash.Hash contract.
 func writeField(h interface{ Write([]byte) (int, error) }, data []byte) {
 	var lenBuf [8]byte
 	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(data)))
-	h.Write(lenBuf[:])
-	h.Write(data)
+	_, _ = h.Write(lenBuf[:])
+	_, _ = h.Write(data)
 }
 
 // VerifyChain walks a sequence of events and verifies each hash link.

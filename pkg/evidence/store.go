@@ -35,7 +35,7 @@ func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) er
 	if err != nil {
 		return fmt.Errorf("evidence.RecordEvent begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
 
 	// Per-tenant advisory lock to serialise chain appends.
 	lockID := tenantLockID(env.Request.TenantID)

@@ -19,7 +19,7 @@ func TestEvaluate_AllowDecision(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -45,7 +45,7 @@ func TestEvaluate_DefaultDenyOnEmptyDecision(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -68,7 +68,7 @@ func TestEvaluate_DefaultDenyOnUnknownDecision(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -85,7 +85,7 @@ func TestEvaluate_DefaultDenyOnUnknownDecision(t *testing.T) {
 func TestEvaluate_NonOKStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("opa error"))
+		_, _ = w.Write([]byte("opa error"))
 	}))
 	defer srv.Close()
 

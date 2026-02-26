@@ -53,7 +53,7 @@ func main() {
 	if err != nil {
 		log.Error("otel setup failed", "error", err)
 	} else {
-		defer otelShutdown(context.Background())
+		defer otelShutdown(context.Background()) //nolint:errcheck // best-effort shutdown
 	}
 
 	// ── Postgres ─────────────────────────────────────────────────────────

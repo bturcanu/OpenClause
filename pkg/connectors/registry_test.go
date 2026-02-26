@@ -13,7 +13,7 @@ func TestRegistry_ExecSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := ExecResponse{Status: "success", OutputJSON: json.RawMessage(`{"ok":true}`)}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -41,7 +41,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 	reg := NewRegistry()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := ExecResponse{Status: "success"}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 

@@ -144,7 +144,7 @@ PASS: 13/13
 
 ### Risks / Remaining Follow-ups (non-blocking)
 
-2. **Auth-failure rate limiting (#56)** — Documented as future improvement. Consider adding IP-based throttling.
-3. **PodDisruptionBudgets** — Not added (Low priority for single-replica dev setup). Add for production.
-4. **ACM certificate validation** — Requires Route 53 hosted zone; documented with commented Terraform.
-5. **Terraform remote backend** — Commented template provided; requires real S3 bucket.
+1. **Auth-failure rate limiting (#56)** — Documented as future improvement. Consider adding IP-based throttling.
+2. **PodDisruptionBudgets** — Not added (Low priority for single-replica dev setup). Add for production.
+3. **ACM certificate validation** — Requires Route 53 hosted zone; documented with commented Terraform.
+4. **Terraform remote backend** — Commented template provided; requires real S3 bucket.
