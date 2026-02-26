@@ -7,11 +7,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 )
 
-// Registry maps tool names to connector base URLs.
+const maxConnectorResponseBytes = 4 << 20 // 4 MB
+
+// Registry maps tool names to connector base URLs. Thread-safe.
 type Registry struct {
+	mu         sync.RWMutex
 	routes     map[string]string // tool → base URL
 	httpClient *http.Client
 }
@@ -28,12 +33,17 @@ func NewRegistry() *Registry {
 
 // Register maps a tool name to a connector URL.
 func (r *Registry) Register(tool, baseURL string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.routes[tool] = baseURL
 }
 
 // Exec routes the request to the correct connector and returns the result.
 func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, error) {
+	r.mu.RLock()
 	baseURL, ok := r.routes[req.Tool]
+	r.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("no connector registered for tool %q", req.Tool)
 	}
@@ -43,7 +53,7 @@ func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, er
 		return nil, fmt.Errorf("connector marshal: %w", err)
 	}
 
-	url := baseURL + "/exec"
+	url := strings.TrimRight(baseURL, "/") + "/exec"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("connector new request: %w", err)
@@ -56,7 +66,7 @@ func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, er
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxConnectorResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("connector read response: %w", err)
 	}
@@ -71,5 +81,7 @@ func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, er
 
 // SetTimeout overrides the default HTTP client timeout for connector calls.
 func (r *Registry) SetTimeout(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.httpClient.Timeout = d
 }

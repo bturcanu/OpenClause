@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -14,11 +13,12 @@ import (
 // ──────────────────────────────────────────────────────────────────────────────
 
 const (
-	MaxParamsBytes    = 64 * 1024 // 64 KB
-	MaxResourceBytes  = 2 * 1024  // 2 KB
-	MaxLabelsCount    = 50
-	MaxRiskScore      = 10
-	CurrentSchemaVer  = "1.0"
+	MaxParamsBytes         = 64 * 1024 // 64 KB
+	MaxResourceBytes       = 2 * 1024  // 2 KB
+	MaxIdempotencyKeyBytes = 256
+	MaxLabelsCount         = 50
+	MaxRiskScore           = 10
+	CurrentSchemaVer       = "1.0"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ func (r *ToolCallRequest) Normalize() {
 	r.Action = strings.ToLower(strings.TrimSpace(r.Action))
 }
 
-// Validate enforces all invariants on the request.
+// Validate enforces all invariants on the request. Also normalizes tool/action.
 func (r *ToolCallRequest) Validate() error {
 	r.Normalize()
 
@@ -82,13 +82,16 @@ func (r *ToolCallRequest) Validate() error {
 	if r.IdempotencyKey == "" {
 		return &ValidationError{Field: "idempotency_key", Reason: "required"}
 	}
+	if len(r.IdempotencyKey) > MaxIdempotencyKeyBytes {
+		return &ValidationError{Field: "idempotency_key", Reason: fmt.Sprintf("exceeds %d bytes", MaxIdempotencyKeyBytes)}
+	}
 	if r.RiskScore < 0 || r.RiskScore > MaxRiskScore {
 		return &ValidationError{Field: "risk_score", Reason: fmt.Sprintf("must be 0–%d", MaxRiskScore)}
 	}
 	if len(r.Params) > MaxParamsBytes {
 		return &ValidationError{Field: "params", Reason: fmt.Sprintf("exceeds %d bytes", MaxParamsBytes)}
 	}
-	if utf8.RuneCountInString(r.Resource) > MaxResourceBytes {
+	if len(r.Resource) > MaxResourceBytes {
 		return &ValidationError{Field: "resource", Reason: fmt.Sprintf("exceeds %d bytes", MaxResourceBytes)}
 	}
 	if len(r.Labels) > MaxLabelsCount {
@@ -96,6 +99,8 @@ func (r *ToolCallRequest) Validate() error {
 	}
 	if r.SchemaVersion == "" {
 		r.SchemaVersion = CurrentSchemaVer
+	} else if r.SchemaVersion != CurrentSchemaVer {
+		return &ValidationError{Field: "schema_version", Reason: fmt.Sprintf("unsupported version %q, expected %q", r.SchemaVersion, CurrentSchemaVer)}
 	}
 	if r.RequestedAt.IsZero() {
 		r.RequestedAt = time.Now().UTC()
