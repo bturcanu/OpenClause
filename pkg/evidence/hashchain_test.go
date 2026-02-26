@@ -26,6 +26,35 @@ func TestChainHash_DiffersWithDiffInput(t *testing.T) {
 	}
 }
 
+func TestChainHash_DomainSeparation(t *testing.T) {
+	// With length-prefixed fields, "ab"+"cd" != "a"+"bcd".
+	h1 := ChainHash("ab", []byte("cd"), nil)
+	h2 := ChainHash("a", []byte("bcd"), nil)
+
+	if h1 == h2 {
+		t.Error("domain separation failed: Hash(ab,cd) == Hash(a,bcd)")
+	}
+}
+
+func TestChainHash_EmptyInputs(t *testing.T) {
+	h := ChainHash("", []byte{}, nil)
+	if h == "" {
+		t.Error("expected non-empty hash for empty inputs")
+	}
+	if len(h) != 64 {
+		t.Errorf("expected SHA-256 hex length 64, got %d", len(h))
+	}
+}
+
+func TestChainHash_NilResult(t *testing.T) {
+	h1 := ChainHash("prev", []byte("payload"), nil)
+	h2 := ChainHash("prev", []byte("payload"), []byte("result"))
+
+	if h1 == h2 {
+		t.Error("nil result should differ from non-nil result")
+	}
+}
+
 func TestVerifyChain_Valid(t *testing.T) {
 	ev1Payload := []byte(`{"event":1}`)
 	ev1Hash := ChainHash("", ev1Payload, nil)
@@ -55,5 +84,11 @@ func TestVerifyChain_Broken(t *testing.T) {
 
 	if err := VerifyChain(events); err == nil {
 		t.Fatal("expected chain verification to fail")
+	}
+}
+
+func TestVerifyChain_Empty(t *testing.T) {
+	if err := VerifyChain(nil); err != nil {
+		t.Fatalf("empty chain should verify: %v", err)
 	}
 }

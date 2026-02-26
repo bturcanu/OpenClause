@@ -2,8 +2,10 @@ package evidence
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
@@ -25,10 +27,23 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // Write path
 // ──────────────────────────────────────────────────────────────────────────────
 
-// RecordEvent inserts a tool_event row and returns the computed hash.
+// RecordEvent inserts a tool_event row (and optional tool_result) atomically
+// within a single transaction. A per-tenant advisory lock serialises hash-chain
+// appends so concurrent writers cannot fork the chain.
 func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) error {
-	// Fetch the previous hash for this tenant.
-	prevHash, err := s.lastHash(ctx, env.Request.TenantID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("evidence.RecordEvent begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Per-tenant advisory lock to serialise chain appends.
+	lockID := tenantLockID(env.Request.TenantID)
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockID); err != nil {
+		return fmt.Errorf("evidence.RecordEvent advisory lock: %w", err)
+	}
+
+	prevHash, err := s.lastHashTx(ctx, tx, env.Request.TenantID)
 	if err != nil {
 		return fmt.Errorf("evidence.RecordEvent last hash: %w", err)
 	}
@@ -51,9 +66,12 @@ func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) er
 	env.PrevHash = prevHash
 	env.PayloadCanon = canonPayload
 
-	policyJSON, _ := json.Marshal(env.PolicyResult)
+	policyJSON, err := json.Marshal(env.PolicyResult)
+	if err != nil {
+		return fmt.Errorf("evidence.RecordEvent marshal policy: %w", err)
+	}
 
-	_, err = s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO tool_events (
 			event_id, tenant_id, agent_id, tool, action,
 			payload_json, payload_canon,
@@ -79,12 +97,11 @@ func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) er
 		hash, prevHash,
 	)
 	if err != nil {
-		return fmt.Errorf("evidence.RecordEvent insert: %w", err)
+		return fmt.Errorf("evidence.RecordEvent insert event: %w", err)
 	}
 
-	// If there is an execution result, record it too.
 	if env.ExecutionResult != nil {
-		_, err = s.pool.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO tool_results (event_id, tenant_id, status, output_json, error_msg, duration_ms, result_canon)
 			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 			env.EventID, env.Request.TenantID,
@@ -96,6 +113,9 @@ func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) er
 		}
 	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("evidence.RecordEvent commit: %w", err)
+	}
 	return nil
 }
 
@@ -158,7 +178,9 @@ func (s *Store) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEn
 	}
 	if len(policyJSON) > 0 {
 		env.PolicyResult = &types.PolicyResult{}
-		_ = json.Unmarshal(policyJSON, env.PolicyResult)
+		if err := json.Unmarshal(policyJSON, env.PolicyResult); err != nil {
+			return nil, fmt.Errorf("evidence.GetEvent unmarshal policy: %w", err)
+		}
 	}
 	return &env, nil
 }
@@ -166,7 +188,7 @@ func (s *Store) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEn
 // GetChainEvents returns events for chain verification in chronological order.
 func (s *Store) GetChainEvents(ctx context.Context, tenantID string, since time.Time) ([]ChainEvent, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT e.event_id, e.hash, e.payload_canon, COALESCE(r.result_canon, ''::bytea)
+		SELECT e.event_id, e.hash, e.payload_canon, r.result_canon
 		FROM tool_events e
 		LEFT JOIN tool_results r ON r.event_id = e.event_id
 		WHERE e.tenant_id = $1 AND e.received_at >= $2
@@ -184,6 +206,9 @@ func (s *Store) GetChainEvents(ctx context.Context, tenantID string, since time.
 		}
 		events = append(events, ev)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("evidence.GetChainEvents iteration: %w", err)
+	}
 	return events, nil
 }
 
@@ -191,8 +216,9 @@ func (s *Store) GetChainEvents(ctx context.Context, tenantID string, since time.
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-func (s *Store) lastHash(ctx context.Context, tenantID string) (string, error) {
-	row := s.pool.QueryRow(ctx, `
+// lastHashTx fetches the latest hash for a tenant inside an existing transaction.
+func (s *Store) lastHashTx(ctx context.Context, tx pgx.Tx, tenantID string) (string, error) {
+	row := tx.QueryRow(ctx, `
 		SELECT hash FROM tool_events
 		WHERE tenant_id = $1
 		ORDER BY received_at DESC LIMIT 1`, tenantID)
@@ -203,4 +229,12 @@ func (s *Store) lastHash(ctx context.Context, tenantID string) (string, error) {
 		return "", nil
 	}
 	return h, err
+}
+
+// tenantLockID produces a deterministic int64 advisory-lock ID from a tenant string.
+func tenantLockID(tenantID string) int64 {
+	h := fnv.New64a()
+	h.Write([]byte(tenantID))
+	b := h.Sum(nil)
+	return int64(binary.BigEndian.Uint64(b))
 }
