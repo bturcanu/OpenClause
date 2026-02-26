@@ -13,11 +13,14 @@ import (
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/approvals"
+	"github.com/bturcanu/OpenClause/pkg/config"
 	ocOtel "github.com/bturcanu/OpenClause/pkg/otel"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const maxBodyBytes = 1 << 20
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -27,11 +30,12 @@ func main() {
 	defer cancel()
 
 	// ── OpenTelemetry ────────────────────────────────────────────────────
+	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	otelShutdown, err := ocOtel.Setup(ctx, ocOtel.Config{
 		ServiceName:    "oc-approvals",
-		OTLPEndpoint:   os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		OTLPEndpoint:   otelEndpoint,
 		MetricsEnabled: true,
-		TracingEnabled: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "",
+		TracingEnabled: otelEndpoint != "",
 	})
 	if err != nil {
 		log.Error("otel setup failed", "error", err)
@@ -41,11 +45,11 @@ func main() {
 
 	// ── Postgres ─────────────────────────────────────────────────────────
 	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		envOr("POSTGRES_USER", "openclause"),
-		envOr("POSTGRES_PASSWORD", "changeme"),
-		envOr("POSTGRES_HOST", "localhost"),
-		envOr("POSTGRES_PORT", "5432"),
-		envOr("POSTGRES_DB", "openclause"),
+		config.EnvOr("POSTGRES_USER", "openclause"),
+		config.EnvOr("POSTGRES_PASSWORD", "changeme"),
+		config.EnvOr("POSTGRES_HOST", "localhost"),
+		config.EnvOr("POSTGRES_PORT", "5432"),
+		config.EnvOr("POSTGRES_DB", "openclause"),
 	)
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
@@ -56,6 +60,8 @@ func main() {
 
 	store := approvals.NewStore(pool)
 	handlers := approvals.NewHandlers(store)
+
+	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
 
 	// ── Router ───────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -69,8 +75,11 @@ func main() {
 		_, _ = w.Write([]byte("OK"))
 	})
 
-	// Register API routes
-	handlers.RegisterRoutes(r)
+	// API routes with internal auth
+	r.Group(func(r chi.Router) {
+		r.Use(internalAuthMiddleware(internalToken))
+		handlers.RegisterRoutes(r)
+	})
 
 	// ── Minimal web UI for pending approvals ─────────────────────────────
 	r.Get("/ui/pending", func(w http.ResponseWriter, r *http.Request) {
@@ -79,28 +88,38 @@ func main() {
 			http.Error(w, "tenant_id required", http.StatusBadRequest)
 			return
 		}
-		reqs, err := store.ListPending(r.Context(), tenantID)
+		reqs, err := store.ListPending(r.Context(), tenantID, 100, 0)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Error("list pending failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = pendingTmpl.Execute(w, struct {
+		if err := pendingTmpl.Execute(w, struct {
 			TenantID string
 			Requests []approvals.ApprovalRequest
-		}{TenantID: tenantID, Requests: reqs})
+		}{TenantID: tenantID, Requests: reqs}); err != nil {
+			log.Error("template execute failed", "error", err)
+		}
 	})
 
 	// ── Server ───────────────────────────────────────────────────────────
-	addr := envOr("APPROVALS_ADDR", ":8081")
-	srv := &http.Server{Addr: addr, Handler: r}
+	addr := config.EnvOr("APPROVALS_ADDR", ":8081")
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	go func() {
 		log.Info("approvals service starting", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "error", err)
-			os.Exit(1)
+			cancel()
 		}
 	}()
 
@@ -108,14 +127,22 @@ func main() {
 	log.Info("shutting down approvals service")
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutCancel()
-	_ = srv.Shutdown(shutCtx)
+	if err := srv.Shutdown(shutCtx); err != nil {
+		log.Error("shutdown error", "error", err)
+	}
 }
 
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+// internalAuthMiddleware validates the X-Internal-Token header for service-to-service calls.
+func internalAuthMiddleware(token string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if token != "" && r.Header.Get("X-Internal-Token") != token {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
-	return fallback
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
