@@ -27,3 +27,7 @@ spec:
       ports:
         - protocol: UDP
           port: 53
+    # Allow HTTPS egress to external APIs (Slack)
+    - ports:
+        - protocol: TCP
+          port: 443

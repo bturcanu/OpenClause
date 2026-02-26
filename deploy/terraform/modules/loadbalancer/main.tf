@@ -56,15 +56,39 @@ resource "aws_acm_certificate" "main" {
   }
 }
 
+# NOTE: ACM DNS validation requires a Route 53 hosted zone for the domain.
+# Uncomment and configure when a hosted zone is available:
+#
+# resource "aws_route53_record" "cert_validation" {
+#   for_each = {
+#     for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
+#       name   = dvo.resource_record_name
+#       type   = dvo.resource_record_type
+#       record = dvo.resource_record_value
+#     }
+#   }
+#   zone_id = var.route53_zone_id
+#   name    = each.value.name
+#   type    = each.value.type
+#   records = [each.value.record]
+#   ttl     = 60
+# }
+#
+# resource "aws_acm_certificate_validation" "main" {
+#   certificate_arn         = aws_acm_certificate.main.arn
+#   validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
+# }
+
 resource "aws_lb_target_group" "main" {
-  name     = "${var.name}-tg"
-  port     = 8080
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
+  name        = "${var.name}-tg"
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
 
   health_check {
     enabled             = true
-    path                = "/health"
+    path                = "/healthz"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     timeout             = 5

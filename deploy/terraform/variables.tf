@@ -72,3 +72,15 @@ variable "secrets" {
   type        = map(string)
   sensitive   = true
 }
+
+variable "eks_public_access_cidrs" {
+  description = "CIDR blocks allowed to access the EKS API server public endpoint"
+  type        = list(string)
+  default     = []
+}
+
+variable "kms_key_arn" {
+  description = "Optional KMS key ARN for S3 evidence encryption"
+  type        = string
+  default     = ""
+}

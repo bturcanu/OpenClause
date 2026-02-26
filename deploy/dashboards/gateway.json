@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "editable": true,
+  "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
@@ -13,7 +13,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(oc_decisions_total[5m])) by (decision)",
+          "expr": "sum(rate(oc_decisions_total{tenant_id=~\"$tenant\"}[5m])) by (decision)",
           "legendFormat": "{{decision}}"
         }
       ],
@@ -28,11 +28,11 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(oc_policy_eval_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(oc_policy_eval_duration_seconds_bucket{tenant_id=~\"$tenant\"}[5m])) by (le))",
           "legendFormat": "p95"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(oc_policy_eval_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(oc_policy_eval_duration_seconds_bucket{tenant_id=~\"$tenant\"}[5m])) by (le))",
           "legendFormat": "p50"
         }
       ],
@@ -47,7 +47,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(oc_connector_duration_seconds_bucket[5m])) by (le, tool))",
+          "expr": "histogram_quantile(0.95, sum(rate(oc_connector_duration_seconds_bucket{tenant_id=~\"$tenant\"}[5m])) by (le, tool))",
           "legendFormat": "{{tool}} p95"
         }
       ],
@@ -62,7 +62,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
-          "expr": "sum(rate(oc_connector_errors_total[5m])) by (tool)",
+          "expr": "sum(rate(oc_connector_errors_total{tenant_id=~\"$tenant\"}[5m])) by (tool)",
           "legendFormat": "{{tool}}"
         }
       ],
@@ -77,7 +77,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 16 },
       "targets": [
         {
-          "expr": "oc_approvals_total",
+          "expr": "oc_approvals_total{tenant_id=~\"$tenant\"}",
           "legendFormat": "{{status}}"
         }
       ]
@@ -89,7 +89,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 16 },
       "targets": [
         {
-          "expr": "sum(rate(oc_idempotency_hits_total[5m]))",
+          "expr": "sum(rate(oc_idempotency_hits_total{tenant_id=~\"$tenant\"}[5m]))",
           "legendFormat": "cache hits"
         }
       ],
@@ -104,7 +104,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 16 },
       "targets": [
         {
-          "expr": "sum(rate(oc_requests_total[5m])) by (tenant_id)",
+          "expr": "sum(rate(oc_requests_total{tenant_id=~\"$tenant\"}[5m])) by (tenant_id)",
           "legendFormat": "{{tenant_id}}"
         }
       ],
@@ -116,7 +116,20 @@
   "refresh": "10s",
   "schemaVersion": 39,
   "tags": ["openclause", "governance"],
-  "templating": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(oc_requests_total, tenant_id)",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2
+      }
+    ]
+  },
   "time": { "from": "now-1h", "to": "now" },
   "title": "OpenClause — Gateway Dashboard",
   "uid": "oc-gateway"

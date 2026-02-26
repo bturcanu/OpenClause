@@ -28,3 +28,21 @@ variable "instance_class" {
   description = "RDS instance class"
   type        = string
 }
+
+variable "multi_az" {
+  description = "Enable Multi-AZ for high availability"
+  type        = bool
+  default     = true
+}
+
+variable "deletion_protection" {
+  description = "Enable deletion protection"
+  type        = bool
+  default     = true
+}
+
+variable "skip_final_snapshot" {
+  description = "Skip final snapshot on deletion (only for dev)"
+  type        = bool
+  default     = false
+}

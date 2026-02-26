@@ -2,13 +2,15 @@ fullnameOverride: "approvals"
 
 image:
   repository: oc/approvals
-  tag: "1.0"
+  tag: "latest"
   pullPolicy: IfNotPresent
 
 replicas: 1
 
 service:
   port: 8081
+
+# secretRef: approvals-secrets
 
 env:
   POSTGRES_HOST: postgres

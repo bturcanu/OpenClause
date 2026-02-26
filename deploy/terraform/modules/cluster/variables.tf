@@ -17,3 +17,9 @@ variable "desired_nodes" {
   description = "Desired number of nodes in the node group"
   type        = number
 }
+
+variable "public_access_cidrs" {
+  description = "CIDR blocks allowed to access the EKS API server. Empty disables public access."
+  type        = list(string)
+  default     = []
+}

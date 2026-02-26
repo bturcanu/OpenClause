@@ -14,10 +14,19 @@ spec:
       labels:
         {{- include "oc-approvals.selectorLabels" . | nindent 8 }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
       containers:
         - name: approvals
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -27,6 +36,11 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+          {{- if .Values.secretRef }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretRef }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -37,7 +51,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /readyz
+              path: /healthz
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5

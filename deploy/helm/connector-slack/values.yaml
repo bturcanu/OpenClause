@@ -2,13 +2,15 @@ fullnameOverride: "connector-slack"
 
 image:
   repository: oc/connector-slack
-  tag: "1.0"
+  tag: "latest"
   pullPolicy: IfNotPresent
 
 replicas: 1
 
 service:
   port: 8082
+
+# secretRef: connector-slack-secrets
 
 env:
   CONNECTOR_SLACK_ADDR: ":8082"

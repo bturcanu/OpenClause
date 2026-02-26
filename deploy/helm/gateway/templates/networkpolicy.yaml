@@ -12,9 +12,10 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow ingress from ingress controller / Ingress resources
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: ingress
       ports:
         - protocol: TCP
           port: {{ .Values.service.port }}

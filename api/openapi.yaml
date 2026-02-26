@@ -43,8 +43,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/APIError"
+        "401":
+          description: Unauthorized — missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
         "429":
           description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "500":
+          description: Internal server error
           content:
             application/json:
               schema:
@@ -68,8 +80,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ToolCallEnvelope"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
         "404":
           description: Event not found
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
 
   # ── Approvals ────────────────────────────────────────────────────────────
   /v1/approvals/requests:
@@ -224,6 +248,10 @@ components:
           type: integer
           minimum: 0
           maximum: 10
+          description: >
+            Risk score (0-10). While optional in the schema, omitting it causes
+            policy evaluation to default-deny since OPA comparisons against
+            undefined values produce false. Recommended to always provide.
         risk_factors:
           type: array
           items:
