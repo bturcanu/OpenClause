@@ -3,8 +3,8 @@ package otel
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -21,6 +21,7 @@ import (
 type Config struct {
 	ServiceName    string
 	OTLPEndpoint   string // e.g. "localhost:4318"
+	OTLPInsecure   bool   // set true to disable TLS (default for local dev)
 	MetricsEnabled bool
 	TracingEnabled bool
 }
@@ -44,10 +45,14 @@ func Setup(ctx context.Context, cfg Config) (Shutdown, error) {
 
 	// ── Tracing ──────────────────────────────────────────────────────────
 	if cfg.TracingEnabled && cfg.OTLPEndpoint != "" {
-		exporter, err := otlptracehttp.New(ctx,
+		opts := []otlptracehttp.Option{
 			otlptracehttp.WithEndpoint(cfg.OTLPEndpoint),
-			otlptracehttp.WithInsecure(),
-		)
+		}
+		if cfg.OTLPInsecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+
+		exporter, err := otlptracehttp.New(ctx, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("otel trace exporter: %w", err)
 		}
@@ -82,12 +87,13 @@ func Setup(ctx context.Context, cfg Config) (Shutdown, error) {
 	}
 
 	shutdown := func(ctx context.Context) error {
+		var errs []error
 		for _, fn := range shutdowns {
 			if err := fn(ctx); err != nil {
-				slog.Error("otel shutdown", "error", err)
+				errs = append(errs, err)
 			}
 		}
-		return nil
+		return errors.Join(errs...)
 	}
 
 	return shutdown, nil

@@ -5,37 +5,31 @@ FROM golang:1.22-alpine AS builder
 WORKDIR /app
 
 # Copy dependency files
-COPY go.mod go.sum* ./
-RUN go mod download || true
+COPY go.mod go.sum ./
+RUN go mod download
 
 # Copy source code
 COPY . .
 
-# Build all binaries
-RUN CGO_ENABLED=0 go build -o /gateway ./cmd/gateway && \
-    CGO_ENABLED=0 go build -o /approvals ./cmd/approvals && \
-    CGO_ENABLED=0 go build -o /connector-slack ./cmd/connector-slack && \
-    CGO_ENABLED=0 go build -o /connector-jira ./cmd/connector-jira
+# Build arg to select which binary to build
+ARG SERVICE_NAME=gateway
+
+# Build only the selected service binary
+RUN CGO_ENABLED=0 go build -o /service ./cmd/${SERVICE_NAME}
 
 # Runtime stage
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && \
+    adduser -D -u 1001 appuser
 
 WORKDIR /app
 
-# Build arg to select which binary to run
-ARG SERVICE_NAME=gateway
-ENV SERVICE_NAME=${SERVICE_NAME}
+# Copy only the selected binary
+COPY --from=builder /service /app/service
 
-# Copy all binaries
-COPY --from=builder /gateway /app/gateway
-COPY --from=builder /approvals /app/approvals
-COPY --from=builder /connector-slack /app/connector-slack
-COPY --from=builder /connector-jira /app/connector-jira
+USER appuser
 
-# Expose default port (overridden per service in compose)
 EXPOSE 8080
 
-# Run the selected service
-ENTRYPOINT ["/bin/sh", "-c", "exec /app/${SERVICE_NAME}"]
+ENTRYPOINT ["/app/service"]

@@ -16,10 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+const maxBodyBytes = 1 << 20
+const maxExternalResponseBytes = 4 << 20
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -29,14 +33,27 @@ func main() {
 	defer cancel()
 
 	mock := strings.ToLower(os.Getenv("MOCK_CONNECTORS")) == "true"
+	baseURL := os.Getenv("JIRA_BASE_URL")
+	email := os.Getenv("JIRA_EMAIL")
+	apiToken := os.Getenv("JIRA_API_TOKEN")
+
+	if !mock && (baseURL == "" || email == "" || apiToken == "") {
+		log.Error("JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN are required when MOCK_CONNECTORS is not true")
+		os.Exit(1)
+	}
 
 	connector := &JiraConnector{
 		log:      log,
 		mock:     mock,
-		baseURL:  os.Getenv("JIRA_BASE_URL"),
-		email:    os.Getenv("JIRA_EMAIL"),
-		apiToken: os.Getenv("JIRA_API_TOKEN"),
+		baseURL:  baseURL,
+		email:    email,
+		apiToken: apiToken,
+		httpClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
 	}
+
+	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -49,6 +66,12 @@ func main() {
 	})
 
 	r.Post("/exec", func(w http.ResponseWriter, r *http.Request) {
+		if internalToken != "" && r.Header.Get("X-Internal-Token") != internalToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		var req connectors.ExecRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
@@ -57,17 +80,26 @@ func main() {
 
 		resp := connector.Exec(r.Context(), req)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Error("response encode failed", "error", err)
+		}
 	})
 
-	addr := envOr("CONNECTOR_JIRA_ADDR", ":8083")
-	srv := &http.Server{Addr: addr, Handler: r}
+	addr := config.EnvOr("CONNECTOR_JIRA_ADDR", ":8083")
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	go func() {
 		log.Info("connector-jira starting", "addr", addr, "mock", mock)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "error", err)
-			os.Exit(1)
+			cancel()
 		}
 	}()
 
@@ -75,7 +107,9 @@ func main() {
 	log.Info("shutting down connector-jira")
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
-	_ = srv.Shutdown(shutCtx)
+	if err := srv.Shutdown(shutCtx); err != nil {
+		log.Error("shutdown error", "error", err)
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -83,11 +117,12 @@ func main() {
 // ──────────────────────────────────────────────────────────────────────────────
 
 type JiraConnector struct {
-	log      *slog.Logger
-	mock     bool
-	baseURL  string
-	email    string
-	apiToken string
+	log        *slog.Logger
+	mock       bool
+	baseURL    string
+	email      string
+	apiToken   string
+	httpClient *http.Client
 }
 
 type jiraIssueParams struct {
@@ -123,19 +158,17 @@ func (j *JiraConnector) createIssue(ctx context.Context, req connectors.ExecRequ
 		params.IssueType = "Task"
 	}
 
-	// ── Mock mode ────────────────────────────────────────────────────────
 	if j.mock {
 		j.log.Info("mock jira.issue.create", "project", params.Project, "summary", params.Summary)
 		output, _ := json.Marshal(map[string]any{
 			"id":   "10001",
 			"key":  params.Project + "-42",
-			"self": fmt.Sprintf("https://mock.atlassian.net/rest/api/3/issue/10001"),
+			"self": "https://mock.atlassian.net/rest/api/3/issue/10001",
 			"mock": true,
 		})
 		return connectors.ExecResponse{Status: "success", OutputJSON: output}
 	}
 
-	// ── Real Jira API ────────────────────────────────────────────────────
 	issueBody := map[string]any{
 		"fields": map[string]any{
 			"project":   map[string]string{"key": params.Project},
@@ -173,23 +206,19 @@ func (j *JiraConnector) createIssue(ctx context.Context, req connectors.ExecRequ
 	httpReq.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString(
 		[]byte(j.email+":"+j.apiToken)))
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := j.httpClient.Do(httpReq)
 	if err != nil {
 		return connectors.ExecResponse{Status: "error", Error: err.Error()}
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxExternalResponseBytes))
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: "read response: " + err.Error()}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return connectors.ExecResponse{Status: "error", Error: string(respBody)}
 	}
 
 	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

@@ -10,13 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/approvals"
 	"github.com/bturcanu/OpenClause/pkg/auth"
+	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/bturcanu/OpenClause/pkg/evidence"
 	ocOtel "github.com/bturcanu/OpenClause/pkg/otel"
@@ -30,6 +30,11 @@ import (
 	"golang.org/x/time/rate"
 )
 
+const (
+	maxBodyBytes     = 1 << 20 // 1 MB
+	maxRateLimiters  = 10_000
+)
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
@@ -38,25 +43,26 @@ func main() {
 	defer cancel()
 
 	// ── OpenTelemetry ────────────────────────────────────────────────────
+	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	otelShutdown, err := ocOtel.Setup(ctx, ocOtel.Config{
-		ServiceName:    envOr("OTEL_SERVICE_NAME", "oc-gateway"),
-		OTLPEndpoint:   os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		ServiceName:    config.EnvOr("OTEL_SERVICE_NAME", "oc-gateway"),
+		OTLPEndpoint:   otelEndpoint,
 		MetricsEnabled: true,
-		TracingEnabled: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "",
+		TracingEnabled: otelEndpoint != "",
 	})
 	if err != nil {
 		log.Error("otel setup failed", "error", err)
 	} else {
-		defer otelShutdown(context.Background())
+		defer otelShutdown(context.Background()) //nolint:errcheck // best-effort shutdown
 	}
 
 	// ── Postgres ─────────────────────────────────────────────────────────
 	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		envOr("POSTGRES_USER", "openclause"),
-		envOr("POSTGRES_PASSWORD", "changeme"),
-		envOr("POSTGRES_HOST", "localhost"),
-		envOr("POSTGRES_PORT", "5432"),
-		envOr("POSTGRES_DB", "openclause"),
+		config.EnvOr("POSTGRES_USER", "openclause"),
+		config.EnvOr("POSTGRES_PASSWORD", "changeme"),
+		config.EnvOr("POSTGRES_HOST", "localhost"),
+		config.EnvOr("POSTGRES_PORT", "5432"),
+		config.EnvOr("POSTGRES_DB", "openclause"),
 	)
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
@@ -68,13 +74,13 @@ func main() {
 	// ── Dependencies ─────────────────────────────────────────────────────
 	evidenceStore := evidence.NewStore(pool)
 	evidenceLogger := evidence.NewLogger(evidenceStore, log)
-	policyClient := policy.NewClient(envOr("OPA_URL", "http://localhost:8181"))
+	policyClient := policy.NewClient(config.EnvOr("OPA_URL", "http://localhost:8181"))
 	approvalsStore := approvals.NewStore(pool)
 	keyStore := auth.NewKeyStore(os.Getenv("API_KEYS"))
 
 	connectorReg := connectors.NewRegistry()
-	connectorReg.Register("slack", envOr("CONNECTOR_SLACK_URL", "http://localhost:8082"))
-	connectorReg.Register("jira", envOr("CONNECTOR_JIRA_URL", "http://localhost:8083"))
+	connectorReg.Register("slack", config.EnvOr("CONNECTOR_SLACK_URL", "http://localhost:8082"))
+	connectorReg.Register("jira", config.EnvOr("CONNECTOR_JIRA_URL", "http://localhost:8083"))
 
 	gw := &Gateway{
 		log:            log,
@@ -82,9 +88,9 @@ func main() {
 		policy:         policyClient,
 		connectors:     connectorReg,
 		approvals:      approvalsStore,
-		approvalsURL:   envOr("APPROVALS_URL", "http://localhost:8081"),
+		approvalsURL:   config.EnvOr("APPROVALS_URL", "http://localhost:8081"),
 		rateLimiters:   make(map[string]*rate.Limiter),
-		perTenantLimit: envOrInt("RATE_LIMIT_PER_TENANT", 100),
+		perTenantLimit: config.EnvOrInt("RATE_LIMIT_PER_TENANT", 100),
 	}
 
 	// ── Router ───────────────────────────────────────────────────────────
@@ -93,6 +99,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(middleware.Logger)
 	r.Use(auth.APIKeyAuth(keyStore))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -114,14 +121,21 @@ func main() {
 	r.Get("/v1/toolcalls/{event_id}", gw.HandleGetEvent)
 
 	// ── Server ───────────────────────────────────────────────────────────
-	addr := envOr("GATEWAY_ADDR", ":8080")
-	srv := &http.Server{Addr: addr, Handler: r}
+	addr := config.EnvOr("GATEWAY_ADDR", ":8080")
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	go func() {
 		log.Info("gateway starting", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "error", err)
-			os.Exit(1)
+			cancel()
 		}
 	}()
 
@@ -129,7 +143,9 @@ func main() {
 	log.Info("shutting down gateway")
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutCancel()
-	_ = srv.Shutdown(shutCtx)
+	if err := srv.Shutdown(shutCtx); err != nil {
+		log.Error("server shutdown error", "error", err)
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -152,7 +168,8 @@ type Gateway struct {
 func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// 1. Parse + validate
+	// 1. Parse + validate (with body size limit)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var req types.ToolCallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.ErrBadRequest("invalid JSON body").WriteJSON(w)
@@ -178,7 +195,6 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 	prior, err := gw.evidence.CheckIdempotency(ctx, req.TenantID, req.IdempotencyKey)
 	if err != nil {
 		gw.log.ErrorContext(ctx, "idempotency check failed", "error", err)
-		// Continue (non-fatal), but log it
 	}
 	if prior != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -188,13 +204,18 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Build envelope
 	eventID := uuid.NewString()
-	payloadJSON, _ := json.Marshal(req)
+	payloadJSON, err := json.Marshal(req)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "payload marshal failed", "error", err)
+		types.ErrInternal("request processing failed").WriteJSON(w)
+		return
+	}
 
 	env := &types.ToolCallEnvelope{
-		EventID:    eventID,
-		Request:    req,
+		EventID:     eventID,
+		Request:     req,
 		PayloadJSON: payloadJSON,
-		ReceivedAt: time.Now().UTC(),
+		ReceivedAt:  time.Now().UTC(),
 	}
 
 	// 5. Evaluate policy
@@ -208,7 +229,6 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 	policyResult, err := gw.policy.Evaluate(ctx, policyInput)
 	if err != nil {
 		gw.log.ErrorContext(ctx, "policy evaluation failed", "error", err)
-		// Fail closed — deny
 		policyResult = &types.PolicyResult{Decision: types.DecisionDeny, Reason: "policy evaluation failed"}
 	}
 	env.Decision = policyResult.Decision
@@ -223,13 +243,11 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 
 	switch policyResult.Decision {
 	case types.DecisionDeny:
-		// Just record and return
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
 		}
 
 	case types.DecisionApprove:
-		// Create an approval request
 		approvalReq, err := gw.approvals.CreateRequest(ctx, approvals.CreateApprovalInput{
 			EventID:   eventID,
 			TenantID:  req.TenantID,
@@ -250,7 +268,6 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case types.DecisionAllow:
-		// Execute the connector
 		start := time.Now()
 		execResp, err := gw.connectors.Exec(ctx, connectors.ExecRequest{
 			EventID:  eventID,
@@ -282,10 +299,25 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
 		}
+
+	default:
+		// Fail-closed: treat unrecognized decisions as deny.
+		gw.log.ErrorContext(ctx, "unrecognized policy decision, defaulting to deny",
+			"decision", string(policyResult.Decision),
+			"event_id", eventID,
+		)
+		env.Decision = types.DecisionDeny
+		resp.Decision = types.DecisionDeny
+		resp.Reason = "unrecognized policy decision"
+		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
+			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		gw.log.ErrorContext(ctx, "response encode failed", "error", err)
+	}
 }
 
 // HandleGetEvent is GET /v1/toolcalls/{event_id}
@@ -293,7 +325,8 @@ func (gw *Gateway) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 	eventID := chi.URLParam(r, "event_id")
 	env, err := gw.evidence.GetEvent(r.Context(), eventID)
 	if err != nil {
-		types.ErrInternal(err.Error()).WriteJSON(w)
+		gw.log.ErrorContext(r.Context(), "get event failed", "error", err)
+		types.ErrInternal("failed to retrieve event").WriteJSON(w)
 		return
 	}
 	if env == nil {
@@ -302,11 +335,13 @@ func (gw *Gateway) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(env)
+	if err := json.NewEncoder(w).Encode(env); err != nil {
+		gw.log.ErrorContext(r.Context(), "response encode failed", "error", err)
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Rate limiting
+// Rate limiting (bounded map with eviction)
 // ──────────────────────────────────────────────────────────────────────────────
 
 func (gw *Gateway) allowRate(tenantID string) bool {
@@ -315,28 +350,15 @@ func (gw *Gateway) allowRate(tenantID string) bool {
 
 	lim, ok := gw.rateLimiters[tenantID]
 	if !ok {
+		// Evict oldest entries if map is at capacity.
+		if len(gw.rateLimiters) >= maxRateLimiters {
+			for k := range gw.rateLimiters {
+				delete(gw.rateLimiters, k)
+				break
+			}
+		}
 		lim = rate.NewLimiter(rate.Limit(gw.perTenantLimit), gw.perTenantLimit*2)
 		gw.rateLimiters[tenantID] = lim
 	}
 	return lim.Allow()
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────────────
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func envOrInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return fallback
 }

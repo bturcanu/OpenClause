@@ -2,7 +2,7 @@
 # OpenClause — Makefile
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: dev dev-down test policy-test lint build clean migrate help
+.PHONY: dev dev-down test policy-test lint build clean migrate wait-pg help
 
 # Default env file
 ENV_FILE ?= .env
@@ -14,8 +14,7 @@ dev:
 	@echo ">>> Starting OpenClause stack..."
 	@cp -n .env.example .env 2>/dev/null || true
 	docker compose -f deploy/docker-compose.yml up --build -d
-	@echo ">>> Waiting for postgres..."
-	@sleep 3
+	@$(MAKE) wait-pg
 	@$(MAKE) migrate
 	@echo ""
 	@echo "✓ Gateway:    http://localhost:8080/healthz"
@@ -24,6 +23,15 @@ dev:
 	@echo "✓ Jira:       http://localhost:8083/healthz"
 	@echo "✓ OPA:        http://localhost:8181/health"
 	@echo "✓ MinIO:      http://localhost:9001"
+
+## Wait for postgres to be ready (retry loop)
+wait-pg:
+	@echo ">>> Waiting for postgres..."
+	@for i in $$(seq 1 30); do \
+		docker compose -f deploy/docker-compose.yml exec -T postgres pg_isready -U openclause -d openclause > /dev/null 2>&1 && break; \
+		echo "  postgres not ready, retrying ($$i/30)..."; \
+		sleep 2; \
+	done
 
 ## Stop all services
 dev-down:
@@ -38,13 +46,10 @@ logs:
 ## Run database migrations
 migrate:
 	@echo ">>> Running migrations..."
-	PGPASSWORD=$$(grep POSTGRES_PASSWORD $(ENV_FILE) | cut -d= -f2) \
-	psql -h localhost -p 5432 \
-		-U $$(grep POSTGRES_USER $(ENV_FILE) | cut -d= -f2) \
-		-d $$(grep POSTGRES_DB $(ENV_FILE) | cut -d= -f2) \
-		-f migrations/001_initial.sql \
-	|| docker compose -f deploy/docker-compose.yml exec -T postgres \
-		psql -U openclause -d openclause -f /dev/stdin < migrations/001_initial.sql
+	@docker compose -f deploy/docker-compose.yml exec -T postgres \
+		psql -U openclause -d openclause < migrations/001_initial.sql
+	@docker compose -f deploy/docker-compose.yml exec -T postgres \
+		psql -U openclause -d openclause < migrations/002_seed.sql
 	@echo "✓ Migrations complete"
 
 # ── Testing ───────────────────────────────────────────────────────────────────

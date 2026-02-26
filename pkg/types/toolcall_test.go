@@ -37,7 +37,7 @@ func TestValidate_RequiredFields(t *testing.T) {
 	}
 }
 
-func TestValidate_RiskScore(t *testing.T) {
+func TestValidate_RiskScoreAboveMax(t *testing.T) {
 	req := ToolCallRequest{
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k", RiskScore: 11,
@@ -45,6 +45,21 @@ func TestValidate_RiskScore(t *testing.T) {
 	err := req.Validate()
 	if err == nil {
 		t.Fatal("expected error for risk_score > 10")
+	}
+}
+
+func TestValidate_RiskScoreNegative(t *testing.T) {
+	req := ToolCallRequest{
+		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
+		IdempotencyKey: "k", RiskScore: -1,
+	}
+	err := req.Validate()
+	if err == nil {
+		t.Fatal("expected error for risk_score < 0")
+	}
+	ve := err.(*ValidationError)
+	if ve.Field != "risk_score" {
+		t.Errorf("expected field risk_score, got %q", ve.Field)
 	}
 }
 
@@ -75,6 +90,79 @@ func TestValidate_LabelCount(t *testing.T) {
 	err := req.Validate()
 	if err == nil {
 		t.Fatal("expected error for too many labels")
+	}
+}
+
+func TestValidate_ResourceByteLength(t *testing.T) {
+	// len() measures bytes, not runes. 2049 ASCII bytes should fail.
+	req := ToolCallRequest{
+		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
+		IdempotencyKey: "k",
+		Resource:       strings.Repeat("a", MaxResourceBytes+1),
+	}
+	err := req.Validate()
+	if err == nil {
+		t.Fatal("expected error for oversized resource")
+	}
+	ve := err.(*ValidationError)
+	if ve.Field != "resource" {
+		t.Errorf("expected field resource, got %q", ve.Field)
+	}
+}
+
+func TestValidate_IdempotencyKeyMaxLength(t *testing.T) {
+	req := ToolCallRequest{
+		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
+		IdempotencyKey: strings.Repeat("k", MaxIdempotencyKeyBytes+1),
+	}
+	err := req.Validate()
+	if err == nil {
+		t.Fatal("expected error for oversized idempotency_key")
+	}
+	ve := err.(*ValidationError)
+	if ve.Field != "idempotency_key" {
+		t.Errorf("expected field idempotency_key, got %q", ve.Field)
+	}
+}
+
+func TestValidate_SchemaVersionUnknown(t *testing.T) {
+	req := ToolCallRequest{
+		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
+		IdempotencyKey: "k", SchemaVersion: "99.0",
+	}
+	err := req.Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown schema version")
+	}
+	ve := err.(*ValidationError)
+	if ve.Field != "schema_version" {
+		t.Errorf("expected field schema_version, got %q", ve.Field)
+	}
+}
+
+func TestValidate_SchemaVersionDefault(t *testing.T) {
+	req := ToolCallRequest{
+		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
+		IdempotencyKey: "k",
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.SchemaVersion != CurrentSchemaVer {
+		t.Errorf("expected schema_version %q, got %q", CurrentSchemaVer, req.SchemaVersion)
+	}
+}
+
+func TestValidate_RequestedAtDefault(t *testing.T) {
+	req := ToolCallRequest{
+		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
+		IdempotencyKey: "k",
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.RequestedAt.IsZero() {
+		t.Error("expected RequestedAt to be auto-filled")
 	}
 }
 

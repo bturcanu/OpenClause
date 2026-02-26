@@ -1,14 +1,17 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"sync"
 )
 
-// KeyStore maps API keys to tenant IDs. Thread-safe.
+// KeyStore maps hashed API keys to tenant IDs. Thread-safe.
+// Keys are stored as SHA-256 hashes to protect against memory dumps.
 type KeyStore struct {
 	mu   sync.RWMutex
-	keys map[string]string // apiKey → tenantID
+	keys map[string]string // SHA-256(apiKey) → tenantID
 }
 
 // NewKeyStore creates a KeyStore from a comma-separated "tenant:key" string.
@@ -23,7 +26,7 @@ func NewKeyStore(raw string) *KeyStore {
 		if len(parts) == 2 {
 			tenant := strings.TrimSpace(parts[0])
 			key := strings.TrimSpace(parts[1])
-			ks.keys[key] = tenant
+			ks.keys[hashKey(key)] = tenant
 		}
 	}
 	return ks
@@ -33,6 +36,11 @@ func NewKeyStore(raw string) *KeyStore {
 func (ks *KeyStore) Lookup(apiKey string) (tenantID string, ok bool) {
 	ks.mu.RLock()
 	defer ks.mu.RUnlock()
-	tenantID, ok = ks.keys[apiKey]
+	tenantID, ok = ks.keys[hashKey(apiKey)]
 	return
+}
+
+func hashKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
 }

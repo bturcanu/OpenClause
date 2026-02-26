@@ -15,10 +15,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+const maxBodyBytes = 1 << 20 // 1 MB
+const maxExternalResponseBytes = 4 << 20
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -30,11 +34,21 @@ func main() {
 	mock := strings.ToLower(os.Getenv("MOCK_CONNECTORS")) == "true"
 	token := os.Getenv("SLACK_BOT_TOKEN")
 
+	if !mock && token == "" {
+		log.Error("SLACK_BOT_TOKEN is required when MOCK_CONNECTORS is not true")
+		os.Exit(1)
+	}
+
 	connector := &SlackConnector{
 		log:   log,
 		mock:  mock,
 		token: token,
+		httpClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
 	}
+
+	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -47,6 +61,12 @@ func main() {
 	})
 
 	r.Post("/exec", func(w http.ResponseWriter, r *http.Request) {
+		if internalToken != "" && r.Header.Get("X-Internal-Token") != internalToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		var req connectors.ExecRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
@@ -55,17 +75,26 @@ func main() {
 
 		resp := connector.Exec(r.Context(), req)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Error("response encode failed", "error", err)
+		}
 	})
 
-	addr := envOr("CONNECTOR_SLACK_ADDR", ":8082")
-	srv := &http.Server{Addr: addr, Handler: r}
+	addr := config.EnvOr("CONNECTOR_SLACK_ADDR", ":8082")
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	go func() {
 		log.Info("connector-slack starting", "addr", addr, "mock", mock)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "error", err)
-			os.Exit(1)
+			cancel()
 		}
 	}()
 
@@ -73,7 +102,9 @@ func main() {
 	log.Info("shutting down connector-slack")
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
-	_ = srv.Shutdown(shutCtx)
+	if err := srv.Shutdown(shutCtx); err != nil {
+		log.Error("shutdown error", "error", err)
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -81,9 +112,10 @@ func main() {
 // ──────────────────────────────────────────────────────────────────────────────
 
 type SlackConnector struct {
-	log   *slog.Logger
-	mock  bool
-	token string
+	log        *slog.Logger
+	mock       bool
+	token      string
+	httpClient *http.Client
 }
 
 type slackMsgParams struct {
@@ -114,7 +146,6 @@ func (s *SlackConnector) postMessage(ctx context.Context, req connectors.ExecReq
 		return connectors.ExecResponse{Status: "error", Error: "channel and text are required"}
 	}
 
-	// ── Mock mode ────────────────────────────────────────────────────────
 	if s.mock {
 		s.log.Info("mock slack.msg.post", "channel", params.Channel, "text_len", len(params.Text))
 		output, _ := json.Marshal(map[string]any{
@@ -126,7 +157,6 @@ func (s *SlackConnector) postMessage(ctx context.Context, req connectors.ExecReq
 		return connectors.ExecResponse{Status: "success", OutputJSON: output}
 	}
 
-	// ── Real Slack API ───────────────────────────────────────────────────
 	body, _ := json.Marshal(map[string]string{
 		"channel": params.Channel,
 		"text":    params.Text,
@@ -139,23 +169,19 @@ func (s *SlackConnector) postMessage(ctx context.Context, req connectors.ExecReq
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+s.token)
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
 		return connectors.ExecResponse{Status: "error", Error: err.Error()}
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxExternalResponseBytes))
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: "read response: " + err.Error()}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return connectors.ExecResponse{Status: "error", Error: string(respBody)}
 	}
 
 	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

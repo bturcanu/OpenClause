@@ -2,21 +2,31 @@ package evidence
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 )
 
 // ChainHash computes the next hash in the per-tenant chain.
-//
-//	hash = SHA-256( prevHash || canonicalPayload || canonicalResult )
+// Each field is length-prefixed (8-byte big-endian) for domain separation,
+// preventing ambiguity when concatenated (e.g., Hash("ab","cd") != Hash("a","bcd")).
 func ChainHash(prevHash string, canonPayload []byte, canonResult []byte) string {
 	h := sha256.New()
-	h.Write([]byte(prevHash))
-	h.Write(canonPayload)
+	writeField(h, []byte(prevHash))
+	writeField(h, canonPayload)
 	if canonResult != nil {
-		h.Write(canonResult)
+		writeField(h, canonResult)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// writeField writes a length-prefixed field to the hash.
+// sha256.Write never returns an error per the hash.Hash contract.
+func writeField(h interface{ Write([]byte) (int, error) }, data []byte) {
+	var lenBuf [8]byte
+	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(data)))
+	_, _ = h.Write(lenBuf[:])
+	_, _ = h.Write(data)
 }
 
 // VerifyChain walks a sequence of events and verifies each hash link.

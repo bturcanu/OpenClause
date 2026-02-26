@@ -13,6 +13,8 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
+const maxOPAResponseBytes = 1 << 20 // 1 MB
+
 // Client calls OPA over HTTP to evaluate tool-call policies.
 type Client struct {
 	baseURL    string
@@ -65,19 +67,21 @@ func (c *Client) Evaluate(ctx context.Context, input types.PolicyInput) (*types.
 	}
 	defer resp.Body.Close()
 
+	limited := io.LimitReader(resp.Body, maxOPAResponseBytes)
+
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(limited)
 		return nil, fmt.Errorf("policy OPA returned %d: %s", resp.StatusCode, string(b))
 	}
 
 	var opaResp opaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&opaResp); err != nil {
+	if err := json.NewDecoder(limited).Decode(&opaResp); err != nil {
 		return nil, fmt.Errorf("policy decode response: %w", err)
 	}
 
 	decision := types.Decision(opaResp.Result.Decision)
-	if decision == "" {
-		decision = types.DecisionDeny // default deny if OPA returned nothing
+	if !isValidDecision(decision) {
+		decision = types.DecisionDeny
 	}
 
 	return &types.PolicyResult{
@@ -85,4 +89,13 @@ func (c *Client) Evaluate(ctx context.Context, input types.PolicyInput) (*types.
 		Reason:       opaResp.Result.Reason,
 		Requirements: opaResp.Result.Requirements,
 	}, nil
+}
+
+func isValidDecision(d types.Decision) bool {
+	switch d {
+	case types.DecisionAllow, types.DecisionDeny, types.DecisionApprove:
+		return true
+	default:
+		return false
+	}
 }

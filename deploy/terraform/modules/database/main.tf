@@ -21,13 +21,14 @@ resource "aws_db_instance" "main" {
   storage_type          = "gp3"
   storage_encrypted     = true
   publicly_accessible   = false
-  multi_az              = false
+  multi_az              = var.multi_az
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = var.vpc_security_group_ids
 
-  skip_final_snapshot       = true
-  deletion_protection       = false
+  skip_final_snapshot       = var.skip_final_snapshot
+  final_snapshot_identifier = var.skip_final_snapshot ? null : "${var.db_name}-final-snapshot"
+  deletion_protection       = var.deletion_protection
   backup_retention_period   = 7
   backup_window             = "03:00-04:00"
   maintenance_window        = "sun:04:00-sun:05:00"

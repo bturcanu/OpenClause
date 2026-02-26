@@ -8,6 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  GO_VERSION: "1.25"
 
 jobs:
   test:
@@ -20,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Download dependencies
         run: go mod download
@@ -57,12 +58,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.64.8
+          install-mode: goinstall
 
   build:
     name: Build

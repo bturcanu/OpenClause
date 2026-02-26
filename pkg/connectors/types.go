@@ -8,7 +8,6 @@ import (
 
 // Connector executes a tool action on an external system.
 type Connector interface {
-	// Exec executes the given request and returns a result.
 	Exec(ctx context.Context, req ExecRequest) ExecResponse
 }
 

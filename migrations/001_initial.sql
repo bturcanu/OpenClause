@@ -24,10 +24,12 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
 
 -- ── Tool events (one per incoming request) ──────────────────────────────────
+-- NOTE: For high-volume deployments, consider adding declarative range
+-- partitioning on received_at.
 
 CREATE TABLE IF NOT EXISTS tool_events (
     event_id        TEXT PRIMARY KEY,
-    tenant_id       TEXT NOT NULL,
+    tenant_id       TEXT NOT NULL REFERENCES tenants(id),
     agent_id        TEXT NOT NULL,
     tool            TEXT NOT NULL,
     action          TEXT NOT NULL,
@@ -67,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_tool_events_tool_action
 CREATE TABLE IF NOT EXISTS tool_results (
     id              BIGSERIAL PRIMARY KEY,
     event_id        TEXT NOT NULL REFERENCES tool_events(event_id),
-    tenant_id       TEXT NOT NULL,
+    tenant_id       TEXT NOT NULL REFERENCES tenants(id),
     status          TEXT NOT NULL,        -- 'success', 'error', 'timeout'
     output_json     JSONB,
     error_msg       TEXT DEFAULT '',
@@ -82,16 +84,18 @@ CREATE INDEX IF NOT EXISTS idx_tool_results_event ON tool_results(event_id);
 
 CREATE TABLE IF NOT EXISTS approval_requests (
     id          TEXT PRIMARY KEY,
-    event_id    TEXT NOT NULL,
-    tenant_id   TEXT NOT NULL,
+    event_id    TEXT NOT NULL REFERENCES tool_events(event_id),
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
     agent_id    TEXT NOT NULL,
     tool        TEXT NOT NULL,
     action      TEXT NOT NULL,
     resource    TEXT DEFAULT '',
     risk_score  INTEGER NOT NULL DEFAULT 0,
     reason      TEXT DEFAULT '',
+    deny_reason TEXT DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'pending',  -- 'pending', 'approved', 'denied', 'expired'
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ,
     expires_at  TIMESTAMPTZ NOT NULL
 );
 
@@ -106,7 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_approval_requests_event
 CREATE TABLE IF NOT EXISTS approval_grants (
     id                      TEXT PRIMARY KEY,
     request_id              TEXT NOT NULL REFERENCES approval_requests(id),
-    tenant_id               TEXT NOT NULL,
+    tenant_id               TEXT NOT NULL REFERENCES tenants(id),
     approver                TEXT NOT NULL,
     scope_tool              TEXT NOT NULL,
     scope_action            TEXT NOT NULL,
@@ -116,7 +120,8 @@ CREATE TABLE IF NOT EXISTS approval_grants (
     max_uses                INTEGER NOT NULL DEFAULT 1,
     uses_left               INTEGER NOT NULL DEFAULT 1,
     expires_at              TIMESTAMPTZ NOT NULL,
-    granted_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    granted_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_approval_grants_tenant
@@ -131,16 +136,3 @@ CREATE TABLE IF NOT EXISTS policy_versions (
     deployed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     notes       TEXT DEFAULT ''
 );
-
--- ── Seed data ───────────────────────────────────────────────────────────────
-
-INSERT INTO tenants (id, name) VALUES
-    ('tenant1', 'Acme Corp'),
-    ('tenant2', 'Globex Inc')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO agents (id, tenant_id, name) VALUES
-    ('agent-1', 'tenant1', 'Research Assistant'),
-    ('agent-2', 'tenant1', 'Ops Bot'),
-    ('agent-3', 'tenant2', 'Support Agent')
-ON CONFLICT (id) DO NOTHING;

@@ -8,18 +8,19 @@ import "time"
 // ──────────────────────────────────────────────────────────────────────────────
 
 type ApprovalRequest struct {
-	ID        string    `json:"id"`
-	EventID   string    `json:"event_id"`
-	TenantID  string    `json:"tenant_id"`
-	AgentID   string    `json:"agent_id"`
-	Tool      string    `json:"tool"`
-	Action    string    `json:"action"`
-	Resource  string    `json:"resource,omitempty"`
-	RiskScore int       `json:"risk_score"`
-	Reason    string    `json:"reason"`
-	Status    string    `json:"status"` // "pending", "approved", "denied", "expired"
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID         string    `json:"id"`
+	EventID    string    `json:"event_id"`
+	TenantID   string    `json:"tenant_id"`
+	AgentID    string    `json:"agent_id"`
+	Tool       string    `json:"tool"`
+	Action     string    `json:"action"`
+	Resource   string    `json:"resource,omitempty"`
+	RiskScore  int       `json:"risk_score"`
+	Reason     string    `json:"reason"`
+	DenyReason string    `json:"deny_reason,omitempty"`
+	Status     string    `json:"status"` // "pending", "approved", "denied", "expired"
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
