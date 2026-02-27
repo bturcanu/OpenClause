@@ -2,6 +2,7 @@
 package evidence
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,9 +18,10 @@ func CanonicalJSON(v any) ([]byte, error) {
 		return nil, fmt.Errorf("canonical json marshal: %w", err)
 	}
 
-	// Unmarshal into an interface{} so we can re-serialize with sorted keys.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var generic any
-	if err := json.Unmarshal(raw, &generic); err != nil {
+	if err := dec.Decode(&generic); err != nil {
 		return nil, fmt.Errorf("canonical json unmarshal: %w", err)
 	}
 

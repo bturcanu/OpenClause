@@ -92,3 +92,23 @@ func TestVerifyChain_Empty(t *testing.T) {
 		t.Fatalf("empty chain should verify: %v", err)
 	}
 }
+
+func TestVerifyChain_SingleEvent(t *testing.T) {
+	payload := []byte(`{"single":true}`)
+	h := ChainHash("", payload, nil)
+	events := []ChainEvent{{EventID: "e1", Hash: h, CanonPayload: payload}}
+	if err := VerifyChain(events); err != nil {
+		t.Fatalf("single event chain should verify: %v", err)
+	}
+}
+
+func TestVerifyChainFrom_WithStartingHash(t *testing.T) {
+	ev1Payload := []byte(`{"event":1}`)
+	ev1Hash := ChainHash("", ev1Payload, nil)
+	ev2Payload := []byte(`{"event":2}`)
+	ev2Hash := ChainHash(ev1Hash, ev2Payload, nil)
+	events := []ChainEvent{{EventID: "e2", PrevHash: ev1Hash, Hash: ev2Hash, CanonPayload: ev2Payload}}
+	if err := VerifyChainFrom(ev1Hash, events); err != nil {
+		t.Fatalf("chain from starting hash should verify: %v", err)
+	}
+}

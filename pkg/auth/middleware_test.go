@@ -63,7 +63,7 @@ func TestAPIKeyAuth_SkipsHealthEndpoint(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+	for _, path := range []string{"/healthz", "/readyz"} {
 		req := httptest.NewRequest("GET", path, nil)
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)

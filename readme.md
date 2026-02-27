@@ -188,7 +188,8 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 | `POST` | `/v1/toolcalls/{event_id}/execute` | Resume approved request and execute exactly-once by parent event |
 | `GET` | `/healthz` | Liveness probe |
 | `GET` | `/readyz` | Readiness probe (checks Postgres) |
-| `GET` | `/metrics` | Prometheus metrics |
+
+Prometheus metrics are served on a **separate internal-only listener** (default `127.0.0.1:9090/metrics`, see `METRICS_ADDR`).
 
 ### Approvals
 
@@ -231,7 +232,7 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 - `idempotency_key` must be <= 256 bytes.
 - `risk_score` must be 0–10. Omitting it will result in a policy deny (OPA comparisons against undefined produce false).
 - `schema_version` must be `"1.0"` or omitted (defaults to `"1.0"`). Unknown versions are rejected.
-- `tool` and `action` are normalized to lowercase.
+- `tool` and `action` are normalized to lowercase and must match `^[a-z0-9][a-z0-9._-]{0,63}$`.
 
 ---
 
@@ -243,11 +244,13 @@ OpenClause uses [Open Policy Agent](https://www.openpolicyagent.org/) with Rego 
 
 | Condition | Decision |
 |---|---|
-| Action on read allowlist + risk <= 3 | **allow** |
-| Action on write allowlist + risk < 7 | **allow** |
 | Risk score >= 7 | **approve** (requires human) |
 | Action on destructive list | **approve** (requires human) |
+| Action on read allowlist + risk < tenant threshold | **allow** |
+| Action on write allowlist + risk < tenant threshold | **allow** |
 | Everything else | **deny** |
+
+The auto-allow threshold is configurable per tenant via `max_risk_auto_approve` in `data.json` (default 7 for unknown tenants).
 
 ### Data-driven allowlists (`policy/bundles/v0/data.json`)
 
@@ -257,6 +260,10 @@ OpenClause uses [Open Policy Agent](https://www.openpolicyagent.org/) with Rego 
     "read_actions":        ["jira.issue.list", "slack.channel.list", ...],
     "write_actions":       ["slack.msg.post", "jira.issue.create", ...],
     "destructive_actions": ["jira.issue.delete", "slack.channel.delete", ...]
+  },
+  "tenants": {
+    "tenant1": { "name": "Acme Corp", "max_risk_auto_approve": 5 },
+    "tenant2": { "name": "Globex Inc", "max_risk_auto_approve": 3 }
   }
 }
 ```
@@ -302,10 +309,10 @@ Every tool call is recorded in the `tool_events` table with:
 
 ### Hash chain
 
-Each field is length-prefixed (8-byte big-endian) for domain separation:
+Each field is length-prefixed (8-byte big-endian) for domain separation, with a version tag as the first field:
 
 ```
-hash[n] = SHA-256( len(hash[n-1]) || hash[n-1] || len(payload) || payload || len(result) || result )
+hash[n] = SHA-256( len("openclause:chain:v1") || "openclause:chain:v1" || len(hash[n-1]) || hash[n-1] || len(payload) || payload || len(result) || result )
 ```
 
 This provides tamper evidence — if any row is modified or deleted, the chain breaks. The hash chain is serialised per tenant via a Postgres advisory lock to prevent concurrent writers from forking it. Verification:
@@ -345,17 +352,17 @@ API_KEYS=tenant1:sk-test-key-1,tenant2:sk-test-key-2
 
 The middleware maps the key to a `tenant_id` and injects it into the request context. Keys are stored in memory as SHA-256 hashes — raw keys never persist.
 
-Health and metrics endpoints (`/healthz`, `/readyz`, `/metrics`) are unauthenticated.
+Health endpoints (`/healthz`, `/readyz`) are unauthenticated. Metrics are served on a separate internal-only port (not exposed on the gateway port).
 
 ### Internal Service Authentication
 
-Approvals and connector services require an `X-Internal-Token` header for service-to-service calls. Configure via:
+Approvals and connector services **require** an `X-Internal-Token` header for service-to-service calls. Configure via:
 
 ```
 INTERNAL_AUTH_TOKEN=your-shared-secret
 ```
 
-Leave empty to disable (development only). Gateway forwards this header to connectors when configured.
+**Required** — all services will refuse to start if this is empty. Token comparisons use constant-time comparison to prevent timing attacks.
 
 ---
 
@@ -401,14 +408,14 @@ Verification steps:
 
 - Endpoint: `POST /v1/integrations/slack/interactions`
 - Security: Slack signature verification (`X-Slack-Signature`, `X-Slack-Request-Timestamp`) against `SLACK_SIGNING_SECRET`.
-- Action payload embeds `approval_request_id|event_id|tenant_id` correlation.
-- Minimal RBAC is enforced via tenant allowlists (`APPROVER_SLACK_ALLOWLIST`, `APPROVER_EMAIL_ALLOWLIST`).
+- Action payload embeds correlation IDs as base64url-encoded JSON (approval_request_id, event_id, tenant_id).
+- RBAC is enforced via tenant allowlists (`APPROVER_SLACK_ALLOWLIST`, `APPROVER_EMAIL_ALLOWLIST`). Default-deny: tenants without an explicit allowlist entry reject all approvers.
 
 ### Evidence Archival
 
 - `cmd/archiver` verifies each tenant hash chain and uploads bundles to MinIO/S3.
-- Object naming:
-  `evidence/<tenant_id>/<YYYY>/<MM>/<DD>/<checkpoint_hash>.json`
+- Object naming uses deterministic hash-range keys for idempotent retries:
+  `evidence/<tenant_id>/<from_hash>_to_<to_hash>.json`
 - Incremental progress is tracked in `evidence_archive_checkpoints`.
 - One-shot local run:
   `ARCHIVER_RUN_ONCE=true ARCHIVER_TENANT_ID=tenant1 go run ./cmd/archiver`
@@ -426,7 +433,7 @@ A thin Go client is available in `pkg/sdk/client`:
 
 ### Metrics (Prometheus)
 
-Available at `GET /metrics` on the gateway. Key metrics:
+Available at `GET /metrics` on the internal metrics listener (default `127.0.0.1:9090`). Key metrics:
 
 - `oc_decisions_total` — decisions by type (allow/deny/approve)
 - `oc_policy_eval_duration_seconds` — policy evaluation latency
@@ -457,6 +464,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `POSTGRES_USER` | `openclause` | Postgres user |
 | `POSTGRES_PASSWORD` | `changeme` | Postgres password |
 | `POSTGRES_DB` | `openclause` | Postgres database name |
+| `POSTGRES_SSLMODE` | `disable` | Postgres SSL mode (`disable`, `require`, `verify-full`, etc.) |
 | `OPA_URL` | `http://localhost:8181` | OPA server URL |
 | `GATEWAY_ADDR` | `:8080` | Gateway listen address |
 | `APPROVALS_ADDR` | `:8081` | Approvals service listen address |
@@ -464,7 +472,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `CONNECTOR_SLACK_URL` | `http://localhost:8082` | Slack connector URL |
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
 | `API_KEYS` | — | Comma-separated `tenant:key` pairs |
-| `INTERNAL_AUTH_TOKEN` | — | Shared secret for service-to-service auth (approvals, connectors) |
+| `INTERNAL_AUTH_TOKEN` | — | **Required.** Shared secret for service-to-service auth (approvals, connectors) |
 | `APPROVER_EMAIL_ALLOWLIST` | — | Per-tenant email approver allowlist (`tenant:email1|email2`) |
 | `APPROVER_SLACK_ALLOWLIST` | — | Per-tenant Slack user allowlist (`tenant:u123|u999`) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
@@ -488,6 +496,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `RATE_LIMIT_PER_TENANT` | `100` | Max requests/sec per tenant |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint for traces |
 | `OTEL_SERVICE_NAME` | `oc-gateway` | OpenTelemetry service name |
+| `METRICS_ADDR` | `127.0.0.1:9090` | Internal Prometheus metrics listener address |
 
 ---
 

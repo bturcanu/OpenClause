@@ -192,12 +192,12 @@ func (s *Store) GrantRequest(ctx context.Context, requestID string, in GrantInpu
 	// Lock and check status atomically inside the transaction.
 	res, err := tx.Exec(ctx, `
 		UPDATE approval_requests SET status = 'approved', updated_at = NOW()
-		WHERE id = $1 AND status = 'pending'`, requestID)
+		WHERE id = $1 AND status = 'pending' AND expires_at > NOW()`, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("approvals.GrantRequest update: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return nil, fmt.Errorf("approval request %s not found or not pending", requestID)
+		return nil, fmt.Errorf("approval request %s not found, not pending, or expired", requestID)
 	}
 
 	// Fetch the request details for the grant scope.
@@ -271,8 +271,8 @@ func (s *Store) DenyRequest(ctx context.Context, requestID string, in DenyInput)
 		return fmt.Errorf("approvals.DenyRequest: approver is required")
 	}
 	res, err := s.pool.Exec(ctx, `
-		UPDATE approval_requests SET status = 'denied', deny_reason = $2, updated_at = NOW()
-		WHERE id = $1 AND status = 'pending'`, requestID, in.Reason)
+		UPDATE approval_requests SET status = 'denied', deny_reason = $2, denied_by = $3, updated_at = NOW()
+		WHERE id = $1 AND status = 'pending'`, requestID, in.Reason, in.Approver)
 	if err != nil {
 		return fmt.Errorf("approvals.DenyRequest: %w", err)
 	}
@@ -425,36 +425,45 @@ func (s *Store) ClaimDueNotifications(ctx context.Context, limit int) ([]Notific
 
 // MarkNotificationSent marks an outbox record as delivered.
 func (s *Store) MarkNotificationSent(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `
+	res, err := s.pool.Exec(ctx, `
 		UPDATE approval_notification_outbox
 		SET status = 'sent', sent_at = NOW(), updated_at = NOW(), last_error = ''
 		WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("approvals.MarkNotificationSent: %w", err)
 	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("approvals.MarkNotificationSent: no rows updated for id %s", id)
+	}
 	return nil
 }
 
 // MarkNotificationRetry schedules another delivery attempt with backoff.
 func (s *Store) MarkNotificationRetry(ctx context.Context, id string, attempts int, nextAttemptAt time.Time, lastErr string) error {
-	_, err := s.pool.Exec(ctx, `
+	res, err := s.pool.Exec(ctx, `
 		UPDATE approval_notification_outbox
 		SET status = 'pending', attempt_count = $2, next_attempt_at = $3, last_error = $4, updated_at = NOW()
 		WHERE id = $1`, id, attempts, nextAttemptAt, lastErr)
 	if err != nil {
 		return fmt.Errorf("approvals.MarkNotificationRetry: %w", err)
 	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("approvals.MarkNotificationRetry: no rows updated for id %s", id)
+	}
 	return nil
 }
 
 // MarkNotificationFailed marks an outbox row terminally failed.
 func (s *Store) MarkNotificationFailed(ctx context.Context, id string, lastErr string) error {
-	_, err := s.pool.Exec(ctx, `
+	res, err := s.pool.Exec(ctx, `
 		UPDATE approval_notification_outbox
 		SET status = 'failed', last_error = $2, updated_at = NOW()
 		WHERE id = $1`, id, lastErr)
 	if err != nil {
 		return fmt.Errorf("approvals.MarkNotificationFailed: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("approvals.MarkNotificationFailed: no rows updated for id %s", id)
 	}
 	return nil
 }

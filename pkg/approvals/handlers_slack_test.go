@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -13,6 +14,21 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSlackInteractionInvalidSignatureRejected(t *testing.T) {
+	store := &fakeHandlersStore{}
+	h := NewHandlers(store, nil, "slack-secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/integrations/slack/interactions", bytes.NewReader([]byte("payload=test")))
+	req.Header.Set("X-Slack-Request-Timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	req.Header.Set("X-Slack-Signature", "v0=invalid")
+	rr := httptest.NewRecorder()
+	h.SlackInteractions(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
 
 type fakeHandlersStore struct {
 	granted bool
@@ -58,7 +74,8 @@ func TestSlackInteractionApproveCreatesGrant(t *testing.T) {
 	authz := NewApproverAuthorizer("", "tenant1:u123")
 	h := NewHandlers(store, authz, "slack-secret")
 
-	payload := `{"type":"block_actions","user":{"id":"U123","username":"alice"},"actions":[{"value":"approve|req-1|evt-1|tenant1"}]}`
+	actionValue := base64.URLEncoding.EncodeToString([]byte(`{"d":"approve","r":"req-1","e":"evt-1","t":"tenant1"}`))
+	payload := fmt.Sprintf(`{"type":"block_actions","user":{"id":"U123","username":"alice"},"actions":[{"value":"%s"}]}`, actionValue)
 	form := url.Values{}
 	form.Set("payload", payload)
 	body := []byte(form.Encode())

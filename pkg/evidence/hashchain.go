@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -13,6 +14,7 @@ import (
 // preventing ambiguity when concatenated (e.g., Hash("ab","cd") != Hash("a","bcd")).
 func ChainHash(prevHash string, canonPayload []byte, canonResult []byte) string {
 	h := sha256.New()
+	writeField(h, []byte("openclause:chain:v1"))
 	writeField(h, []byte(prevHash))
 	writeField(h, canonPayload)
 	if canonResult != nil {
@@ -21,9 +23,7 @@ func ChainHash(prevHash string, canonPayload []byte, canonResult []byte) string 
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// writeField writes a length-prefixed field to the hash.
-// sha256.Write never returns an error per the hash.Hash contract.
-func writeField(h interface{ Write([]byte) (int, error) }, data []byte) {
+func writeField(h io.Writer, data []byte) {
 	var lenBuf [8]byte
 	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(data)))
 	_, _ = h.Write(lenBuf[:])

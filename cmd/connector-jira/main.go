@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -54,6 +55,10 @@ func main() {
 	}
 
 	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
+	if internalToken == "" {
+		log.Error("INTERNAL_AUTH_TOKEN is required")
+		os.Exit(1)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -66,7 +71,7 @@ func main() {
 	})
 
 	r.Post("/exec", func(w http.ResponseWriter, r *http.Request) {
-		if internalToken != "" && r.Header.Get("X-Internal-Token") != internalToken {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Internal-Token")), []byte(internalToken)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

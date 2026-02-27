@@ -21,12 +21,13 @@ func TenantFromContext(ctx context.Context) string {
 
 // APIKeyAuth returns middleware that validates API keys and sets tenant context.
 func APIKeyAuth(keys *KeyStore) func(http.Handler) http.Handler {
+	skipPaths := map[string]bool{
+		"/healthz": true,
+		"/readyz":  true,
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip health/ready endpoints.
-			if strings.HasPrefix(r.URL.Path, "/healthz") ||
-				strings.HasPrefix(r.URL.Path, "/readyz") ||
-				strings.HasPrefix(r.URL.Path, "/metrics") {
+			if skipPaths[r.URL.Path] {
 				next.ServeHTTP(w, r)
 				return
 			}

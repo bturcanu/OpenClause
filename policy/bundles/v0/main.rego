@@ -28,11 +28,13 @@ decision := "approve" if {
 } else := "allow" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in data.allowlist.read_actions
-	input.toolcall.risk_score <= 3
+	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	input.toolcall.risk_score < threshold
 } else := "allow" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in data.allowlist.write_actions
-	input.toolcall.risk_score < 7
+	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	input.toolcall.risk_score < threshold
 }
 
 reason := "high risk score requires approval" if {
@@ -40,14 +42,16 @@ reason := "high risk score requires approval" if {
 } else := "destructive action requires approval" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in data.allowlist.destructive_actions
-} else := "low-risk read action on allowlist" if {
+} else := "read action on allowlist within tenant threshold" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in data.allowlist.read_actions
-	input.toolcall.risk_score <= 3
-} else := "write action on allowlist with acceptable risk" if {
+	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	input.toolcall.risk_score < threshold
+} else := "write action on allowlist within tenant threshold" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in data.allowlist.write_actions
-	input.toolcall.risk_score < 7
+	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	input.toolcall.risk_score < threshold
 }
 
 # ──────────────────────────────────────────────────────────────────────────────

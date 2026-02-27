@@ -43,6 +43,8 @@ func (r *Registry) Register(tool, baseURL string) {
 func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, error) {
 	r.mu.RLock()
 	baseURL, ok := r.routes[req.Tool]
+	token := r.internalToken
+	client := r.httpClient
 	r.mu.RUnlock()
 
 	if !ok {
@@ -60,11 +62,11 @@ func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, er
 		return nil, fmt.Errorf("connector new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if r.internalToken != "" {
-		httpReq.Header.Set("X-Internal-Token", r.internalToken)
+	if token != "" {
+		httpReq.Header.Set("X-Internal-Token", token)
 	}
 
-	resp, err := r.httpClient.Do(httpReq)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("connector request to %s: %w", req.Tool, err)
 	}
@@ -73,6 +75,14 @@ func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, er
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxConnectorResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("connector read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet := string(respBody)
+		if len(snippet) > 512 {
+			snippet = snippet[:512]
+		}
+		return nil, fmt.Errorf("connector %s returned HTTP %d: %s", req.Tool, resp.StatusCode, snippet)
 	}
 
 	var execResp ExecResponse
@@ -87,7 +97,7 @@ func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, er
 func (r *Registry) SetTimeout(d time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.httpClient.Timeout = d
+	r.httpClient = &http.Client{Timeout: d}
 }
 
 // SetInternalToken configures service-to-service auth header for connectors.

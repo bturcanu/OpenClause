@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -27,7 +28,7 @@ func Handler(executor Executor, cfg Config) http.HandlerFunc {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		if cfg.InternalToken != "" && r.Header.Get("X-Internal-Token") != cfg.InternalToken {
+		if cfg.InternalToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Internal-Token")), []byte(cfg.InternalToken)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
