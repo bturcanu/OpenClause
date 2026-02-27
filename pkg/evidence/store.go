@@ -2,7 +2,6 @@ package evidence
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,9 +63,6 @@ func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) er
 	}
 
 	hash := ChainHash(prevHash, canonPayload, canonResult)
-	env.Hash = hash
-	env.PrevHash = prevHash
-	env.PayloadCanon = canonPayload
 
 	policyJSON, err := json.Marshal(env.PolicyResult)
 	if err != nil {
@@ -118,6 +114,11 @@ func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) er
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("evidence.RecordEvent commit: %w", err)
 	}
+
+	env.Hash = hash
+	env.PrevHash = prevHash
+	env.PayloadCanon = canonPayload
+
 	return nil
 }
 
@@ -395,7 +396,7 @@ func (s *Store) lastHashTx(ctx context.Context, tx pgx.Tx, tenantID string) (str
 	row := tx.QueryRow(ctx, `
 		SELECT hash FROM tool_events
 		WHERE tenant_id = $1
-		ORDER BY received_at DESC LIMIT 1`, tenantID)
+		ORDER BY event_seq DESC LIMIT 1`, tenantID)
 
 	var h string
 	err := row.Scan(&h)
@@ -405,10 +406,11 @@ func (s *Store) lastHashTx(ctx context.Context, tx pgx.Tx, tenantID string) (str
 	return h, err
 }
 
+const evidenceLockNamespace = 0x4F43_4556 // "OCEV" — OpenClause evidence
+
 // tenantLockID produces a deterministic int64 advisory-lock ID from a tenant string.
 func tenantLockID(tenantID string) int64 {
-	h := fnv.New64a()
+	h := fnv.New32a()
 	h.Write([]byte(tenantID))
-	b := h.Sum(nil)
-	return int64(binary.BigEndian.Uint64(b))
+	return int64(evidenceLockNamespace)<<32 | int64(h.Sum32())
 }

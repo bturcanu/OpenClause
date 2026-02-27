@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -58,14 +60,7 @@ func main() {
 	}
 
 	// ── Postgres ─────────────────────────────────────────────────────────
-	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		config.EnvOr("POSTGRES_USER", "openclause"),
-		config.EnvOr("POSTGRES_PASSWORD", "changeme"),
-		config.EnvOr("POSTGRES_HOST", "localhost"),
-		config.EnvOr("POSTGRES_PORT", "5432"),
-		config.EnvOr("POSTGRES_DB", "openclause"),
-	)
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := pgxpool.New(ctx, buildPostgresDSN())
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
 		os.Exit(1)
@@ -117,11 +112,28 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
-	r.Handle("/metrics", promhttp.Handler())
-
 	r.Post("/v1/toolcalls", gw.HandleToolCall)
 	r.Get("/v1/toolcalls/{event_id}", gw.HandleGetEvent)
 	r.Post("/v1/toolcalls/{event_id}/execute", gw.HandleExecuteToolCall)
+
+	// ── Metrics (internal) ───────────────────────────────────────────────
+	metricsAddr := config.EnvOr("METRICS_ADDR", "127.0.0.1:9090")
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsSrv := &http.Server{
+		Addr:              metricsAddr,
+		Handler:           metricsMux,
+		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: 2 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	go func() {
+		log.Info("metrics server starting", "addr", metricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error("metrics server error", "error", err)
+		}
+	}()
 
 	// ── Server ───────────────────────────────────────────────────────────
 	addr := config.EnvOr("GATEWAY_ADDR", ":8080")
@@ -149,6 +161,9 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		log.Error("server shutdown error", "error", err)
 	}
+	if err := metricsSrv.Shutdown(shutCtx); err != nil {
+		log.Error("metrics server shutdown error", "error", err)
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -163,6 +178,7 @@ type Gateway struct {
 	approvals      gatewayApprovals
 	approvalsURL   string
 	rateLimiters   map[string]*rate.Limiter
+	rlOrder        []string
 	rlMu           sync.Mutex
 	perTenantLimit int
 }
@@ -199,7 +215,7 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		types.ErrBadRequest("invalid JSON body").WriteJSON(w)
 		return
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.NormalizeAndValidate(); err != nil {
 		types.ErrValidation(err).WriteJSON(w)
 		return
 	}
@@ -306,6 +322,8 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
+			types.ErrInternal("evidence recording failed after execution").WriteJSON(w)
+			return
 		}
 
 	default:
@@ -335,6 +353,11 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	parentEventID := chi.URLParam(r, "event_id")
 
+	if _, err := uuid.Parse(parentEventID); err != nil {
+		types.ErrBadRequest("invalid event_id format").WriteJSON(w)
+		return
+	}
+
 	parent, err := gw.evidence.GetEvent(ctx, parentEventID)
 	if err != nil {
 		gw.log.ErrorContext(ctx, "get parent event failed", "event_id", parentEventID, "error", err)
@@ -342,6 +365,11 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if parent == nil {
+		types.ErrNotFound("event not found").WriteJSON(w)
+		return
+	}
+	authTenant := auth.TenantFromContext(ctx)
+	if authTenant != "" && parent.Request.TenantID != authTenant {
 		types.ErrNotFound("event not found").WriteJSON(w)
 		return
 	}
@@ -382,7 +410,12 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 		// Handle race with an in-flight executor: brief replay polling before
 		// returning awaiting-approval.
 		for range executePollCount {
-			time.Sleep(50 * time.Millisecond)
+			select {
+			case <-time.After(50 * time.Millisecond):
+			case <-ctx.Done():
+				types.ErrInternal("request cancelled").WriteJSON(w)
+				return
+			}
 			existing, err := gw.evidence.GetExecutionByParentEvent(ctx, parentEventID)
 			if err != nil {
 				gw.log.ErrorContext(ctx, "poll linked execution failed", "event_id", parentEventID, "error", err)
@@ -475,6 +508,12 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 // HandleGetEvent is GET /v1/toolcalls/{event_id}
 func (gw *Gateway) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 	eventID := chi.URLParam(r, "event_id")
+
+	if _, err := uuid.Parse(eventID); err != nil {
+		types.ErrBadRequest("invalid event_id format").WriteJSON(w)
+		return
+	}
+
 	env, err := gw.evidence.GetEvent(r.Context(), eventID)
 	if err != nil {
 		gw.log.ErrorContext(r.Context(), "get event failed", "error", err)
@@ -482,6 +521,11 @@ func (gw *Gateway) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if env == nil {
+		types.ErrNotFound("event not found").WriteJSON(w)
+		return
+	}
+	authTenant := auth.TenantFromContext(r.Context())
+	if authTenant != "" && env.Request.TenantID != authTenant {
 		types.ErrNotFound("event not found").WriteJSON(w)
 		return
 	}
@@ -501,17 +545,27 @@ func (gw *Gateway) allowRate(tenantID string) bool {
 	defer gw.rlMu.Unlock()
 
 	lim, ok := gw.rateLimiters[tenantID]
-	if !ok {
-		// Evict oldest entries if map is at capacity.
-		if len(gw.rateLimiters) >= maxRateLimiters {
-			for k := range gw.rateLimiters {
-				delete(gw.rateLimiters, k)
+	if ok {
+		// Move to end of LRU order.
+		for i, k := range gw.rlOrder {
+			if k == tenantID {
+				gw.rlOrder = append(gw.rlOrder[:i], gw.rlOrder[i+1:]...)
 				break
 			}
 		}
-		lim = rate.NewLimiter(rate.Limit(gw.perTenantLimit), gw.perTenantLimit*2)
-		gw.rateLimiters[tenantID] = lim
+		gw.rlOrder = append(gw.rlOrder, tenantID)
+		return lim.Allow()
 	}
+
+	if len(gw.rateLimiters) >= maxRateLimiters {
+		oldest := gw.rlOrder[0]
+		gw.rlOrder = gw.rlOrder[1:]
+		delete(gw.rateLimiters, oldest)
+	}
+
+	lim = rate.NewLimiter(rate.Limit(gw.perTenantLimit), gw.perTenantLimit*2)
+	gw.rateLimiters[tenantID] = lim
+	gw.rlOrder = append(gw.rlOrder, tenantID)
 	return lim.Allow()
 }
 
@@ -541,4 +595,16 @@ func (gw *Gateway) executeConnector(ctx context.Context, eventID string, req typ
 		Error:      execResp.Error,
 		DurationMS: duration.Milliseconds(),
 	}
+}
+
+func buildPostgresDSN() string {
+	sslmode := config.EnvOr("POSTGRES_SSLMODE", "disable")
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(config.EnvOr("POSTGRES_USER", "openclause"), config.EnvOr("POSTGRES_PASSWORD", "changeme")),
+		Host:     net.JoinHostPort(config.EnvOr("POSTGRES_HOST", "localhost"), config.EnvOr("POSTGRES_PORT", "5432")),
+		Path:     config.EnvOr("POSTGRES_DB", "openclause"),
+		RawQuery: "sslmode=" + url.QueryEscape(sslmode),
+	}
+	return u.String()
 }

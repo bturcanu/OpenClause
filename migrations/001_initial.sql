@@ -28,7 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
 -- partitioning on received_at.
 
 CREATE TABLE IF NOT EXISTS tool_events (
-    event_seq        BIGSERIAL UNIQUE,
+    event_seq        BIGSERIAL UNIQUE NOT NULL,
     event_id        TEXT PRIMARY KEY,
     tenant_id       TEXT NOT NULL REFERENCES tenants(id),
     agent_id        TEXT NOT NULL,
@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS tool_events (
     action          TEXT NOT NULL,
     payload_json    JSONB NOT NULL,
     payload_canon   BYTEA NOT NULL,
-    risk_score      INTEGER NOT NULL DEFAULT 0,
-    decision        TEXT NOT NULL,       -- 'allow', 'deny', 'approve'
+    risk_score      INTEGER NOT NULL DEFAULT 0 CHECK (risk_score >= 0 AND risk_score <= 10),
+    decision        TEXT NOT NULL CHECK (decision IN ('allow', 'deny', 'approve')),
     policy_result   JSONB,
     idempotency_key TEXT NOT NULL,
     session_id      TEXT DEFAULT '',
@@ -65,13 +65,16 @@ CREATE INDEX IF NOT EXISTS idx_tool_events_decision
 CREATE INDEX IF NOT EXISTS idx_tool_events_tool_action
     ON tool_events(tool, action);
 
+CREATE INDEX IF NOT EXISTS idx_tool_events_tenant_seq
+    ON tool_events(tenant_id, event_seq ASC);
+
 -- ── Tool results (execution outcomes) ───────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS tool_results (
     id              BIGSERIAL PRIMARY KEY,
     event_id        TEXT NOT NULL REFERENCES tool_events(event_id),
     tenant_id       TEXT NOT NULL REFERENCES tenants(id),
-    status          TEXT NOT NULL,        -- 'success', 'error', 'timeout'
+    status          TEXT NOT NULL CHECK (status IN ('success', 'error', 'timeout')),
     output_json     JSONB,
     error_msg       TEXT DEFAULT '',
     duration_ms     BIGINT NOT NULL DEFAULT 0,
@@ -79,7 +82,7 @@ CREATE TABLE IF NOT EXISTS tool_results (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_tool_results_event ON tool_results(event_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_results_event ON tool_results(event_id);
 
 -- ── Tool execution links (approval resume endpoint) ──────────────────────────
 
@@ -106,7 +109,8 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     risk_score  INTEGER NOT NULL DEFAULT 0,
     reason      TEXT DEFAULT '',
     deny_reason TEXT DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'pending',  -- 'pending', 'approved', 'denied', 'expired'
+    denied_by   TEXT DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ,
     expires_at  TIMESTAMPTZ NOT NULL

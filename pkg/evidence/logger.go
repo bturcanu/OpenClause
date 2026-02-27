@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
@@ -20,6 +21,10 @@ func NewLogger(store *Store, log *slog.Logger) *Logger {
 
 // RecordEvent persists and logs the event.
 func (l *Logger) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) error {
+	if env == nil {
+		return fmt.Errorf("evidence.RecordEvent: nil envelope")
+	}
+
 	if err := l.store.RecordEvent(ctx, env); err != nil {
 		l.log.ErrorContext(ctx, "evidence record failed",
 			"event_id", env.EventID,

@@ -72,7 +72,11 @@ func (s *Service) ArchiveTenant(ctx context.Context, tenantID string) (string, e
 		return "", fmt.Errorf("marshal bundle: %w", err)
 	}
 
-	key := fmt.Sprintf("evidence/%s/%04d/%02d/%02d/%s.json", tenantID, now.Year(), now.Month(), now.Day(), last.Hash)
+	fromHash := lastHash
+	if fromHash == "" {
+		fromHash = "genesis"
+	}
+	key := fmt.Sprintf("evidence/%s/%s_to_%s.json", tenantID, fromHash, last.Hash)
 	if err := s.uploader.Upload(ctx, key, body); err != nil {
 		return "", err
 	}

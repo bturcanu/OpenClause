@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -58,6 +59,10 @@ func main() {
 
 	store := approvals.NewStore(pool)
 	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
+	if internalToken == "" {
+		log.Error("INTERNAL_AUTH_TOKEN is required")
+		os.Exit(1)
+	}
 	authorizer := approvals.NewApproverAuthorizer(
 		os.Getenv("APPROVER_EMAIL_ALLOWLIST"),
 		os.Getenv("APPROVER_SLACK_ALLOWLIST"),
@@ -90,29 +95,29 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(internalAuthMiddleware(internalToken))
 		handlers.RegisterRoutes(r)
-	})
 
-	// ── Minimal web UI for pending approvals ─────────────────────────────
-	r.Get("/ui/pending", func(w http.ResponseWriter, r *http.Request) {
-		tenantID := r.URL.Query().Get("tenant_id")
-		if tenantID == "" {
-			http.Error(w, "tenant_id required", http.StatusBadRequest)
-			return
-		}
-		reqs, err := store.ListPending(r.Context(), tenantID, 100, 0)
-		if err != nil {
-			log.Error("list pending failed", "error", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
+		// Minimal web UI for pending approvals
+		r.Get("/ui/pending", func(w http.ResponseWriter, r *http.Request) {
+			tenantID := r.URL.Query().Get("tenant_id")
+			if tenantID == "" {
+				http.Error(w, "tenant_id required", http.StatusBadRequest)
+				return
+			}
+			reqs, err := store.ListPending(r.Context(), tenantID, 100, 0)
+			if err != nil {
+				log.Error("list pending failed", "error", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := pendingTmpl.Execute(w, struct {
-			TenantID string
-			Requests []approvals.ApprovalRequest
-		}{TenantID: tenantID, Requests: reqs}); err != nil {
-			log.Error("template execute failed", "error", err)
-		}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := pendingTmpl.Execute(w, struct {
+				TenantID string
+				Requests []approvals.ApprovalRequest
+			}{TenantID: tenantID, Requests: reqs}); err != nil {
+				log.Error("template execute failed", "error", err)
+			}
+		})
 	})
 
 	// ── Server ───────────────────────────────────────────────────────────
@@ -165,7 +170,8 @@ func main() {
 func internalAuthMiddleware(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if token != "" && r.Header.Get("X-Internal-Token") != token {
+			provided := r.Header.Get("X-Internal-Token")
+			if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

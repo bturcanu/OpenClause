@@ -20,7 +20,7 @@ func (a *ApproverAuthorizer) AllowEmail(tenantID, email string) bool {
 	}
 	allowed, ok := a.emailByTenant[tenantID]
 	if !ok || len(allowed) == 0 {
-		return true
+		return false
 	}
 	_, ok = allowed[strings.ToLower(strings.TrimSpace(email))]
 	return ok
@@ -32,7 +32,7 @@ func (a *ApproverAuthorizer) AllowSlack(tenantID, userID string) bool {
 	}
 	allowed, ok := a.slackByTenant[tenantID]
 	if !ok || len(allowed) == 0 {
-		return true
+		return false
 	}
 	_, ok = allowed[strings.ToLower(strings.TrimSpace(userID))]
 	return ok

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
@@ -46,6 +46,9 @@ func NewHandlers(store handlersStore, authorizer *ApproverAuthorizer, slackSigni
 }
 
 // RegisterRoutes mounts the approval routes on r.
+// These routes are internal-only (behind internalAuthMiddleware).
+// Tenant isolation is enforced at the gateway layer; the approval service
+// trusts tenant_id values from authenticated internal callers.
 func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Post("/v1/approvals/requests", h.CreateRequest)
 	r.Get("/v1/approvals/requests/{id}", h.GetRequest)
@@ -232,12 +235,22 @@ func (h *Handlers) SlackInteractions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parts := strings.Split(in.Actions[0].Value, "|")
-	if len(parts) != 4 {
+	rawValue, err := base64.URLEncoding.DecodeString(in.Actions[0].Value)
+	if err != nil {
+		types.ErrBadRequest("invalid action value encoding").WriteJSON(w)
+		return
+	}
+	var actionVal struct {
+		Decision          string `json:"d"`
+		ApprovalRequestID string `json:"r"`
+		EventID           string `json:"e"`
+		TenantID          string `json:"t"`
+	}
+	if err := json.Unmarshal(rawValue, &actionVal); err != nil {
 		types.ErrBadRequest("invalid action value").WriteJSON(w)
 		return
 	}
-	decision, requestID, actionEventID, _ := parts[0], parts[1], parts[2], parts[3]
+	decision, requestID, actionEventID := actionVal.Decision, actionVal.ApprovalRequestID, actionVal.EventID
 	req, err := h.store.GetRequest(r.Context(), requestID)
 	if err != nil {
 		slog.Error("get approval request failed", "error", err, "request_id", requestID)
@@ -324,8 +337,23 @@ func (h *Handlers) ListPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	var limit, offset int
+	if v := r.URL.Query().Get("limit"); v != "" {
+		var err error
+		limit, err = strconv.Atoi(v)
+		if err != nil {
+			types.ErrBadRequest("invalid limit parameter").WriteJSON(w)
+			return
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		var err error
+		offset, err = strconv.Atoi(v)
+		if err != nil {
+			types.ErrBadRequest("invalid offset parameter").WriteJSON(w)
+			return
+		}
+	}
 
 	reqs, err := h.store.ListPending(r.Context(), tenantID, limit, offset)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -94,10 +95,10 @@ func (f *fakeNotificationStore) MarkNotificationFailed(_ context.Context, id str
 }
 
 func TestDispatcherRetriesThenSucceeds(t *testing.T) {
-	var hits int
+	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits++
-		if hits == 1 {
+		h := hits.Add(1)
+		if h == 1 {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -128,12 +129,13 @@ func TestDispatcherRetriesThenSucceeds(t *testing.T) {
 		lastErr: map[string]string{},
 	}
 	d := NewDispatcher(store, "oc://approvals", map[string]string{"s1": "secret"}, "http://localhost:8082", "token")
+	d.SkipWebhookValidation = true
 
 	if err := d.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("dispatch once #1: %v", err)
 	}
-	if store.retries["d1"] != 1 {
-		t.Fatalf("expected one retry, got %d", store.retries["d1"])
+	if _, ok := store.retries["d1"]; !ok {
+		t.Fatalf("expected retry to be recorded")
 	}
 
 	if err := d.DispatchOnce(context.Background()); err != nil {
@@ -145,12 +147,12 @@ func TestDispatcherRetriesThenSucceeds(t *testing.T) {
 }
 
 func TestDispatcherDeliversSlackNotification(t *testing.T) {
-	var hits int
+	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/exec" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		hits++
+		hits.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","output_json":{"ok":true}}`))
 	}))
@@ -187,7 +189,7 @@ func TestDispatcherDeliversSlackNotification(t *testing.T) {
 	if !store.sent["d-slack-1"] {
 		t.Fatalf("expected slack notification to be marked sent")
 	}
-	if hits != 1 {
-		t.Fatalf("expected one connector delivery, got %d", hits)
+	if hits.Load() != 1 {
+		t.Fatalf("expected one connector delivery, got %d", hits.Load())
 	}
 }

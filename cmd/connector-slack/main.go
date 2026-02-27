@@ -4,6 +4,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,6 +51,10 @@ func main() {
 	}
 
 	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
+	if internalToken == "" {
+		log.Error("INTERNAL_AUTH_TOKEN is required")
+		os.Exit(1)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -61,7 +67,7 @@ func main() {
 	})
 
 	r.Post("/exec", func(w http.ResponseWriter, r *http.Request) {
-		if internalToken != "" && r.Header.Get("X-Internal-Token") != internalToken {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Internal-Token")), []byte(internalToken)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -186,6 +192,19 @@ func (s *SlackConnector) listChannels(ctx context.Context) connectors.ExecRespon
 	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
 }
 
+type slackActionValue struct {
+	Decision          string `json:"d"`
+	ApprovalRequestID string `json:"r"`
+	EventID           string `json:"e"`
+	TenantID          string `json:"t"`
+}
+
+func encodeActionValue(decision, requestID, eventID, tenantID string) string {
+	v := slackActionValue{Decision: decision, ApprovalRequestID: requestID, EventID: eventID, TenantID: tenantID}
+	b, _ := json.Marshal(v)
+	return base64.URLEncoding.EncodeToString(b)
+}
+
 func (s *SlackConnector) postApprovalMessage(ctx context.Context, req connectors.ExecRequest) connectors.ExecResponse {
 	var params slackApprovalMessageParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -194,8 +213,8 @@ func (s *SlackConnector) postApprovalMessage(ctx context.Context, req connectors
 	if params.Channel == "" || params.ApprovalRequestID == "" || params.EventID == "" || params.TenantID == "" {
 		return connectors.ExecResponse{Status: "error", Error: "channel, approval_request_id, event_id, tenant_id are required"}
 	}
-	valueApprove := fmt.Sprintf("approve|%s|%s|%s", params.ApprovalRequestID, params.EventID, params.TenantID)
-	valueDeny := fmt.Sprintf("deny|%s|%s|%s", params.ApprovalRequestID, params.EventID, params.TenantID)
+	valueApprove := encodeActionValue("approve", params.ApprovalRequestID, params.EventID, params.TenantID)
+	valueDeny := encodeActionValue("deny", params.ApprovalRequestID, params.EventID, params.TenantID)
 	blocks := []map[string]any{
 		{
 			"type": "section",
@@ -313,5 +332,12 @@ func (s *SlackConnector) postMessage(ctx context.Context, req connectors.ExecReq
 		return connectors.ExecResponse{Status: "error", Error: string(respBody)}
 	}
 
+	var slackResp struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &slackResp); err == nil && !slackResp.OK {
+		return connectors.ExecResponse{Status: "error", Error: "slack: " + slackResp.Error, OutputJSON: respBody}
+	}
 	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
 }

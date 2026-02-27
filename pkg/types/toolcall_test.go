@@ -22,7 +22,7 @@ func TestValidate_RequiredFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.req.Validate()
+			err := tt.req.NormalizeAndValidate()
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -42,7 +42,7 @@ func TestValidate_RiskScoreAboveMax(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k", RiskScore: 11,
 	}
-	err := req.Validate()
+	err := req.NormalizeAndValidate()
 	if err == nil {
 		t.Fatal("expected error for risk_score > 10")
 	}
@@ -53,7 +53,7 @@ func TestValidate_RiskScoreNegative(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k", RiskScore: -1,
 	}
-	err := req.Validate()
+	err := req.NormalizeAndValidate()
 	if err == nil {
 		t.Fatal("expected error for risk_score < 0")
 	}
@@ -72,7 +72,7 @@ func TestValidate_ParamsSize(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k", Params: json.RawMessage(big),
 	}
-	err := req.Validate()
+	err := req.NormalizeAndValidate()
 	if err == nil {
 		t.Fatal("expected error for oversized params")
 	}
@@ -87,7 +87,7 @@ func TestValidate_LabelCount(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k", Labels: labels,
 	}
-	err := req.Validate()
+	err := req.NormalizeAndValidate()
 	if err == nil {
 		t.Fatal("expected error for too many labels")
 	}
@@ -100,7 +100,7 @@ func TestValidate_ResourceByteLength(t *testing.T) {
 		IdempotencyKey: "k",
 		Resource:       strings.Repeat("a", MaxResourceBytes+1),
 	}
-	err := req.Validate()
+	err := req.NormalizeAndValidate()
 	if err == nil {
 		t.Fatal("expected error for oversized resource")
 	}
@@ -115,7 +115,7 @@ func TestValidate_IdempotencyKeyMaxLength(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: strings.Repeat("k", MaxIdempotencyKeyBytes+1),
 	}
-	err := req.Validate()
+	err := req.NormalizeAndValidate()
 	if err == nil {
 		t.Fatal("expected error for oversized idempotency_key")
 	}
@@ -130,7 +130,7 @@ func TestValidate_SchemaVersionUnknown(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k", SchemaVersion: "99.0",
 	}
-	err := req.Validate()
+	err := req.NormalizeAndValidate()
 	if err == nil {
 		t.Fatal("expected error for unknown schema version")
 	}
@@ -145,7 +145,7 @@ func TestValidate_SchemaVersionDefault(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k",
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.NormalizeAndValidate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if req.SchemaVersion != CurrentSchemaVer {
@@ -158,7 +158,7 @@ func TestValidate_RequestedAtDefault(t *testing.T) {
 		TenantID: "t", AgentID: "a", Tool: "t", Action: "a",
 		IdempotencyKey: "k",
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.NormalizeAndValidate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if req.RequestedAt.IsZero() {
@@ -172,7 +172,7 @@ func TestNormalize(t *testing.T) {
 		Tool: "  SLACK  ", Action: " MSG.POST ",
 		IdempotencyKey: "k",
 	}
-	_ = req.Validate()
+	_ = req.NormalizeAndValidate()
 	if req.Tool != "slack" {
 		t.Errorf("expected tool 'slack', got %q", req.Tool)
 	}
@@ -191,7 +191,7 @@ func TestValidate_OK(t *testing.T) {
 		IdempotencyKey: "key-123",
 		RequestedAt:    time.Now(),
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.NormalizeAndValidate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

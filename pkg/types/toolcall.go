@@ -4,9 +4,12 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
+
+var validToolAction = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Limits
@@ -63,8 +66,8 @@ func (r *ToolCallRequest) Normalize() {
 	r.Action = strings.ToLower(strings.TrimSpace(r.Action))
 }
 
-// Validate enforces all invariants on the request. Also normalizes tool/action.
-func (r *ToolCallRequest) Validate() error {
+// NormalizeAndValidate normalizes tool/action and enforces all invariants on the request.
+func (r *ToolCallRequest) NormalizeAndValidate() error {
 	r.Normalize()
 
 	if r.TenantID == "" {
@@ -76,8 +79,14 @@ func (r *ToolCallRequest) Validate() error {
 	if r.Tool == "" {
 		return &ValidationError{Field: "tool", Reason: "required"}
 	}
+	if !validToolAction.MatchString(r.Tool) {
+		return &ValidationError{Field: "tool", Reason: "invalid characters (allowed: a-z0-9._-)"}
+	}
 	if r.Action == "" {
 		return &ValidationError{Field: "action", Reason: "required"}
+	}
+	if !validToolAction.MatchString(r.Action) {
+		return &ValidationError{Field: "action", Reason: "invalid characters (allowed: a-z0-9._-)"}
 	}
 	if r.IdempotencyKey == "" {
 		return &ValidationError{Field: "idempotency_key", Reason: "required"}

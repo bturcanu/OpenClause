@@ -8,7 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,6 +22,7 @@ import (
 const (
 	defaultDispatchBatchSize = 100
 	maxDispatchBackoff       = 5 * time.Minute
+	maxNotificationAttempts  = 10
 )
 
 // Summarizer builds human-friendly notification summaries from sanitized fields.
@@ -36,13 +41,14 @@ func (TemplateSummarizer) Summarize(n NotificationOutbox) string {
 }
 
 type Dispatcher struct {
-	store         notificationStore
-	httpClient    *http.Client
-	source        string
-	secrets       map[string]string
-	summarizer    Summarizer
-	slackURL      string
-	internalToken string
+	store                 notificationStore
+	httpClient            *http.Client
+	source                string
+	secrets               map[string]string
+	summarizer            Summarizer
+	slackURL              string
+	internalToken         string
+	SkipWebhookValidation bool // testing only — disables SSRF URL checks
 }
 
 type notificationStore interface {
@@ -77,22 +83,42 @@ func (d *Dispatcher) DispatchOnce(ctx context.Context) error {
 				continue
 			}
 			if err := d.deliverWebhook(ctx, item); err != nil {
+				if item.Attempts >= maxNotificationAttempts {
+					if markErr := d.store.MarkNotificationFailed(ctx, item.ID, "max retries exceeded: "+err.Error()); markErr != nil {
+						slog.Error("mark notification failed error", "id", item.ID, "error", markErr)
+					}
+					continue
+				}
 				next := time.Now().UTC().Add(backoffForAttempt(item.Attempts))
-				_ = d.store.MarkNotificationRetry(ctx, item.ID, item.Attempts, next, err.Error())
+				if markErr := d.store.MarkNotificationRetry(ctx, item.ID, item.Attempts, next, err.Error()); markErr != nil {
+					slog.Error("mark notification retry error", "id", item.ID, "error", markErr)
+				}
 				continue
 			}
-			_ = d.store.MarkNotificationSent(ctx, item.ID)
+			if markErr := d.store.MarkNotificationSent(ctx, item.ID); markErr != nil {
+				slog.Error("mark notification sent error", "id", item.ID, "error", markErr)
+			}
 		case "slack":
 			if item.SlackChannel == "" {
 				_ = d.store.MarkNotificationFailed(ctx, item.ID, "slack channel is empty")
 				continue
 			}
 			if err := d.deliverSlack(ctx, item); err != nil {
+				if item.Attempts >= maxNotificationAttempts {
+					if markErr := d.store.MarkNotificationFailed(ctx, item.ID, "max retries exceeded: "+err.Error()); markErr != nil {
+						slog.Error("mark notification failed error", "id", item.ID, "error", markErr)
+					}
+					continue
+				}
 				next := time.Now().UTC().Add(backoffForAttempt(item.Attempts))
-				_ = d.store.MarkNotificationRetry(ctx, item.ID, item.Attempts, next, err.Error())
+				if markErr := d.store.MarkNotificationRetry(ctx, item.ID, item.Attempts, next, err.Error()); markErr != nil {
+					slog.Error("mark notification retry error", "id", item.ID, "error", markErr)
+				}
 				continue
 			}
-			_ = d.store.MarkNotificationSent(ctx, item.ID)
+			if markErr := d.store.MarkNotificationSent(ctx, item.ID); markErr != nil {
+				slog.Error("mark notification sent error", "id", item.ID, "error", markErr)
+			}
 		default:
 			_ = d.store.MarkNotificationFailed(ctx, item.ID, "unsupported notify kind")
 		}
@@ -100,7 +126,33 @@ func (d *Dispatcher) DispatchOnce(ctx context.Context) error {
 	return nil
 }
 
+func ValidateWebhookURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("only https scheme allowed, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("empty hostname")
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("private/loopback IP not allowed: %s", ip)
+		}
+	}
+	return nil
+}
+
 func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox) error {
+	if !d.SkipWebhookValidation {
+		if err := ValidateWebhookURL(item.NotifyURL); err != nil {
+			return fmt.Errorf("webhook URL validation: %w", err)
+		}
+	}
 	body, err := BuildApprovalRequestedCloudEvent(item, d.source, d.summarizer.Summarize(item))
 	if err != nil {
 		return err
@@ -122,10 +174,11 @@ func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("status=%d", resp.StatusCode)
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("webhook status=%d", resp.StatusCode)
 }
 
 func (d *Dispatcher) deliverSlack(ctx context.Context, item NotificationOutbox) error {
@@ -173,8 +226,9 @@ func (d *Dispatcher) deliverSlack(ctx context.Context, item NotificationOutbox) 
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("status=%d", resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("slack connector status=%d", resp.StatusCode)
 	}
 	var execResp connectors.ExecResponse
 	if err := json.NewDecoder(resp.Body).Decode(&execResp); err != nil {
@@ -195,13 +249,6 @@ func backoffForAttempt(attempt int) time.Duration {
 		return maxDispatchBackoff
 	}
 	return d
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func SignBodyHMACSHA256(rawBody []byte, secret string) string {

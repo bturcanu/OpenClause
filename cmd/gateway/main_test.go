@@ -15,6 +15,7 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/time/rate"
 )
 
 type fakeEvidence struct {
@@ -72,10 +73,21 @@ func (f *fakeEvidence) LinkExecutionToParent(_ context.Context, parentEventID, e
 	return true, nil
 }
 
-type fakePolicy struct{}
+type fakePolicy struct {
+	decision types.Decision
+	reason   string
+}
 
 func (f fakePolicy) Evaluate(context.Context, types.PolicyInput) (*types.PolicyResult, error) {
-	return &types.PolicyResult{Decision: types.DecisionAllow, Reason: "ok"}, nil
+	d := f.decision
+	if d == "" {
+		d = types.DecisionAllow
+	}
+	r := f.reason
+	if r == "" {
+		r = "ok"
+	}
+	return &types.PolicyResult{Decision: d, Reason: r}, nil
 }
 
 type fakeConnectors struct {
@@ -117,11 +129,12 @@ func (f *fakeApprovals) FindAndConsumeGrant(_ context.Context, _, _, _, _, _ str
 
 func newExecuteGateway(fe *fakeEvidence, fc *fakeConnectors, fa *fakeApprovals) *Gateway {
 	return &Gateway{
-		log:        slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)),
-		evidence:   fe,
-		policy:     fakePolicy{},
-		connectors: fc,
-		approvals:  fa,
+		log:          slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)),
+		evidence:     fe,
+		policy:       fakePolicy{},
+		connectors:   fc,
+		approvals:    fa,
+		rateLimiters: make(map[string]*rate.Limiter),
 	}
 }
 
@@ -136,9 +149,10 @@ func executeRequest(t *testing.T, gw *Gateway, eventID string) *httptest.Respons
 }
 
 func TestExecuteHappyPathAndIdempotentReplay(t *testing.T) {
+	const parentID = "00000000-0000-0000-0000-000000000001"
 	fe := newFakeEvidence()
-	fe.events["parent-1"] = &types.ToolCallEnvelope{
-		EventID: "parent-1",
+	fe.events[parentID] = &types.ToolCallEnvelope{
+		EventID: parentID,
 		Request: types.ToolCallRequest{
 			TenantID: "tenant1",
 			AgentID:  "agent-1",
@@ -152,7 +166,7 @@ func TestExecuteHappyPathAndIdempotentReplay(t *testing.T) {
 	fa := &fakeApprovals{usesLeft: 1}
 	gw := newExecuteGateway(fe, fc, fa)
 
-	first := executeRequest(t, gw, "parent-1")
+	first := executeRequest(t, gw, parentID)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first execute status=%d body=%s", first.Code, first.Body.String())
 	}
@@ -164,7 +178,7 @@ func TestExecuteHappyPathAndIdempotentReplay(t *testing.T) {
 		t.Fatalf("unexpected first response: %+v", firstResp)
 	}
 
-	second := executeRequest(t, gw, "parent-1")
+	second := executeRequest(t, gw, parentID)
 	if second.Code != http.StatusOK {
 		t.Fatalf("second execute status=%d body=%s", second.Code, second.Body.String())
 	}
@@ -178,9 +192,10 @@ func TestExecuteHappyPathAndIdempotentReplay(t *testing.T) {
 }
 
 func TestExecuteConcurrentCallsConsumeGrantSafely(t *testing.T) {
+	const parentID = "00000000-0000-0000-0000-000000000002"
 	fe := newFakeEvidence()
-	fe.events["parent-2"] = &types.ToolCallEnvelope{
-		EventID: "parent-2",
+	fe.events[parentID] = &types.ToolCallEnvelope{
+		EventID: parentID,
 		Request: types.ToolCallRequest{
 			TenantID: "tenant1",
 			AgentID:  "agent-1",
@@ -203,7 +218,7 @@ func TestExecuteConcurrentCallsConsumeGrantSafely(t *testing.T) {
 	for i := range 2 {
 		go func(idx int) {
 			defer wg.Done()
-			results[idx] = executeRequest(t, gw, "parent-2")
+			results[idx] = executeRequest(t, gw, parentID)
 		}(i)
 	}
 	wg.Wait()
@@ -226,5 +241,132 @@ func TestExecuteConcurrentCallsConsumeGrantSafely(t *testing.T) {
 	}
 	if okCount+conflictCount != 2 {
 		t.Fatalf("expected two terminal responses, got ok=%d conflict=%d", okCount, conflictCount)
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// HandleToolCall (POST /v1/toolcalls) tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+func postToolCall(t *testing.T, gw *Gateway, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	r := chi.NewRouter()
+	r.Post("/v1/toolcalls", gw.HandleToolCall)
+	req := httptest.NewRequest(http.MethodPost, "/v1/toolcalls", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestHandleToolCall_AllowPath(t *testing.T) {
+	fe := newFakeEvidence()
+	fc := &fakeConnectors{output: json.RawMessage(`{"ok":true}`)}
+	fa := &fakeApprovals{}
+	gw := &Gateway{
+		log:            slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)),
+		evidence:       fe,
+		policy:         fakePolicy{decision: types.DecisionAllow},
+		connectors:     fc,
+		approvals:      fa,
+		rateLimiters:   make(map[string]*rate.Limiter),
+		perTenantLimit: 100,
+	}
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		RiskScore:      2,
+		IdempotencyKey: "k1",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp types.ToolCallResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Decision != types.DecisionAllow {
+		t.Fatalf("expected allow, got %s", resp.Decision)
+	}
+	if resp.Result == nil {
+		t.Fatal("expected execution result")
+	}
+}
+
+func TestHandleToolCall_DenyPath(t *testing.T) {
+	fe := newFakeEvidence()
+	fc := &fakeConnectors{}
+	fa := &fakeApprovals{}
+	gw := &Gateway{
+		log:            slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)),
+		evidence:       fe,
+		policy:         fakePolicy{decision: types.DecisionDeny, reason: "blocked"},
+		connectors:     fc,
+		approvals:      fa,
+		rateLimiters:   make(map[string]*rate.Limiter),
+		perTenantLimit: 100,
+	}
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		RiskScore:      2,
+		IdempotencyKey: "k2",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp types.ToolCallResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Decision != types.DecisionDeny {
+		t.Fatalf("expected deny, got %s", resp.Decision)
+	}
+}
+
+func TestHandleToolCall_BadJSON(t *testing.T) {
+	fe := newFakeEvidence()
+	gw := &Gateway{
+		log:            slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)),
+		evidence:       fe,
+		policy:         fakePolicy{},
+		connectors:     &fakeConnectors{},
+		approvals:      &fakeApprovals{},
+		rateLimiters:   make(map[string]*rate.Limiter),
+		perTenantLimit: 100,
+	}
+
+	rr := postToolCall(t, gw, []byte(`{invalid json`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleToolCall_ValidationError(t *testing.T) {
+	fe := newFakeEvidence()
+	gw := &Gateway{
+		log:            slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)),
+		evidence:       fe,
+		policy:         fakePolicy{},
+		connectors:     &fakeConnectors{},
+		approvals:      &fakeApprovals{},
+		rateLimiters:   make(map[string]*rate.Limiter),
+		perTenantLimit: 100,
+	}
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID: "tenant1",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
