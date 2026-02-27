@@ -53,7 +53,6 @@ type fakeNotificationStore struct {
 	failed  map[string]bool
 	retries map[string]int
 	lastErr map[string]string
-	claimed map[string]bool
 }
 
 func (f *fakeNotificationStore) ClaimDueNotifications(context.Context, int) ([]NotificationOutbox, error) {
