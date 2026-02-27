@@ -336,7 +336,10 @@ func (s *SlackConnector) postMessage(ctx context.Context, req connectors.ExecReq
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	if err := json.Unmarshal(respBody, &slackResp); err == nil && !slackResp.OK {
+	if err := json.Unmarshal(respBody, &slackResp); err != nil {
+		return connectors.ExecResponse{Status: "error", Error: "slack: invalid response body", OutputJSON: respBody}
+	}
+	if !slackResp.OK {
 		return connectors.ExecResponse{Status: "error", Error: "slack: " + slackResp.Error, OutputJSON: respBody}
 	}
 	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
