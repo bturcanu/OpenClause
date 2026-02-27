@@ -16,9 +16,10 @@ const maxConnectorResponseBytes = 4 << 20 // 4 MB
 
 // Registry maps tool names to connector base URLs. Thread-safe.
 type Registry struct {
-	mu         sync.RWMutex
-	routes     map[string]string // tool → base URL
-	httpClient *http.Client
+	mu            sync.RWMutex
+	routes        map[string]string // tool → base URL
+	httpClient    *http.Client
+	internalToken string
 }
 
 // NewRegistry creates a connector registry.
@@ -59,6 +60,9 @@ func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, er
 		return nil, fmt.Errorf("connector new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if r.internalToken != "" {
+		httpReq.Header.Set("X-Internal-Token", r.internalToken)
+	}
 
 	resp, err := r.httpClient.Do(httpReq)
 	if err != nil {
@@ -84,4 +88,11 @@ func (r *Registry) SetTimeout(d time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.httpClient.Timeout = d
+}
+
+// SetInternalToken configures service-to-service auth header for connectors.
+func (r *Registry) SetInternalToken(token string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.internalToken = token
 }

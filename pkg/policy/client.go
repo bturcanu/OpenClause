@@ -42,9 +42,11 @@ type opaResponse struct {
 }
 
 type opaResult struct {
-	Decision     string            `json:"decision"`
-	Reason       string            `json:"reason"`
-	Requirements map[string]string `json:"requirements,omitempty"`
+	Decision      string               `json:"decision"`
+	Reason        string               `json:"reason"`
+	Requirements  map[string]string    `json:"requirements,omitempty"`
+	Notify        []types.PolicyNotify `json:"notify,omitempty"`
+	ApproverGroup string               `json:"approver_group,omitempty"`
 }
 
 // Evaluate sends a PolicyInput to OPA and returns the decision.
@@ -85,9 +87,11 @@ func (c *Client) Evaluate(ctx context.Context, input types.PolicyInput) (*types.
 	}
 
 	return &types.PolicyResult{
-		Decision:     decision,
-		Reason:       opaResp.Result.Reason,
-		Requirements: opaResp.Result.Requirements,
+		Decision:      decision,
+		Reason:        opaResp.Result.Reason,
+		Requirements:  opaResp.Result.Requirements,
+		Notify:        opaResp.Result.Notify,
+		ApproverGroup: opaResp.Result.ApproverGroup,
 	}, nil
 }
 

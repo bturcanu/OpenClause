@@ -57,3 +57,17 @@ reason := "high risk score requires approval" if {
 requirements := {"approval_scope": "single_use"} if {
 	decision == "approve"
 }
+
+default notify := []
+
+notify := routes if {
+	decision == "approve"
+	routes := object.get(data.tenants[input.toolcall.tenant_id], "notify", [])
+}
+
+default approver_group := ""
+
+approver_group := grp if {
+	decision == "approve"
+	grp := object.get(data.tenants[input.toolcall.tenant_id], "approver_group", "")
+}

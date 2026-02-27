@@ -62,3 +62,13 @@ func (l *Logger) CheckIdempotency(ctx context.Context, tenantID, key string) (*t
 func (l *Logger) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEnvelope, error) {
 	return l.store.GetEvent(ctx, eventID)
 }
+
+// GetExecutionByParentEvent delegates to the store.
+func (l *Logger) GetExecutionByParentEvent(ctx context.Context, parentEventID string) (*types.ToolCallResponse, error) {
+	return l.store.GetExecutionByParentEvent(ctx, parentEventID)
+}
+
+// LinkExecutionToParent delegates to the store.
+func (l *Logger) LinkExecutionToParent(ctx context.Context, parentEventID, executionEventID, consumedGrantID string) (bool, error) {
+	return l.store.LinkExecutionToParent(ctx, parentEventID, executionEventID, consumedGrantID)
+}

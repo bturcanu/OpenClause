@@ -137,12 +137,48 @@ func (j *JiraConnector) Exec(ctx context.Context, req connectors.ExecRequest) co
 	switch action {
 	case "jira.issue.create":
 		return j.createIssue(ctx, req)
+	case "jira.issue.list":
+		return j.listIssues(ctx, req)
 	default:
 		return connectors.ExecResponse{
 			Status: "error",
 			Error:  fmt.Sprintf("unsupported action: %s", action),
 		}
 	}
+}
+
+func (j *JiraConnector) listIssues(ctx context.Context, req connectors.ExecRequest) connectors.ExecResponse {
+	if j.mock {
+		output, _ := json.Marshal(map[string]any{
+			"issues": []map[string]any{
+				{"id": "10001", "key": "OPS-1", "summary": "Mock issue 1"},
+				{"id": "10002", "key": "OPS-2", "summary": "Mock issue 2"},
+			},
+			"total": 2,
+			"mock":  true,
+		})
+		return connectors.ExecResponse{Status: "success", OutputJSON: output}
+	}
+	url := strings.TrimRight(j.baseURL, "/") + "/rest/api/3/search?maxResults=20"
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: err.Error()}
+	}
+	httpReq.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString(
+		[]byte(j.email+":"+j.apiToken)))
+	resp, err := j.httpClient.Do(httpReq)
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxExternalResponseBytes))
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: "read response: " + err.Error()}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return connectors.ExecResponse{Status: "error", Error: string(respBody)}
+	}
+	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
 }
 
 func (j *JiraConnector) createIssue(ctx context.Context, req connectors.ExecRequest) connectors.ExecResponse {

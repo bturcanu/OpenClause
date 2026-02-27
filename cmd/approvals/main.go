@@ -57,9 +57,19 @@ func main() {
 	defer pool.Close()
 
 	store := approvals.NewStore(pool)
-	handlers := approvals.NewHandlers(store)
-
 	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
+	authorizer := approvals.NewApproverAuthorizer(
+		os.Getenv("APPROVER_EMAIL_ALLOWLIST"),
+		os.Getenv("APPROVER_SLACK_ALLOWLIST"),
+	)
+	handlers := approvals.NewHandlers(store, authorizer, os.Getenv("SLACK_SIGNING_SECRET"))
+	dispatcher := approvals.NewDispatcher(
+		store,
+		config.EnvOr("APPROVALS_NOTIFIER_SOURCE", "oc://approvals"),
+		approvals.ParseSecretRefMap(os.Getenv("WEBHOOK_SECRET_REFS")),
+		config.EnvOr("CONNECTOR_SLACK_URL", "http://localhost:8082"),
+		internalToken,
+	)
 
 	// ── Router ───────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -72,6 +82,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
+
+	// Slack interactions are externally authenticated via Slack signature headers.
+	r.Post("/v1/integrations/slack/interactions", handlers.SlackInteractions)
 
 	// API routes with internal auth
 	r.Group(func(r chi.Router) {
@@ -120,6 +133,24 @@ func main() {
 			cancel()
 		}
 	}()
+
+	if config.EnvOr("APPROVALS_NOTIFIER_ENABLED", "true") == "true" {
+		interval := time.Duration(config.EnvOrInt("APPROVALS_NOTIFIER_INTERVAL_SEC", 5)) * time.Second
+		go func() {
+			t := time.NewTicker(interval)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := dispatcher.DispatchOnce(ctx); err != nil {
+						log.Error("notification dispatch failed", "error", err)
+					}
+				}
+			}
+		}()
+	}
 
 	<-ctx.Done()
 	log.Info("shutting down approvals service")

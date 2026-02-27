@@ -25,11 +25,25 @@
   "tenants": {
     "tenant1": {
       "name": "Acme Corp",
-      "max_risk_auto_approve": 5
+      "max_risk_auto_approve": 5,
+      "approver_group": "security",
+      "notify": [
+        {
+          "kind": "webhook",
+          "url": "http://localhost:8090/hooks/approvals",
+          "secret_ref": "tenant1_webhook"
+        },
+        {
+          "kind": "slack",
+          "channel": "#security-approvals"
+        }
+      ]
     },
     "tenant2": {
       "name": "Globex Inc",
-      "max_risk_auto_approve": 3
+      "max_risk_auto_approve": 3,
+      "approver_group": "ops",
+      "notify": []
     }
   }
 }

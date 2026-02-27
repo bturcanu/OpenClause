@@ -64,8 +64,8 @@ func TestVerifyChain_Valid(t *testing.T) {
 	ev2Hash := ChainHash(ev1Hash, ev2Payload, ev2Result)
 
 	events := []ChainEvent{
-		{EventID: "e1", Hash: ev1Hash, CanonPayload: ev1Payload},
-		{EventID: "e2", Hash: ev2Hash, CanonPayload: ev2Payload, CanonResult: ev2Result},
+		{EventID: "e1", PrevHash: "", Hash: ev1Hash, CanonPayload: ev1Payload},
+		{EventID: "e2", PrevHash: ev1Hash, Hash: ev2Hash, CanonPayload: ev2Payload, CanonResult: ev2Result},
 	}
 
 	if err := VerifyChain(events); err != nil {
@@ -78,8 +78,8 @@ func TestVerifyChain_Broken(t *testing.T) {
 	ev1Hash := ChainHash("", ev1Payload, nil)
 
 	events := []ChainEvent{
-		{EventID: "e1", Hash: ev1Hash, CanonPayload: ev1Payload},
-		{EventID: "e2", Hash: "tampered-hash", CanonPayload: []byte(`{"event":2}`)},
+		{EventID: "e1", PrevHash: "", Hash: ev1Hash, CanonPayload: ev1Payload},
+		{EventID: "e2", PrevHash: ev1Hash, Hash: "tampered-hash", CanonPayload: []byte(`{"event":2}`)},
 	}
 
 	if err := VerifyChain(events); err == nil {
