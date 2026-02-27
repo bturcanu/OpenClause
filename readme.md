@@ -82,7 +82,8 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 | **Connector-Slack** | `:8082` | Executes Slack actions (`msg.post`). Supports mock mode. |
 | **Connector-Jira** | `:8083` | Executes Jira actions (`issue.create`). Supports mock mode. |
 | **OPA** | `:8181` | Open Policy Agent evaluating Rego policy bundles. |
-| **Postgres** | `:5432` | Stores events, results, approvals, grants, and hash chain. |
+| **Archiver** | — | Periodically verifies chains and uploads evidence bundles to MinIO/S3. |
+| **Postgres** | `:5432` | Stores events, results, approvals, grants, outbox, and hash chain. |
 | **MinIO** | `:9000` | S3-compatible object storage for evidence archival. |
 
 ---
@@ -184,6 +185,7 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 |---|---|---|
 | `POST` | `/v1/toolcalls` | Submit a tool-call request |
 | `GET` | `/v1/toolcalls/{event_id}` | Fetch event by ID |
+| `POST` | `/v1/toolcalls/{event_id}/execute` | Resume approved request and execute exactly-once by parent event |
 | `GET` | `/healthz` | Liveness probe |
 | `GET` | `/readyz` | Readiness probe (checks Postgres) |
 | `GET` | `/metrics` | Prometheus metrics |
@@ -197,6 +199,7 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 | `POST` | `/v1/approvals/requests/{id}/approve` | Approve a pending request |
 | `POST` | `/v1/approvals/requests/{id}/deny` | Deny a pending request |
 | `GET` | `/v1/approvals/pending?tenant_id=...&limit=...&offset=...` | List pending approvals (paginated, default limit 200) |
+| `POST` | `/v1/integrations/slack/interactions` | Slack Block Kit approve/deny callback endpoint |
 | `GET` | `/ui/pending?tenant_id=...` | Web UI for pending approvals |
 
 ### ToolCallRequest Schema
@@ -264,25 +267,27 @@ Changing the data file or Rego rules changes gateway behavior with zero code cha
 
 ```bash
 make policy-test
-# or
-opa test policy/bundles/v0/ policy/tests/ -v
+# or (Windows/dev without make)
+./bin/opa.exe test policy/bundles/v0/ policy/tests/ -v
 ```
 
 ---
 
 ## Approval Workflow
 
-When policy returns `approve`:
+OpenClause now uses a strict two-phase approval flow:
 
-1. Gateway creates an `ApprovalRequest` with details (tool, action, agent, risk score).
-2. Response includes an `approval_url` pointing to the approvals service.
-3. A human reviews the request via the API or the web UI (`/ui/pending`).
-4. On approve, an `ApprovalGrant` is created with a defined **scope**:
-   - `tool` / `action` (exact or `*` wildcard)
-   - `resource_pattern` (glob match)
-   - `max_uses` (default 1 — single use)
-   - `expires_at`
-5. The agent (or gateway) can now re-submit. The gateway finds and consumes the matching grant atomically.
+1. `POST /v1/toolcalls` returns `decision=approve` and `approval_url` for high-risk requests.
+2. A human approves/denies via API, UI, or Slack interactive buttons.
+3. Agent calls `POST /v1/toolcalls/{event_id}/execute` to resume execution.
+4. Gateway atomically consumes a matching grant and executes connector only once per parent event.
+5. Repeated `/execute` calls return the prior execution response (idempotent replay by parent event).
+
+Important behavior:
+- Gateway does not overwrite original evidence rows from phase 1.
+- Execution evidence is append-only and linked via `tool_executions`.
+- If grant is missing, `/execute` returns `409 awaiting approval` (fail-closed).
+- If replay/idempotency storage checks fail, gateway returns `500` (no best-effort fallback).
 
 ---
 
@@ -317,6 +322,9 @@ evidence.VerifyChain(events) // returns error if chain is broken
 | `tool_results` | Execution outcomes (status, output, duration) |
 | `approval_requests` | Pending/approved/denied approval requests |
 | `approval_grants` | Granted approvals with scope and usage tracking |
+| `tool_executions` | Links original approved event to append-only execution event |
+| `approval_notification_outbox` | Transactional webhook/slack notification outbox |
+| `evidence_archive_checkpoints` | Incremental archival checkpoints per tenant |
 | `tenants` | Tenant metadata and configuration |
 | `agents` | Agent registration per tenant |
 | `policy_versions` | Bundle deployment tracking |
@@ -347,7 +355,7 @@ Approvals and connector services require an `X-Internal-Token` header for servic
 INTERNAL_AUTH_TOKEN=your-shared-secret
 ```
 
-Leave empty to disable (development only). The gateway does not currently forward this header automatically — configure it in service environment variables for production.
+Leave empty to disable (development only). Gateway forwards this header to connectors when configured.
 
 ---
 
@@ -360,7 +368,10 @@ Connectors implement tool integrations. Each one is a standalone HTTP service wi
 | Connector | Action | Description |
 |---|---|---|
 | **Slack** | `slack.msg.post` | Post a message to a channel |
+| **Slack** | `slack.channel.list` | List channels |
+| **Slack** | `slack.approval.request` | Post Block Kit interactive approval message |
 | **Jira** | `jira.issue.create` | Create a Jira issue |
+| **Jira** | `jira.issue.list` | List issues |
 
 ### Mock Mode
 
@@ -368,10 +379,46 @@ Set `MOCK_CONNECTORS=true` in `.env` to run connectors without real credentials.
 
 ### Adding a New Connector
 
-1. Create `cmd/connector-<name>/main.go`.
-2. Implement the `POST /exec` handler accepting `connectors.ExecRequest` and returning `connectors.ExecResponse`.
+1. Create `cmd/connector-<name>/main.go` (see `cmd/connector-template`).
+2. Implement the `POST /exec` handler using `pkg/connectors/sdk`.
 3. Register the tool in the gateway's connector registry.
 4. Add the new connector to `docker-compose.yml`.
+
+### Webhook Notifications (CloudEvents + HMAC)
+
+When approval requests are created, notifications are enqueued transactionally and dispatched from `approval_notification_outbox`.
+
+- Event type: `oc.approval.requested`
+- Content-Type: `application/cloudevents+json` (structured mode)
+- Signature header: `X-OC-Signature-256: sha256=<hex(hmac_sha256(secret, raw_body))>`
+
+Verification steps:
+1. Read raw HTTP body bytes as received.
+2. Compute `hmac_sha256(secret, raw_body)`.
+3. Hex-encode and compare to header value using constant-time compare.
+
+### Slack Interactive Approvals
+
+- Endpoint: `POST /v1/integrations/slack/interactions`
+- Security: Slack signature verification (`X-Slack-Signature`, `X-Slack-Request-Timestamp`) against `SLACK_SIGNING_SECRET`.
+- Action payload embeds `approval_request_id|event_id|tenant_id` correlation.
+- Minimal RBAC is enforced via tenant allowlists (`APPROVER_SLACK_ALLOWLIST`, `APPROVER_EMAIL_ALLOWLIST`).
+
+### Evidence Archival
+
+- `cmd/archiver` verifies each tenant hash chain and uploads bundles to MinIO/S3.
+- Object naming:
+  `evidence/<tenant_id>/<YYYY>/<MM>/<DD>/<checkpoint_hash>.json`
+- Incremental progress is tracked in `evidence_archive_checkpoints`.
+- One-shot local run:
+  `ARCHIVER_RUN_ONCE=true ARCHIVER_TENANT_ID=tenant1 go run ./cmd/archiver`
+
+### Agent SDK
+
+A thin Go client is available in `pkg/sdk/client`:
+- submit toolcall (`Submit`)
+- wait/poll and resume (`WaitForApprovalThenExecute`)
+- execute approved event (`Execute`)
 
 ---
 
@@ -418,7 +465,22 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
 | `API_KEYS` | — | Comma-separated `tenant:key` pairs |
 | `INTERNAL_AUTH_TOKEN` | — | Shared secret for service-to-service auth (approvals, connectors) |
+| `APPROVER_EMAIL_ALLOWLIST` | — | Per-tenant email approver allowlist (`tenant:email1|email2`) |
+| `APPROVER_SLACK_ALLOWLIST` | — | Per-tenant Slack user allowlist (`tenant:u123|u999`) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
+| `SLACK_SIGNING_SECRET` | — | Slack signing secret for interactions endpoint |
+| `APPROVALS_NOTIFIER_ENABLED` | `true` | Enable transactional outbox dispatcher |
+| `APPROVALS_NOTIFIER_INTERVAL_SEC` | `5` | Dispatcher poll interval |
+| `APPROVALS_NOTIFIER_SOURCE` | `oc://approvals` | CloudEvents source value for approval notifications |
+| `WEBHOOK_SECRET_REFS` | — | Mapping `secret_ref=secret` used for HMAC signatures |
+| `EVIDENCE_S3_ENDPOINT` | `localhost:9000` | MinIO/S3 endpoint for archiver |
+| `EVIDENCE_S3_BUCKET` | `openclause-evidence` | Bucket for archived bundles |
+| `EVIDENCE_S3_ACCESS_KEY` | `minioadmin` | S3 access key |
+| `EVIDENCE_S3_SECRET_KEY` | `minioadmin` | S3 secret key |
+| `EVIDENCE_S3_SECURE` | `false` | Use HTTPS for object store |
+| `ARCHIVER_RUN_ONCE` | `true` | Run archiver once then exit |
+| `ARCHIVER_INTERVAL_SEC` | `300` | Archiver interval for daemon mode |
+| `ARCHIVER_TENANT_ID` | — | Optional tenant scope for one-shot archival |
 | `SLACK_BOT_TOKEN` | — | Slack bot OAuth token |
 | `JIRA_BASE_URL` | — | Jira instance URL |
 | `JIRA_EMAIL` | — | Jira auth email |
@@ -439,7 +501,9 @@ OpenClause/
 │   ├── gateway/                   # Gateway service
 │   ├── approvals/                 # Approvals service (+ web UI)
 │   ├── connector-slack/           # Slack connector
-│   └── connector-jira/            # Jira connector
+│   ├── connector-jira/            # Jira connector
+│   ├── connector-template/        # Example connector using SDK
+│   └── archiver/                  # Evidence archival worker/CLI
 ├── pkg/
 │   ├── types/                     # Canonical schema, validation, errors
 │   ├── policy/                    # OPA HTTP client
@@ -448,7 +512,10 @@ OpenClause/
 │   ├── otel/                      # OpenTelemetry setup
 │   ├── config/                    # Shared environment variable helpers
 │   ├── connectors/                # Connector interface, registry, routing
+│   │   └── sdk/                   # Connector SDK helper
 │   └── approvals/                 # Approval types, store, handlers
+│   ├── archiver/                  # Bundle builder + archival service
+│   └── sdk/client/                # Go client SDK
 ├── policy/
 │   ├── bundles/v0/                # OPA policy bundle (main.rego + data.json)
 │   └── tests/                     # OPA policy tests
@@ -484,7 +551,7 @@ OpenClause/
 | `make go-test` | Run Go unit tests only |
 | `make policy-test` | Run OPA policy tests only |
 | `make lint` | Run golangci-lint |
-| `make build` | Build all Go binaries to `bin/` |
+| `make build` | Build all Go binaries to `bin/` (includes archiver + connector-template) |
 | `make docker-build` | Build Docker images locally |
 | `make clean` | Remove build artifacts and containers |
 
@@ -505,7 +572,7 @@ opa test policy/bundles/v0/ policy/tests/ -v
 
 ```bash
 make build
-# Binaries output to bin/gateway, bin/approvals, bin/connector-slack, bin/connector-jira
+# Binaries output to bin/gateway, bin/approvals, bin/connector-slack, bin/connector-jira, bin/connector-template, bin/archiver
 ```
 
 ---
