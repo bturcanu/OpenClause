@@ -4,10 +4,11 @@ package main
 import (
 	"context"
 	"crypto/subtle"
-	"fmt"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -43,13 +44,7 @@ func main() {
 	}
 
 	// ── Postgres ─────────────────────────────────────────────────────────
-	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		config.EnvOr("POSTGRES_USER", "openclause"),
-		config.EnvOr("POSTGRES_PASSWORD", "changeme"),
-		config.EnvOr("POSTGRES_HOST", "localhost"),
-		config.EnvOr("POSTGRES_PORT", "5432"),
-		config.EnvOr("POSTGRES_DB", "openclause"),
-	)
+	dbURL := buildPostgresDSN()
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
@@ -229,3 +224,15 @@ var pendingTmpl = template.Must(template.New("pending").Parse(`<!DOCTYPE html>
   {{end}}
 </body>
 </html>`))
+
+func buildPostgresDSN() string {
+	sslmode := config.EnvOr("POSTGRES_SSLMODE", "disable")
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(config.EnvOr("POSTGRES_USER", "openclause"), config.EnvOr("POSTGRES_PASSWORD", "changeme")),
+		Host:     net.JoinHostPort(config.EnvOr("POSTGRES_HOST", "localhost"), config.EnvOr("POSTGRES_PORT", "5432")),
+		Path:     config.EnvOr("POSTGRES_DB", "openclause"),
+		RawQuery: "sslmode=" + url.QueryEscape(sslmode),
+	}
+	return u.String()
+}
