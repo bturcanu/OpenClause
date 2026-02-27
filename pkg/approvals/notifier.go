@@ -174,7 +174,7 @@ func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox
 		return err
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
@@ -227,7 +227,7 @@ func (d *Dispatcher) deliverSlack(ctx context.Context, item NotificationOutbox) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return fmt.Errorf("slack connector status=%d", resp.StatusCode)
 	}
 	var execResp connectors.ExecResponse
