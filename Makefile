@@ -81,6 +81,8 @@ build:
 	CGO_ENABLED=0 go build -o bin/approvals ./cmd/approvals
 	CGO_ENABLED=0 go build -o bin/connector-slack ./cmd/connector-slack
 	CGO_ENABLED=0 go build -o bin/connector-jira ./cmd/connector-jira
+	CGO_ENABLED=0 go build -o bin/connector-template ./cmd/connector-template
+	CGO_ENABLED=0 go build -o bin/archiver ./cmd/archiver
 	@echo "✓ Binaries in bin/"
 
 ## Build Docker images

@@ -247,3 +247,18 @@ test_requirements_on_approve if {
 	}
 	result.approval_scope == "single_use"
 }
+
+test_notify_routes_on_approve if {
+	routes := main.notify with input as {
+		"toolcall": {
+			"tenant_id": "tenant1",
+			"agent_id": "agent-1",
+			"tool": "jira",
+			"action": "issue.delete",
+			"risk_score": 8,
+			"idempotency_key": "key-n1"
+		},
+		"environment": {}
+	}
+	count(routes) >= 1
+}

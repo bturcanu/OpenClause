@@ -33,6 +33,7 @@ import (
 const (
 	maxBodyBytes     = 1 << 20 // 1 MB
 	maxRateLimiters  = 10_000
+	executePollCount = 5
 )
 
 func main() {
@@ -81,6 +82,7 @@ func main() {
 	connectorReg := connectors.NewRegistry()
 	connectorReg.Register("slack", config.EnvOr("CONNECTOR_SLACK_URL", "http://localhost:8082"))
 	connectorReg.Register("jira", config.EnvOr("CONNECTOR_JIRA_URL", "http://localhost:8083"))
+	connectorReg.SetInternalToken(os.Getenv("INTERNAL_AUTH_TOKEN"))
 
 	gw := &Gateway{
 		log:            log,
@@ -119,6 +121,7 @@ func main() {
 
 	r.Post("/v1/toolcalls", gw.HandleToolCall)
 	r.Get("/v1/toolcalls/{event_id}", gw.HandleGetEvent)
+	r.Post("/v1/toolcalls/{event_id}/execute", gw.HandleExecuteToolCall)
 
 	// ── Server ───────────────────────────────────────────────────────────
 	addr := config.EnvOr("GATEWAY_ADDR", ":8080")
@@ -154,14 +157,35 @@ func main() {
 
 type Gateway struct {
 	log            *slog.Logger
-	evidence       *evidence.Logger
-	policy         *policy.Client
-	connectors     *connectors.Registry
-	approvals      *approvals.Store
+	evidence       gatewayEvidence
+	policy         gatewayPolicy
+	connectors     gatewayConnectors
+	approvals      gatewayApprovals
 	approvalsURL   string
 	rateLimiters   map[string]*rate.Limiter
 	rlMu           sync.Mutex
 	perTenantLimit int
+}
+
+type gatewayEvidence interface {
+	RecordEvent(context.Context, *types.ToolCallEnvelope) error
+	CheckIdempotency(context.Context, string, string) (*types.ToolCallResponse, error)
+	GetEvent(context.Context, string) (*types.ToolCallEnvelope, error)
+	GetExecutionByParentEvent(context.Context, string) (*types.ToolCallResponse, error)
+	LinkExecutionToParent(context.Context, string, string, string) (bool, error)
+}
+
+type gatewayPolicy interface {
+	Evaluate(context.Context, types.PolicyInput) (*types.PolicyResult, error)
+}
+
+type gatewayConnectors interface {
+	Exec(context.Context, connectors.ExecRequest) (*connectors.ExecResponse, error)
+}
+
+type gatewayApprovals interface {
+	CreateRequest(context.Context, approvals.CreateApprovalInput) (*approvals.ApprovalRequest, error)
+	FindAndConsumeGrant(context.Context, string, string, string, string, string) (*approvals.ApprovalGrant, error)
 }
 
 // HandleToolCall is POST /v1/toolcalls
@@ -195,6 +219,8 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 	prior, err := gw.evidence.CheckIdempotency(ctx, req.TenantID, req.IdempotencyKey)
 	if err != nil {
 		gw.log.ErrorContext(ctx, "idempotency check failed", "error", err)
+		types.ErrInternal("failed to validate idempotency").WriteJSON(w)
+		return
 	}
 	if prior != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -254,14 +280,19 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
 		}
 		approvalReq, err := gw.approvals.CreateRequest(ctx, approvals.CreateApprovalInput{
-			EventID:   eventID,
-			TenantID:  req.TenantID,
-			AgentID:   req.AgentID,
-			Tool:      req.Tool,
-			Action:    req.Action,
-			Resource:  req.Resource,
-			RiskScore: req.RiskScore,
-			Reason:    policyResult.Reason,
+			EventID:         eventID,
+			TenantID:        req.TenantID,
+			AgentID:         req.AgentID,
+			Tool:            req.Tool,
+			Action:          req.Action,
+			Resource:        req.Resource,
+			RiskScore:       req.RiskScore,
+			RiskFactors:     req.RiskFactors,
+			Reason:          policyResult.Reason,
+			TraceID:         req.TraceID,
+			ApproverGroup:   policyResult.ApproverGroup,
+			Notify:          policyResult.Notify,
+			ApprovalBaseURL: gw.approvalsURL,
 		})
 		if err != nil {
 			gw.log.ErrorContext(ctx, "create approval failed", "error", err)
@@ -270,32 +301,7 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case types.DecisionAllow:
-		start := time.Now()
-		execResp, err := gw.connectors.Exec(ctx, connectors.ExecRequest{
-			EventID:  eventID,
-			TenantID: req.TenantID,
-			AgentID:  req.AgentID,
-			Tool:     req.Tool,
-			Action:   req.Action,
-			Params:   req.Params,
-			Resource: req.Resource,
-		})
-		duration := time.Since(start)
-
-		if err != nil {
-			env.ExecutionResult = &types.ExecutionResult{
-				Status:     "error",
-				Error:      err.Error(),
-				DurationMS: duration.Milliseconds(),
-			}
-		} else {
-			env.ExecutionResult = &types.ExecutionResult{
-				Status:     execResp.Status,
-				OutputJSON: execResp.OutputJSON,
-				Error:      execResp.Error,
-				DurationMS: duration.Milliseconds(),
-			}
-		}
+		env.ExecutionResult = gw.executeConnector(ctx, eventID, req)
 		resp.Result = env.ExecutionResult
 
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
@@ -316,6 +322,150 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		gw.log.ErrorContext(ctx, "response encode failed", "error", err)
+	}
+}
+
+// HandleExecuteToolCall is POST /v1/toolcalls/{event_id}/execute.
+// It resumes an approval-gated request once a grant exists and records execution
+// as a new append-only evidence event linked to the parent event.
+func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	parentEventID := chi.URLParam(r, "event_id")
+
+	parent, err := gw.evidence.GetEvent(ctx, parentEventID)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "get parent event failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("failed to retrieve event").WriteJSON(w)
+		return
+	}
+	if parent == nil {
+		types.ErrNotFound("event not found").WriteJSON(w)
+		return
+	}
+	if parent.Decision != types.DecisionApprove {
+		types.ErrConflict("event does not require approval execution").WriteJSON(w)
+		return
+	}
+
+	// Idempotent replay by parent event ID.
+	existing, err := gw.evidence.GetExecutionByParentEvent(ctx, parentEventID)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "get linked execution failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("failed to retrieve prior execution").WriteJSON(w)
+		return
+	}
+	if existing != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(existing); err != nil {
+			gw.log.ErrorContext(ctx, "response encode failed", "error", err)
+		}
+		return
+	}
+
+	grant, err := gw.approvals.FindAndConsumeGrant(
+		ctx,
+		parent.Request.TenantID,
+		parent.Request.AgentID,
+		parent.Request.Tool,
+		parent.Request.Action,
+		parent.Request.Resource,
+	)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "grant consume failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("failed to consume approval grant").WriteJSON(w)
+		return
+	}
+	if grant == nil {
+		// Handle race with an in-flight executor: brief replay polling before
+		// returning awaiting-approval.
+		for range executePollCount {
+			time.Sleep(50 * time.Millisecond)
+			existing, err := gw.evidence.GetExecutionByParentEvent(ctx, parentEventID)
+			if err != nil {
+				gw.log.ErrorContext(ctx, "poll linked execution failed", "event_id", parentEventID, "error", err)
+				types.ErrInternal("failed to retrieve prior execution").WriteJSON(w)
+				return
+			}
+			if existing != nil {
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(existing); err != nil {
+					gw.log.ErrorContext(ctx, "response encode failed", "error", err)
+				}
+				return
+			}
+		}
+		types.ErrConflict("awaiting approval").WriteJSON(w)
+		return
+	}
+
+	execEventID := uuid.NewString()
+	payloadJSON, err := json.Marshal(parent.Request)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "payload marshal failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("request processing failed").WriteJSON(w)
+		return
+	}
+
+	env := &types.ToolCallEnvelope{
+		EventID:     execEventID,
+		Request:     parent.Request,
+		PayloadJSON: payloadJSON,
+		ReceivedAt:  time.Now().UTC(),
+		Decision:    types.DecisionAllow,
+		PolicyResult: &types.PolicyResult{
+			Decision: types.DecisionAllow,
+			Reason:   "approved execution",
+		},
+		ExecutionResult: gw.executeConnector(ctx, execEventID, parent.Request),
+	}
+	// Avoid conflicting with original request idempotency uniqueness constraint.
+	env.Request.IdempotencyKey = "exec:" + parentEventID
+	payloadJSON, err = json.Marshal(env.Request)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "execution payload marshal failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("request processing failed").WriteJSON(w)
+		return
+	}
+	env.PayloadJSON = payloadJSON
+
+	if err := gw.evidence.RecordEvent(ctx, env); err != nil {
+		gw.log.ErrorContext(ctx, "execution evidence record failed", "event_id", execEventID, "error", err)
+		types.ErrInternal("failed to record execution evidence").WriteJSON(w)
+		return
+	}
+
+	linked, err := gw.evidence.LinkExecutionToParent(ctx, parentEventID, execEventID, grant.ID)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "link execution failed", "parent_event_id", parentEventID, "execution_event_id", execEventID, "error", err)
+		types.ErrInternal("failed to finalize execution").WriteJSON(w)
+		return
+	}
+	if !linked {
+		// Another concurrent request linked first; return canonical replay response.
+		prior, err := gw.evidence.GetExecutionByParentEvent(ctx, parentEventID)
+		if err != nil {
+			gw.log.ErrorContext(ctx, "get concurrent linked execution failed", "event_id", parentEventID, "error", err)
+			types.ErrInternal("failed to retrieve prior execution").WriteJSON(w)
+			return
+		}
+		if prior != nil {
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(prior); err != nil {
+				gw.log.ErrorContext(ctx, "response encode failed", "error", err)
+			}
+			return
+		}
+	}
+
+	resp := types.ToolCallResponse{
+		EventID:  execEventID,
+		Decision: types.DecisionAllow,
+		Reason:   "approved execution",
+		Result:   env.ExecutionResult,
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		gw.log.ErrorContext(ctx, "response encode failed", "error", err)
@@ -363,4 +513,32 @@ func (gw *Gateway) allowRate(tenantID string) bool {
 		gw.rateLimiters[tenantID] = lim
 	}
 	return lim.Allow()
+}
+
+func (gw *Gateway) executeConnector(ctx context.Context, eventID string, req types.ToolCallRequest) *types.ExecutionResult {
+	start := time.Now()
+	execResp, err := gw.connectors.Exec(ctx, connectors.ExecRequest{
+		EventID:  eventID,
+		TenantID: req.TenantID,
+		AgentID:  req.AgentID,
+		Tool:     req.Tool,
+		Action:   req.Action,
+		Params:   req.Params,
+		Resource: req.Resource,
+	})
+	duration := time.Since(start)
+
+	if err != nil {
+		return &types.ExecutionResult{
+			Status:     "error",
+			Error:      err.Error(),
+			DurationMS: duration.Milliseconds(),
+		}
+	}
+	return &types.ExecutionResult{
+		Status:     execResp.Status,
+		OutputJSON: execResp.OutputJSON,
+		Error:      execResp.Error,
+		DurationMS: duration.Milliseconds(),
+	}
 }

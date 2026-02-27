@@ -162,6 +162,15 @@ type PolicyResult struct {
 	Reason        string            `json:"reason"`
 	Requirements  map[string]string `json:"requirements,omitempty"`
 	RiskOverrides map[string]int    `json:"risk_overrides,omitempty"`
+	Notify        []PolicyNotify    `json:"notify,omitempty"`
+	ApproverGroup string            `json:"approver_group,omitempty"`
+}
+
+type PolicyNotify struct {
+	Kind      string `json:"kind"`
+	URL       string `json:"url,omitempty"`
+	SecretRef string `json:"secret_ref,omitempty"`
+	Channel   string `json:"channel,omitempty"`
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

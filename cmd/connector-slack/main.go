@@ -123,17 +123,147 @@ type slackMsgParams struct {
 	Text    string `json:"text"`
 }
 
+type slackApprovalMessageParams struct {
+	Channel           string   `json:"channel"`
+	Tool              string   `json:"tool"`
+	Action            string   `json:"action"`
+	Resource          string   `json:"resource"`
+	RiskScore         int      `json:"risk_score"`
+	Reason            string   `json:"reason"`
+	ApprovalURL       string   `json:"approval_url"`
+	ApprovalRequestID string   `json:"approval_request_id"`
+	EventID           string   `json:"event_id"`
+	TenantID          string   `json:"tenant_id"`
+	RiskFactors       []string `json:"risk_factors,omitempty"`
+}
+
 func (s *SlackConnector) Exec(ctx context.Context, req connectors.ExecRequest) connectors.ExecResponse {
 	action := req.Tool + "." + req.Action
 	switch action {
 	case "slack.msg.post":
 		return s.postMessage(ctx, req)
+	case "slack.channel.list":
+		return s.listChannels(ctx)
+	case "slack.approval.request":
+		return s.postApprovalMessage(ctx, req)
 	default:
 		return connectors.ExecResponse{
 			Status: "error",
 			Error:  fmt.Sprintf("unsupported action: %s", action),
 		}
 	}
+}
+
+func (s *SlackConnector) listChannels(ctx context.Context) connectors.ExecResponse {
+	if s.mock {
+		output, _ := json.Marshal(map[string]any{
+			"ok": true,
+			"channels": []map[string]any{
+				{"id": "C01GENERAL", "name": "general"},
+				{"id": "C02SECURITY", "name": "security-approvals"},
+			},
+			"mock": true,
+		})
+		return connectors.ExecResponse{Status: "success", OutputJSON: output}
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", "https://slack.com/api/conversations.list?limit=200", nil)
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: err.Error()}
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxExternalResponseBytes))
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: "read response: " + err.Error()}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return connectors.ExecResponse{Status: "error", Error: string(respBody)}
+	}
+	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
+}
+
+func (s *SlackConnector) postApprovalMessage(ctx context.Context, req connectors.ExecRequest) connectors.ExecResponse {
+	var params slackApprovalMessageParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return connectors.ExecResponse{Status: "error", Error: "invalid params: " + err.Error()}
+	}
+	if params.Channel == "" || params.ApprovalRequestID == "" || params.EventID == "" || params.TenantID == "" {
+		return connectors.ExecResponse{Status: "error", Error: "channel, approval_request_id, event_id, tenant_id are required"}
+	}
+	valueApprove := fmt.Sprintf("approve|%s|%s|%s", params.ApprovalRequestID, params.EventID, params.TenantID)
+	valueDeny := fmt.Sprintf("deny|%s|%s|%s", params.ApprovalRequestID, params.EventID, params.TenantID)
+	blocks := []map[string]any{
+		{
+			"type": "section",
+			"text": map[string]any{
+				"type": "mrkdwn",
+				"text": fmt.Sprintf("*Approval needed*\n`%s.%s` on `%s`\nRisk: *%d* — %s", params.Tool, params.Action, params.Resource, params.RiskScore, params.Reason),
+			},
+		},
+		{
+			"type": "actions",
+			"elements": []map[string]any{
+				{
+					"type":  "button",
+					"text":  map[string]any{"type": "plain_text", "text": "Approve"},
+					"style": "primary",
+					"value": valueApprove,
+				},
+				{
+					"type":  "button",
+					"text":  map[string]any{"type": "plain_text", "text": "Deny"},
+					"style": "danger",
+					"value": valueDeny,
+				},
+				{
+					"type": "button",
+					"text": map[string]any{"type": "plain_text", "text": "Open"},
+					"url":  params.ApprovalURL,
+				},
+			},
+		},
+	}
+
+	if s.mock {
+		output, _ := json.Marshal(map[string]any{
+			"ok":       true,
+			"channel":  params.Channel,
+			"ts":       "1700000000.000001",
+			"message":  map[string]any{"blocks": blocks},
+			"actionId": valueApprove,
+			"mock":     true,
+		})
+		return connectors.ExecResponse{Status: "success", OutputJSON: output}
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"channel": params.Channel,
+		"text":    "Approval required",
+		"blocks":  blocks,
+	})
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://slack.com/api/chat.postMessage", bytes.NewReader(body))
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: err.Error()}
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxExternalResponseBytes))
+	if err != nil {
+		return connectors.ExecResponse{Status: "error", Error: "read response: " + err.Error()}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return connectors.ExecResponse{Status: "error", Error: string(respBody)}
+	}
+	return connectors.ExecResponse{Status: "success", OutputJSON: respBody}
 }
 
 func (s *SlackConnector) postMessage(ctx context.Context, req connectors.ExecRequest) connectors.ExecResponse {

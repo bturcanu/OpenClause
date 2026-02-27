@@ -95,6 +95,49 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIError"
 
+  /v1/toolcalls/{event_id}/execute:
+    post:
+      operationId: executeApprovedToolCall
+      summary: Execute a previously approved tool-call event
+      tags: [Gateway]
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Execution completed or idempotent replay returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "404":
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "409":
+          description: Event cannot be executed yet or does not require approval execution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
   # ── Approvals ────────────────────────────────────────────────────────────
   /v1/approvals/requests:
     post:
@@ -135,6 +178,10 @@ paths:
                 $ref: "#/components/schemas/ApprovalRequest"
         "404":
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
 
   /v1/approvals/requests/{id}/approve:
     post:
@@ -181,6 +228,78 @@ paths:
       responses:
         "200":
           description: Request denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /v1/approvals/pending:
+    get:
+      operationId: listPendingApprovals
+      summary: List pending approval requests for a tenant
+      tags: [Approvals]
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Pending approval requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApprovalRequest"
+        "400":
+          description: Missing or invalid tenant query parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /v1/integrations/slack/interactions:
+    post:
+      operationId: slackInteractions
+      summary: Receive Slack interactive approval actions
+      tags: [Approvals]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: string
+      responses:
+        "200":
+          description: Slack message update payload
+        "401":
+          description: Invalid Slack signature
+        "403":
+          description: Approver not allowed for tenant
 
   # ── Health ───────────────────────────────────────────────────────────────
   /healthz:
@@ -326,6 +445,25 @@ components:
           type: object
           additionalProperties:
             type: string
+        approver_group:
+          type: string
+        notify:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyNotify"
+
+    PolicyNotify:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [webhook, slack]
+        url:
+          type: string
+        secret_ref:
+          type: string
+        channel:
+          type: string
 
     ExecutionResult:
       type: object
@@ -359,8 +497,20 @@ components:
           type: string
         risk_score:
           type: integer
+        risk_factors:
+          type: array
+          items:
+            type: string
         reason:
           type: string
+        trace_id:
+          type: string
+        approver_group:
+          type: string
+        notify:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyNotify"
 
     ApprovalRequest:
       type: object
@@ -453,6 +603,12 @@ components:
         tenant_id:
           type: string
         agent_id:
+          type: string
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
           type: string
 
     # ── Errors ───────────────────────────────────────────────────────────

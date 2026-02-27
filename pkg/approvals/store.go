@@ -2,8 +2,10 @@ package approvals
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,7 +49,13 @@ func (s *Store) CreateRequest(ctx context.Context, in CreateApprovalInput) (*App
 		ExpiresAt: now.Add(24 * time.Hour),
 	}
 
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("approvals.CreateRequest begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO approval_requests (
 			id, event_id, tenant_id, agent_id, tool, action, resource,
 			risk_score, reason, status, created_at, expires_at
@@ -58,7 +66,43 @@ func (s *Store) CreateRequest(ctx context.Context, in CreateApprovalInput) (*App
 		req.CreatedAt, req.ExpiresAt,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("approvals.CreateRequest: %w", err)
+		return nil, fmt.Errorf("approvals.CreateRequest insert request: %w", err)
+	}
+
+	approvalURL := buildApprovalURL(in.ApprovalBaseURL, req.ID)
+	riskFactorsJSON, err := json.Marshal(in.RiskFactors)
+	if err != nil {
+		return nil, fmt.Errorf("approvals.CreateRequest marshal risk factors: %w", err)
+	}
+
+	for _, n := range in.Notify {
+		if n.Kind == "" {
+			continue
+		}
+		outboxID := uuid.NewString()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO approval_notification_outbox (
+				id, approval_request_id, tenant_id, event_id, trace_id, tool, action, resource,
+				risk_score, risk_factors, reason, approver_group, approval_url,
+				notify_kind, notify_url, secret_ref, slack_channel,
+				status, attempt_count, next_attempt_at, created_at, updated_at
+			) VALUES (
+				$1,$2,$3,$4,$5,$6,$7,$8,
+				$9,$10,$11,$12,$13,
+				$14,$15,$16,$17,
+				'pending',0,NOW(),NOW(),NOW()
+			)`,
+			outboxID, req.ID, req.TenantID, req.EventID, in.TraceID, req.Tool, req.Action, req.Resource,
+			req.RiskScore, riskFactorsJSON, req.Reason, in.ApproverGroup, approvalURL,
+			n.Kind, n.URL, n.SecretRef, n.Channel,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("approvals.CreateRequest insert outbox: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("approvals.CreateRequest commit: %w", err)
 	}
 	return req, nil
 }
@@ -320,4 +364,105 @@ func matchResource(pattern, resource string) bool {
 		return false
 	}
 	return matched
+}
+
+// ClaimDueNotifications claims pending due rows for delivery using row-level
+// locking so concurrent workers cannot deliver the same ID twice.
+func (s *Store) ClaimDueNotifications(ctx context.Context, limit int) ([]NotificationOutbox, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		WITH due AS (
+			SELECT id
+			FROM approval_notification_outbox
+			WHERE status = 'pending'
+			  AND next_attempt_at <= NOW()
+			ORDER BY created_at ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT $1
+		)
+		UPDATE approval_notification_outbox o
+		SET status = 'processing',
+		    attempt_count = o.attempt_count + 1,
+		    updated_at = NOW()
+		FROM due
+		WHERE o.id = due.id
+		RETURNING o.id, o.approval_request_id, o.tenant_id, o.event_id, o.trace_id, o.tool, o.action, o.resource,
+		          o.risk_score, o.risk_factors, o.reason, o.approver_group, o.approval_url,
+		          o.notify_kind, o.notify_url, o.secret_ref, o.slack_channel,
+		          o.attempt_count, o.status, o.next_attempt_at, o.created_at`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("approvals.ClaimDueNotifications: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]NotificationOutbox, 0)
+	for rows.Next() {
+		var n NotificationOutbox
+		var riskFactors []byte
+		if err := rows.Scan(
+			&n.ID, &n.ApprovalRequestID, &n.TenantID, &n.EventID, &n.TraceID,
+			&n.Tool, &n.Action, &n.Resource, &n.RiskScore, &riskFactors,
+			&n.Reason, &n.ApproverGroup, &n.ApprovalURL,
+			&n.NotifyKind, &n.NotifyURL, &n.SecretRef, &n.SlackChannel,
+			&n.Attempts, &n.Status, &n.NextAttemptAt, &n.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("approvals.ClaimDueNotifications scan: %w", err)
+		}
+		if len(riskFactors) > 0 {
+			if err := json.Unmarshal(riskFactors, &n.RiskFactors); err != nil {
+				return nil, fmt.Errorf("approvals.ClaimDueNotifications unmarshal risk factors: %w", err)
+			}
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("approvals.ClaimDueNotifications iteration: %w", err)
+	}
+	return out, nil
+}
+
+// MarkNotificationSent marks an outbox record as delivered.
+func (s *Store) MarkNotificationSent(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE approval_notification_outbox
+		SET status = 'sent', sent_at = NOW(), updated_at = NOW(), last_error = ''
+		WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("approvals.MarkNotificationSent: %w", err)
+	}
+	return nil
+}
+
+// MarkNotificationRetry schedules another delivery attempt with backoff.
+func (s *Store) MarkNotificationRetry(ctx context.Context, id string, attempts int, nextAttemptAt time.Time, lastErr string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE approval_notification_outbox
+		SET status = 'pending', attempt_count = $2, next_attempt_at = $3, last_error = $4, updated_at = NOW()
+		WHERE id = $1`, id, attempts, nextAttemptAt, lastErr)
+	if err != nil {
+		return fmt.Errorf("approvals.MarkNotificationRetry: %w", err)
+	}
+	return nil
+}
+
+// MarkNotificationFailed marks an outbox row terminally failed.
+func (s *Store) MarkNotificationFailed(ctx context.Context, id string, lastErr string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE approval_notification_outbox
+		SET status = 'failed', last_error = $2, updated_at = NOW()
+		WHERE id = $1`, id, lastErr)
+	if err != nil {
+		return fmt.Errorf("approvals.MarkNotificationFailed: %w", err)
+	}
+	return nil
+}
+
+func buildApprovalURL(baseURL, requestID string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if base == "" {
+		base = "http://localhost:8081"
+	}
+	return fmt.Sprintf("%s/v1/approvals/requests/%s", base, requestID)
 }

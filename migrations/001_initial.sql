@@ -28,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
 -- partitioning on received_at.
 
 CREATE TABLE IF NOT EXISTS tool_events (
+    event_seq        BIGSERIAL UNIQUE,
     event_id        TEXT PRIMARY KEY,
     tenant_id       TEXT NOT NULL REFERENCES tenants(id),
     agent_id        TEXT NOT NULL,
@@ -80,6 +81,18 @@ CREATE TABLE IF NOT EXISTS tool_results (
 
 CREATE INDEX IF NOT EXISTS idx_tool_results_event ON tool_results(event_id);
 
+-- ── Tool execution links (approval resume endpoint) ──────────────────────────
+
+CREATE TABLE IF NOT EXISTS tool_executions (
+    parent_event_id      TEXT PRIMARY KEY REFERENCES tool_events(event_id),
+    execution_event_id   TEXT NOT NULL UNIQUE REFERENCES tool_events(event_id),
+    consumed_grant_id    TEXT,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_executions_execution
+    ON tool_executions(execution_event_id);
+
 -- ── Approval requests ───────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS approval_requests (
@@ -126,6 +139,48 @@ CREATE TABLE IF NOT EXISTS approval_grants (
 
 CREATE INDEX IF NOT EXISTS idx_approval_grants_tenant
     ON approval_grants(tenant_id, uses_left, expires_at);
+
+-- ── Notification outbox (reliable webhook/slack fanout) ─────────────────────
+
+CREATE TABLE IF NOT EXISTS approval_notification_outbox (
+    id                    TEXT PRIMARY KEY,
+    approval_request_id   TEXT NOT NULL REFERENCES approval_requests(id),
+    tenant_id             TEXT NOT NULL REFERENCES tenants(id),
+    event_id              TEXT NOT NULL REFERENCES tool_events(event_id),
+    trace_id              TEXT DEFAULT '',
+    tool                  TEXT NOT NULL,
+    action                TEXT NOT NULL,
+    resource              TEXT DEFAULT '',
+    risk_score            INTEGER NOT NULL DEFAULT 0,
+    risk_factors          JSONB DEFAULT '[]',
+    reason                TEXT DEFAULT '',
+    approver_group        TEXT DEFAULT '',
+    approval_url          TEXT NOT NULL,
+    notify_kind           TEXT NOT NULL,          -- webhook | slack
+    notify_url            TEXT DEFAULT '',
+    secret_ref            TEXT DEFAULT '',
+    slack_channel         TEXT DEFAULT '',
+    status                TEXT NOT NULL DEFAULT 'pending', -- pending|processing|sent|failed
+    attempt_count         INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_error            TEXT DEFAULT '',
+    sent_at               TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_approval_notification_outbox_due
+    ON approval_notification_outbox(status, next_attempt_at);
+
+-- ── Evidence archival checkpoints ───────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS evidence_archive_checkpoints (
+    tenant_id         TEXT PRIMARY KEY REFERENCES tenants(id),
+    last_archived_at  TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+    last_hash         TEXT NOT NULL DEFAULT '',
+    last_event_seq    BIGINT NOT NULL DEFAULT 0,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 -- ── Policy versions (track bundle deployments) ─────────────────────────────
 

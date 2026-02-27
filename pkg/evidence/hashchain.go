@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"time"
 )
 
 // ChainHash computes the next hash in the per-tenant chain.
@@ -31,8 +32,16 @@ func writeField(h interface{ Write([]byte) (int, error) }, data []byte) {
 
 // VerifyChain walks a sequence of events and verifies each hash link.
 func VerifyChain(events []ChainEvent) error {
-	prev := ""
+	return VerifyChainFrom("", events)
+}
+
+// VerifyChainFrom verifies a chain window starting from a known previous hash.
+func VerifyChainFrom(prev string, events []ChainEvent) error {
 	for i, ev := range events {
+		if ev.PrevHash != prev {
+			return fmt.Errorf("chain broken at index %d (event %s): expected prev_hash %s, got %s",
+				i, ev.EventID, prev, ev.PrevHash)
+		}
 		expected := ChainHash(prev, ev.CanonPayload, ev.CanonResult)
 		if ev.Hash != expected {
 			return fmt.Errorf("chain broken at index %d (event %s): expected %s, got %s",
@@ -45,8 +54,11 @@ func VerifyChain(events []ChainEvent) error {
 
 // ChainEvent is the minimal shape needed for verification.
 type ChainEvent struct {
+	EventSeq     int64
 	EventID      string
+	PrevHash     string
 	Hash         string
 	CanonPayload []byte
 	CanonResult  []byte
+	ReceivedAt   time.Time
 }
