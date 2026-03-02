@@ -50,7 +50,6 @@ type APIKey struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	RawKey     string     `json:"raw_key,omitempty"`
 }
 
 type APIKeyCreateResult struct {
@@ -823,6 +822,40 @@ func (s *Store) ListEvents(ctx context.Context, tenantID, agentID, tool, action,
 	return out, nil
 }
 
+// ListEventsInRange returns events for a tenant within a time range (for exports/bundles).
+func (s *Store) ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]EventListItem, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 10000
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT event_id, tenant_id, agent_id, tool, action,
+		       COALESCE(payload_json->>'resource', ''), risk_score,
+		       decision, session_id, trace_id, received_at
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2 AND received_at <= $3
+		ORDER BY received_at ASC
+		LIMIT $4`, tenantID, since, until, limit)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListEventsInRange: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]EventListItem, 0)
+	for rows.Next() {
+		var e EventListItem
+		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
+			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
+			&e.ReceivedAt); err != nil {
+			return nil, fmt.Errorf("console.ListEventsInRange scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListEventsInRange iteration: %w", err)
+	}
+	return out, nil
+}
+
 func (s *Store) GetEventDetail(ctx context.Context, eventID string) (*EventDetail, error) {
 	var d EventDetail
 	var policyResult []byte
@@ -928,19 +961,40 @@ func (s *Store) ListSessions(ctx context.Context, tenantID string, limit, offset
 	limit = clampLimit(limit)
 	offset = clampOffset(offset)
 
-	rows, err := s.pool.Query(ctx, `
-		SELECT s.id, s.tenant_id, s.agent_id, s.started_at, s.ended_at,
-		       COALESCE(ec.cnt, 0)
-		FROM sessions s
-		LEFT JOIN (
-			SELECT session_id, COUNT(*) AS cnt
-			FROM tool_events
-			WHERE tenant_id = $1 AND session_id != ''
-			GROUP BY session_id
-		) ec ON ec.session_id = s.id
-		WHERE s.tenant_id = $1
-		ORDER BY s.started_at DESC
-		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	var query string
+	var args []any
+	if tenantID != "" {
+		query = `
+			SELECT s.id, s.tenant_id, s.agent_id, s.started_at, s.ended_at,
+			       COALESCE(ec.cnt, 0)
+			FROM sessions s
+			LEFT JOIN (
+				SELECT session_id, COUNT(*) AS cnt
+				FROM tool_events
+				WHERE tenant_id = $1 AND session_id != ''
+				GROUP BY session_id
+			) ec ON ec.session_id = s.id
+			WHERE s.tenant_id = $1
+			ORDER BY s.started_at DESC
+			LIMIT $2 OFFSET $3`
+		args = []any{tenantID, limit, offset}
+	} else {
+		query = `
+			SELECT s.id, s.tenant_id, s.agent_id, s.started_at, s.ended_at,
+			       COALESCE(ec.cnt, 0)
+			FROM sessions s
+			LEFT JOIN (
+				SELECT session_id, COUNT(*) AS cnt
+				FROM tool_events
+				WHERE session_id != ''
+				GROUP BY session_id
+			) ec ON ec.session_id = s.id
+			ORDER BY s.started_at DESC
+			LIMIT $1 OFFSET $2`
+		args = []any{limit, offset}
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("console.ListSessions: %w", err)
 	}
@@ -1102,11 +1156,17 @@ func (s *Store) CreateAlertRule(ctx context.Context, rule AlertRule) (*AlertRule
 }
 
 func (s *Store) ListAlertRules(ctx context.Context, tenantID string) ([]AlertRule, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled, created_at
-		FROM alert_rules
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC`, tenantID)
+	var query string
+	var args []any
+	if tenantID != "" {
+		query = `SELECT id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled, created_at
+			FROM alert_rules WHERE tenant_id = $1 ORDER BY created_at DESC`
+		args = []any{tenantID}
+	} else {
+		query = `SELECT id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled, created_at
+			FROM alert_rules ORDER BY created_at DESC LIMIT 200`
+	}
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("console.ListAlertRules: %w", err)
 	}
@@ -1168,12 +1228,18 @@ func (s *Store) ListAlertEvents(ctx context.Context, tenantID string, limit, off
 	limit = clampLimit(limit)
 	offset = clampOffset(offset)
 
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, rule_id, tenant_id, severity, message, details, notified, created_at
-		FROM alert_events
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	var query string
+	var args []any
+	if tenantID != "" {
+		query = `SELECT id, rule_id, tenant_id, severity, message, details, notified, created_at
+			FROM alert_events WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+		args = []any{tenantID, limit, offset}
+	} else {
+		query = `SELECT id, rule_id, tenant_id, severity, message, details, notified, created_at
+			FROM alert_events ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+		args = []any{limit, offset}
+	}
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("console.ListAlertEvents: %w", err)
 	}

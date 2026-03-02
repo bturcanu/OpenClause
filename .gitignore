@@ -6,3 +6,8 @@ bin/
 *.so
 *.dylib
 __debug_bin*
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.git/COMMIT_MSG_NEW.txt

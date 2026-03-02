@@ -22,6 +22,7 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/console"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -412,6 +413,12 @@ func (api *ConsoleAPI) handleListTenants(w http.ResponseWriter, r *http.Request)
 
 func (api *ConsoleAPI) handleGetTenant(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "tenant_id")
+	claims := claimsFromCtx(r.Context())
+	scope := tenantScope(claims)
+	if scope != "" && scope != id {
+		writeError(w, http.StatusNotFound, "tenant not found")
+		return
+	}
 	t, err := api.store.GetTenant(r.Context(), id)
 	if err != nil {
 		api.log.Error("get tenant failed", "error", err)
@@ -597,7 +604,15 @@ func (api *ConsoleAPI) handleApproveRequest(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	approver := claims.Email
 
-	_, err := api.store.Pool().Exec(ctx, `
+	tx, err := api.store.Pool().Begin(ctx)
+	if err != nil {
+		api.log.Error("begin tx failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to approve")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	res, err := tx.Exec(ctx, `
 		UPDATE approval_requests SET status = 'approved', updated_at = NOW()
 		WHERE id = $1 AND status = 'pending' AND expires_at > NOW()`, id)
 	if err != nil {
@@ -605,10 +620,13 @@ func (api *ConsoleAPI) handleApproveRequest(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to approve")
 		return
 	}
+	if res.RowsAffected() == 0 {
+		writeError(w, http.StatusConflict, "request not found, already resolved, or expired")
+		return
+	}
 
-	// Get request details for creating the grant
 	var tenantID, agentID, tool, action, resource string
-	row := api.store.Pool().QueryRow(ctx, `
+	row := tx.QueryRow(ctx, `
 		SELECT tenant_id, agent_id, tool, action, resource FROM approval_requests WHERE id = $1`, id)
 	if err := row.Scan(&tenantID, &agentID, &tool, &action, &resource); err != nil {
 		api.log.Error("fetch approval details failed", "error", err)
@@ -616,21 +634,26 @@ func (api *ConsoleAPI) handleApproveRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	grantID := fmt.Sprintf("grant-%s", id[:8])
+	grantID := "grant-" + uuid.NewString()
 	now := time.Now().UTC()
-	_, err = api.store.Pool().Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO approval_grants (
 			id, request_id, tenant_id, approver,
 			scope_tool, scope_action, scope_resource_pattern, scope_tenant_id, scope_agent_id,
 			max_uses, uses_left, expires_at, granted_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		ON CONFLICT DO NOTHING`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		grantID, id, tenantID, approver,
 		tool, action, resource, tenantID, agentID,
 		1, 1, now.Add(time.Hour), now)
 	if err != nil {
 		api.log.Error("create grant failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create grant")
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		api.log.Error("commit failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to finalize approval")
 		return
 	}
 
@@ -735,7 +758,7 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 	since := parseSince(r, 7*24*time.Hour)
 	until := time.Now().UTC()
 
-	events, err := api.store.ListEvents(r.Context(), tenant, "", "", "", "", "", 1000, 0)
+	events, err := api.store.ListEventsInRange(r.Context(), tenant, since, until, 10000)
 	if err != nil {
 		api.log.Error("export bundle events failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to export bundle")
@@ -743,12 +766,12 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 	}
 
 	bundle := map[string]any{
-		"version":    "1.0",
-		"tenant_id":  tenant,
+		"version":     "1.0",
+		"tenant_id":   tenant,
 		"exported_at": time.Now().UTC().Format(time.RFC3339),
-		"since":      since.Format(time.RFC3339),
-		"until":      until.Format(time.RFC3339),
-		"events":     events,
+		"since":       since.Format(time.RFC3339),
+		"until":       until.Format(time.RFC3339),
+		"events":      events,
 		"event_count": len(events),
 	}
 

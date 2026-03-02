@@ -64,6 +64,9 @@ func (RulesBasedScorer) Score(_ context.Context, input RiskInput) (RiskOutput, e
 		factors = append(factors, "production_resource")
 	}
 
+	if score > 10 {
+		score = 10
+	}
 	return RiskOutput{
 		ComputedScore: score,
 		ClaimedScore:  input.ClaimedScore,

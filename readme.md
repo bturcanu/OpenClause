@@ -2,6 +2,8 @@
 
 A policy-driven governance layer for AI agent tool calls. Every action an agent takes — posting a Slack message, creating a Jira ticket, querying a database — flows through OpenClause, where it is validated, evaluated against OPA policy, optionally routed for human approval, executed via pluggable connectors, and recorded as tamper-evident audit evidence.
 
+**v0.2** adds a web admin console, self-service tenant onboarding, multi-language SDKs, a connector marketplace, policy simulation, compliance exports, and more.
+
 ---
 
 ## Table of Contents
@@ -10,7 +12,9 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 - [Architecture](#architecture)
 - [Services](#services)
 - [Quick Start](#quick-start)
+- [Web Console](#web-console)
 - [API Reference](#api-reference)
+- [SDKs](#sdks)
 - [Policy System](#policy-system)
 - [Approval Workflow](#approval-workflow)
 - [Evidence & Audit Trail](#evidence--audit-trail)
@@ -21,7 +25,6 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 - [Project Structure](#project-structure)
 - [Development](#development)
 - [Deployment](#deployment)
-- [Build Plan](#build-plan)
 
 ---
 
@@ -34,6 +37,8 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 - **Tamper-evident audit** — every request, decision, and execution result is recorded with a SHA-256 hash chain.
 - **Idempotent by design** — duplicate requests return the same result without re-executing.
 - **Pluggable connectors** — add new tool integrations by implementing a single interface.
+- **Web console** — manage tenants, agents, API keys, approvals, and policies from a browser.
+- **Multi-language SDKs** — Python, TypeScript, Java, and Go clients for agent integration.
 
 ---
 
@@ -42,23 +47,28 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 ```
 ┌─────────────┐      ┌──────────┐      ┌───────────────────┐
 │  AI Agent   │─────▶│ Gateway  │────▶│  OPA (Policy)     │
-│             │      │ :8080    │      │  :8181            │
+│  (SDK)      │      │ :8080    │      │  :8181            │
 └─────────────┘      └────┬─────┘      └───────────────────┘
                           │
                ┌──────────┼──────────┐
                │          │          │
                ▼          ▼          ▼
-        ┌──────────┐ ┌─────────┐ ┌─────────┐
-        │Approvals │ │Connector│ │Connector│
-        │ :8081    │ │ Slack   │ │ Jira    │
-        │          │ │ :8082   │ │ :8083   │
-        └────┬─────┘ └─────────┘ └─────────┘
-             │
+        ┌──────────┐ ┌─────────┐ ┌─────────────────┐
+        │Approvals │ │Connector│ │ Built-in         │
+        │ :8081    │ │ Slack   │ │ Connectors       │
+        │          │ │ :8082   │ │ (GitHub, AWS,    │
+        └────┬─────┘ └─────────┘ │ ServiceNow, ...) │
+             │                    └─────────────────┘
              ▼
         ┌──────────┐      ┌──────────┐
         │ Postgres │      │  MinIO   │
         │ :5432    │      │  :9000   │
         └──────────┘      └──────────┘
+
+┌──────────────┐      ┌──────────────┐
+│ Console UI   │─────▶│ Console API  │
+│ :3000        │      │ :8090        │
+└──────────────┘      └──────────────┘
 ```
 
 **Request flow:**
@@ -78,12 +88,15 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 | Service | Default Port | Description |
 |---|---|---|
 | **Gateway** | `:8080` | Entrypoint for all tool-call requests. Validates, evaluates policy, routes to connectors. |
-| **Approvals** | `:8081` | Manages approval requests and grants. Includes a minimal web UI. |
+| **Console API** | `:8090` | Admin console backend. JWT auth, RBAC, tenant/agent/key management, analytics, policy simulation. |
+| **Console UI** | `:3000` | React single-page app for the admin console. |
+| **Approvals** | `:8081` | Manages approval requests and grants. Includes Slack interactive approvals. |
 | **Connector-Slack** | `:8082` | Executes Slack actions (`msg.post`). Supports mock mode. |
 | **Connector-Jira** | `:8083` | Executes Jira actions (`issue.create`). Supports mock mode. |
+| **Built-in Connectors** | — | In-process: GitHub, AWS, ServiceNow, Email, Postgres (read-only), Webhook. |
 | **OPA** | `:8181` | Open Policy Agent evaluating Rego policy bundles. |
 | **Archiver** | — | Periodically verifies chains and uploads evidence bundles to MinIO/S3. |
-| **Postgres** | `:5432` | Stores events, results, approvals, grants, outbox, and hash chain. |
+| **Postgres** | `:5432` | Stores events, results, approvals, grants, users, keys, and hash chain. |
 | **MinIO** | `:9000` | S3-compatible object storage for evidence archival. |
 
 ---
@@ -94,6 +107,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
 - [Go 1.25+](https://go.dev/dl/) (for local development)
+- [Node.js 22+](https://nodejs.org/) (for console UI development)
 - [OPA CLI](https://www.openpolicyagent.org/docs/latest/#running-opa) (for policy tests)
 
 ### 1. Clone and configure
@@ -109,16 +123,51 @@ cp .env.example .env
 make dev
 ```
 
-This builds all services, starts Docker Compose (Postgres, OPA, MinIO, all 4 Go services), runs migrations, and prints health-check URLs.
+This builds all services, starts Docker Compose (Postgres, OPA, MinIO, all Go services, console UI), runs migrations, and prints health-check URLs.
 
-### 3. Verify
+### 3. Verify services
 
 ```bash
-curl http://localhost:8080/healthz
-# OK
+curl http://localhost:8080/healthz   # Gateway
+curl http://localhost:8090/healthz   # Console API
 ```
 
-### 4. Send a test tool call
+### 4. Log into the console
+
+Open http://localhost:3000 in your browser, or use the API:
+
+```bash
+curl -s -X POST http://localhost:8090/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@openclause.dev","password":"admin123"}' | jq
+```
+
+### 5. Create a tenant, agent, and API key
+
+```bash
+TOKEN="<token from login response>"
+
+# Create tenant
+curl -s -X POST http://localhost:8090/admin/tenants \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Demo Corp"}' | jq
+
+# Create agent (use tenant_id from response)
+curl -s -X POST http://localhost:8090/admin/tenants/<tenant_id>/agents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Demo Agent"}' | jq
+
+# Create API key
+curl -s -X POST http://localhost:8090/admin/tenants/<tenant_id>/apikeys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Demo Key"}' | jq
+# Save the raw_key from the response — it is shown only once!
+```
+
+### 6. Send a test tool call
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/toolcalls \
@@ -149,7 +198,7 @@ Expected response (mock mode):
 }
 ```
 
-### 5. Test a high-risk action (triggers approval)
+### 7. Test a high-risk action (triggers approval)
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/toolcalls \
@@ -158,16 +207,22 @@ curl -s -X POST http://localhost:8080/v1/toolcalls \
   -d '{
     "tenant_id": "tenant1",
     "agent_id": "agent-1",
-    "tool": "jira",
-    "action": "issue.delete",
+    "tool": "github",
+    "action": "issue.create",
+    "params": {"title": "Test issue"},
     "risk_score": 8,
     "idempotency_key": "demo-002"
   }' | jq
 ```
 
-Response includes an `approval_url` — follow it to approve or deny.
+Approve from the console UI at http://localhost:3000/approvals, then execute:
 
-### 6. Stop
+```bash
+curl -s -X POST http://localhost:8080/v1/toolcalls/<event_id>/execute \
+  -H "X-API-Key: sk-test-key-1" | jq
+```
+
+### 8. Stop
 
 ```bash
 make dev-down
@@ -175,23 +230,78 @@ make dev-down
 
 ---
 
+## Web Console
+
+The admin console (http://localhost:3000) provides:
+
+| Page | Description |
+|---|---|
+| **Overview** | Decision analytics — allow/deny/approve counts, risk trends, pending approvals |
+| **Approvals** | Pending approval queue with approve/deny actions and detail view |
+| **Audit Trail** | Searchable event list with filters (tenant, tool, action, decision) + event detail |
+| **Tenants** | Create/list/disable tenants, view config and usage |
+| **Tenant Detail** | Manage agents and API keys per tenant, create/revoke keys |
+| **Sessions** | Session list with event counts, click into timeline view |
+| **Policies** | Policy versions, create new versions, policy simulator |
+| **Alerts** | Alert rules (deny spike, approve backlog, etc.) and alert events |
+| **Connectors** | Installed connectors with supported actions |
+
+### Console Auth
+
+- **Login**: email + password (bcrypt hashed)
+- **JWT**: HS256 tokens with configurable expiry
+- **RBAC roles**: `platform_admin`, `tenant_admin`, `approver`, `viewer`
+- Default admin: `admin@openclause.dev` / `admin123`
+
+---
+
 ## API Reference
 
 Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 
-### Gateway
+### Gateway (`:8080`)
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/v1/toolcalls` | Submit a tool-call request |
 | `GET` | `/v1/toolcalls/{event_id}` | Fetch event by ID |
 | `POST` | `/v1/toolcalls/{event_id}/execute` | Resume approved request and execute exactly-once by parent event |
+| `GET` | `/v1/connectors` | List all registered connectors |
 | `GET` | `/healthz` | Liveness probe |
 | `GET` | `/readyz` | Readiness probe (checks Postgres) |
 
 Prometheus metrics are served on a **separate internal-only listener** (default `127.0.0.1:9090/metrics`, see `METRICS_ADDR`).
 
-### Approvals
+### Console API (`:8090`)
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `POST` | `/auth/login` | — | Authenticate with email/password, receive JWT |
+| `GET` | `/admin/analytics/overview` | JWT | Decision counts, pending approvals, active tenants/agents |
+| `GET` | `/admin/analytics/timeseries` | JWT | Time-bucketed decision counts |
+| `POST` | `/admin/tenants` | platform_admin | Create tenant |
+| `GET` | `/admin/tenants` | JWT | List tenants (scoped by role) |
+| `GET` | `/admin/tenants/{id}` | JWT | Get tenant detail |
+| `POST` | `/admin/tenants/{id}/agents` | tenant_admin | Register agent |
+| `GET` | `/admin/tenants/{id}/agents` | JWT | List agents |
+| `POST` | `/admin/tenants/{id}/apikeys` | tenant_admin | Create API key (returns raw key once) |
+| `GET` | `/admin/tenants/{id}/apikeys` | JWT | List API keys (never returns hashes) |
+| `POST` | `/admin/tenants/{id}/apikeys/{key_id}/revoke` | tenant_admin | Revoke API key |
+| `GET` | `/admin/approvals/pending` | JWT | List pending approvals |
+| `POST` | `/admin/approvals/{id}/approve` | approver | Approve request (transactional with grant) |
+| `POST` | `/admin/approvals/{id}/deny` | approver | Deny request |
+| `GET` | `/admin/events` | JWT | List events (filterable) |
+| `GET` | `/admin/events/{id}` | JWT | Event detail with policy result + hash chain |
+| `GET` | `/admin/events/export/csv` | JWT | Export events as CSV |
+| `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON |
+| `GET` | `/admin/sessions` | JWT | List sessions with event counts |
+| `GET` | `/admin/sessions/{id}/timeline` | JWT | Session event timeline |
+| `GET/POST` | `/admin/policy/versions` | JWT | List/create policy versions |
+| `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
+| `GET/POST` | `/admin/alerts/rules` | JWT | List/create alert rules |
+| `GET` | `/admin/alerts/events` | JWT | List alert events |
+
+### Approvals (`:8081`)
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -236,6 +346,86 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 
 ---
 
+## SDKs
+
+Multi-language SDKs are available in the `sdk/` directory.
+
+### Python
+
+```bash
+cd sdk/python && pip install -e .
+```
+
+```python
+from openclause import OpenClauseClient, ToolCallRequest
+
+client = OpenClauseClient(base_url="http://localhost:8080", api_key="sk-test-key-1")
+
+response = client.submit_tool_call(ToolCallRequest(
+    tenant_id="tenant1", agent_id="agent-1",
+    tool="slack", action="msg.post",
+    idempotency_key=OpenClauseClient.generate_idempotency_key(),
+    params={"channel": "#general", "text": "Hello!"},
+    risk_score=3
+))
+
+if response.decision == "approve":
+    result = client.wait_for_approval(response.event_id)
+```
+
+LangChain integration: `from openclause.langchain import OpenClauseTool`
+
+### TypeScript
+
+```bash
+cd sdk/typescript && npm install && npm run build
+```
+
+```typescript
+import { OpenClauseClient } from 'openclause';
+
+const client = new OpenClauseClient({
+  baseUrl: 'http://localhost:8080',
+  apiKey: 'sk-test-key-1'
+});
+
+const response = await client.submitToolCall({
+  tenant_id: 'tenant1', agent_id: 'agent-1',
+  tool: 'slack', action: 'msg.post',
+  idempotency_key: OpenClauseClient.generateIdempotencyKey(),
+  params: { channel: '#general', text: 'Hello!' },
+  risk_score: 3
+});
+```
+
+MCP server stub: `import { createMCPToolDefinitions } from 'openclause';`
+
+### Java
+
+```java
+OpenClauseClient client = new OpenClauseClient("http://localhost:8080", "sk-test-key-1");
+
+ToolCallRequest req = new ToolCallRequest.Builder()
+    .tenantId("tenant1").agentId("agent-1")
+    .tool("slack").action("msg.post")
+    .idempotencyKey(OpenClauseClient.generateIdempotencyKey())
+    .riskScore(3)
+    .build();
+
+ToolCallResponse response = client.submitToolCall(req);
+```
+
+### Go
+
+```go
+import "github.com/bturcanu/OpenClause/pkg/sdk/client"
+
+c := client.New("http://localhost:8080", "sk-test-key-1")
+resp, err := c.Submit(ctx, req)
+```
+
+---
+
 ## Policy System
 
 OpenClause uses [Open Policy Agent](https://www.openpolicyagent.org/) with Rego policies loaded as bundles.
@@ -270,22 +460,42 @@ The auto-allow threshold is configurable per tenant via `max_risk_auto_approve` 
 
 Changing the data file or Rego rules changes gateway behavior with zero code changes.
 
+### Policy Simulation
+
+Test policy decisions without executing actions:
+
+```bash
+curl -s -X POST http://localhost:8090/admin/policy/simulate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id": "tenant1",
+    "tool": "slack",
+    "action": "msg.post",
+    "risk_score": 3
+  }' | jq
+```
+
+### Policy Versioning
+
+Policy versions are tracked per tenant with deployment metadata. Create, list, and rollback versions through the console API or UI.
+
 ### Running policy tests
 
 ```bash
 make policy-test
-# or (Windows/dev without make)
-./bin/opa.exe test policy/bundles/v0/ policy/tests/ -v
+# or
+opa test policy/bundles/v0/ policy/tests/ -v
 ```
 
 ---
 
 ## Approval Workflow
 
-OpenClause now uses a strict two-phase approval flow:
+OpenClause uses a strict two-phase approval flow:
 
 1. `POST /v1/toolcalls` returns `decision=approve` and `approval_url` for high-risk requests.
-2. A human approves/denies via API, UI, or Slack interactive buttons.
+2. A human approves/denies via the **Console UI**, API, or **Slack interactive buttons**.
 3. Agent calls `POST /v1/toolcalls/{event_id}/execute` to resume execution.
 4. Gateway atomically consumes a matching grant and executes connector only once per parent event.
 5. Repeated `/execute` calls return the prior execution response (idempotent replay by parent event).
@@ -321,20 +531,33 @@ This provides tamper evidence — if any row is modified or deleted, the chain b
 evidence.VerifyChain(events) // returns error if chain is broken
 ```
 
+### Compliance Exports
+
+- **CSV export**: `GET /admin/events/export/csv`
+- **Evidence bundle**: `GET /admin/reports/export/bundle?tenant_id=...`
+- **Verify bundle**: `go run ./cmd/verify --bundle <file>`
+
 ### Database tables
 
 | Table | Purpose |
 |---|---|
+| `tenants` | Tenant metadata, status, and configuration |
+| `agents` | Agent registration per tenant |
+| `api_keys` | Hashed API keys with prefix-based lookup |
+| `users` | Console user accounts (bcrypt passwords) |
+| `user_roles` | RBAC role assignments (platform_admin, tenant_admin, approver, viewer) |
+| `sessions` | Agent conversation sessions |
 | `tool_events` | One row per incoming request (payload, decision, hash) |
 | `tool_results` | Execution outcomes (status, output, duration) |
+| `tool_executions` | Links original approved event to append-only execution event |
 | `approval_requests` | Pending/approved/denied approval requests |
 | `approval_grants` | Granted approvals with scope and usage tracking |
-| `tool_executions` | Links original approved event to append-only execution event |
-| `approval_notification_outbox` | Transactional webhook/slack notification outbox |
+| `approval_notification_outbox` | Transactional webhook/Slack notification outbox |
 | `evidence_archive_checkpoints` | Incremental archival checkpoints per tenant |
-| `tenants` | Tenant metadata and configuration |
-| `agents` | Agent registration per tenant |
-| `policy_versions` | Bundle deployment tracking |
+| `policy_versions` | Policy bundle versions with deployment metadata |
+| `alert_rules` | Configurable alert rules per tenant |
+| `alert_events` | Triggered alert events |
+| `usage_counters` | Daily per-tenant usage counters |
 
 ---
 
@@ -342,17 +565,27 @@ evidence.VerifyChain(events) // returns error if chain is broken
 
 ### API Key Authentication (Gateway)
 
-Pass tenant API keys via the `X-API-Key` header or `Authorization: Bearer <key>`.
+API keys are validated via **two stores** in sequence:
 
-Configure keys in `.env`:
+1. **Environment keys**: `API_KEYS=tenant1:sk-test-key-1,tenant2:sk-test-key-2`
+2. **Database keys**: Created through the Console API, stored as SHA-256 hashes with an 8-character prefix for indexed lookup.
 
-```
-API_KEYS=tenant1:sk-test-key-1,tenant2:sk-test-key-2
-```
-
-The middleware maps the key to a `tenant_id` and injects it into the request context. Keys are stored in memory as SHA-256 hashes — raw keys never persist.
+Pass keys via `X-API-Key` header or `Authorization: Bearer <key>`.
 
 Health endpoints (`/healthz`, `/readyz`) are unauthenticated. Metrics are served on a separate internal-only port (not exposed on the gateway port).
+
+### Console Authentication (JWT)
+
+The Console API uses JWT (HS256) tokens issued via `POST /auth/login`. Tokens include user ID, email, roles, and optional tenant scope. Configure the signing secret via `CONSOLE_JWT_SECRET`.
+
+### RBAC Roles
+
+| Role | Scope | Permissions |
+|---|---|---|
+| `platform_admin` | Global | Full access to all tenants and operations |
+| `tenant_admin` | Per-tenant | Manage agents, keys, policies for their tenant |
+| `approver` | Per-tenant | Approve/deny requests |
+| `viewer` | Per-tenant | Read-only access |
 
 ### Internal Service Authentication
 
@@ -368,23 +601,41 @@ INTERNAL_AUTH_TOKEN=your-shared-secret
 
 ## Connectors
 
-Connectors implement tool integrations. Each one is a standalone HTTP service with a single `POST /exec` endpoint.
+### Remote Connectors (HTTP services)
 
-### Supported Actions
+Each remote connector is a standalone HTTP service with a single `POST /exec` endpoint.
 
-| Connector | Action | Description |
+| Connector | Actions |
+|---|---|
+| **Slack** | `msg.post`, `channel.list`, `approval.request` |
+| **Jira** | `issue.create`, `issue.list` |
+
+### Built-in Connectors (in-process)
+
+| Connector | Actions | Mode |
 |---|---|---|
-| **Slack** | `slack.msg.post` | Post a message to a channel |
-| **Slack** | `slack.channel.list` | List channels |
-| **Slack** | `slack.approval.request` | Post Block Kit interactive approval message |
-| **Jira** | `jira.issue.create` | Create a Jira issue |
-| **Jira** | `jira.issue.list` | List issues |
+| **GitHub** | `issue.create`, `issue.comment`, `repo.list`, `repo.readme` | Mock |
+| **AWS** | `s3.list_buckets`, `s3.get_object`, `iam.list_users`, `iam.get_role` | Mock |
+| **ServiceNow** | `incident.create`, `incident.list`, `incident.get` | Mock |
+| **Email** | `send`, `list_inbox` | Mock |
+| **Postgres** | `query.readonly` | Mock |
+| **Webhook** | `post` (with SSRF protection) | Mock |
+
+### Connector Discovery
+
+```bash
+curl http://localhost:8080/v1/connectors | jq
+```
+
+Returns all registered connectors with their names, types, and supported actions.
 
 ### Mock Mode
 
 Set `MOCK_CONNECTORS=true` in `.env` to run connectors without real credentials. Mock responses are deterministic and suitable for testing.
 
 ### Adding a New Connector
+
+See [`docs/CONNECTORS.md`](docs/CONNECTORS.md) for the full guide, or [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution instructions.
 
 1. Create `cmd/connector-<name>/main.go` (see `cmd/connector-template`).
 2. Implement the `POST /exec` handler using `pkg/connectors/sdk`.
@@ -399,33 +650,18 @@ When approval requests are created, notifications are enqueued transactionally a
 - Content-Type: `application/cloudevents+json` (structured mode)
 - Signature header: `X-OC-Signature-256: sha256=<hex(hmac_sha256(secret, raw_body))>`
 
-Verification steps:
-1. Read raw HTTP body bytes as received.
-2. Compute `hmac_sha256(secret, raw_body)`.
-3. Hex-encode and compare to header value using constant-time compare.
-
 ### Slack Interactive Approvals
 
 - Endpoint: `POST /v1/integrations/slack/interactions`
 - Security: Slack signature verification (`X-Slack-Signature`, `X-Slack-Request-Timestamp`) against `SLACK_SIGNING_SECRET`.
-- Action payload embeds correlation IDs as base64url-encoded JSON (approval_request_id, event_id, tenant_id).
 - RBAC is enforced via tenant allowlists (`APPROVER_SLACK_ALLOWLIST`, `APPROVER_EMAIL_ALLOWLIST`). Default-deny: tenants without an explicit allowlist entry reject all approvers.
 
 ### Evidence Archival
 
 - `cmd/archiver` verifies each tenant hash chain and uploads bundles to MinIO/S3.
-- Object naming uses deterministic hash-range keys for idempotent retries:
-  `evidence/<tenant_id>/<from_hash>_to_<to_hash>.json`
 - Incremental progress is tracked in `evidence_archive_checkpoints`.
 - One-shot local run:
   `ARCHIVER_RUN_ONCE=true ARCHIVER_TENANT_ID=tenant1 go run ./cmd/archiver`
-
-### Agent SDK
-
-A thin Go client is available in `pkg/sdk/client`:
-- submit toolcall (`Submit`)
-- wait/poll and resume (`WaitForApprovalThenExecute`)
-- execute approved event (`Execute`)
 
 ---
 
@@ -467,35 +703,25 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `POSTGRES_SSLMODE` | `disable` | Postgres SSL mode (`disable`, `require`, `verify-full`, etc.) |
 | `OPA_URL` | `http://localhost:8181` | OPA server URL |
 | `GATEWAY_ADDR` | `:8080` | Gateway listen address |
+| `CONSOLE_API_ADDR` | `:8090` | Console API listen address |
+| `CONSOLE_JWT_SECRET` | — | **Required for production.** JWT signing secret for console |
+| `CONSOLE_JWT_EXPIRY_HOURS` | `24` | JWT token expiry in hours |
 | `APPROVALS_ADDR` | `:8081` | Approvals service listen address |
 | `APPROVALS_URL` | `http://localhost:8081` | Approvals service URL (for gateway) |
 | `CONNECTOR_SLACK_URL` | `http://localhost:8082` | Slack connector URL |
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
-| `API_KEYS` | — | Comma-separated `tenant:key` pairs |
-| `INTERNAL_AUTH_TOKEN` | — | **Required.** Shared secret for service-to-service auth (approvals, connectors) |
-| `APPROVER_EMAIL_ALLOWLIST` | — | Per-tenant email approver allowlist (`tenant:email1|email2`) |
-| `APPROVER_SLACK_ALLOWLIST` | — | Per-tenant Slack user allowlist (`tenant:u123|u999`) |
+| `API_KEYS` | — | Comma-separated `tenant:key` pairs (env-var auth) |
+| `INTERNAL_AUTH_TOKEN` | — | **Required.** Shared secret for service-to-service auth |
+| `APPROVER_EMAIL_ALLOWLIST` | — | Per-tenant email approver allowlist (`tenant:email1\|email2`) |
+| `APPROVER_SLACK_ALLOWLIST` | — | Per-tenant Slack user allowlist (`tenant:u123\|u999`) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
 | `SLACK_SIGNING_SECRET` | — | Slack signing secret for interactions endpoint |
 | `APPROVALS_NOTIFIER_ENABLED` | `true` | Enable transactional outbox dispatcher |
-| `APPROVALS_NOTIFIER_INTERVAL_SEC` | `5` | Dispatcher poll interval |
-| `APPROVALS_NOTIFIER_SOURCE` | `oc://approvals` | CloudEvents source value for approval notifications |
 | `WEBHOOK_SECRET_REFS` | — | Mapping `secret_ref=secret` used for HMAC signatures |
 | `EVIDENCE_S3_ENDPOINT` | `localhost:9000` | MinIO/S3 endpoint for archiver |
 | `EVIDENCE_S3_BUCKET` | `openclause-evidence` | Bucket for archived bundles |
-| `EVIDENCE_S3_ACCESS_KEY` | `minioadmin` | S3 access key |
-| `EVIDENCE_S3_SECRET_KEY` | `minioadmin` | S3 secret key |
-| `EVIDENCE_S3_SECURE` | `false` | Use HTTPS for object store |
-| `ARCHIVER_RUN_ONCE` | `true` | Run archiver once then exit |
-| `ARCHIVER_INTERVAL_SEC` | `300` | Archiver interval for daemon mode |
-| `ARCHIVER_TENANT_ID` | — | Optional tenant scope for one-shot archival |
-| `SLACK_BOT_TOKEN` | — | Slack bot OAuth token |
-| `JIRA_BASE_URL` | — | Jira instance URL |
-| `JIRA_EMAIL` | — | Jira auth email |
-| `JIRA_API_TOKEN` | — | Jira API token |
 | `RATE_LIMIT_PER_TENANT` | `100` | Max requests/sec per tenant |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint for traces |
-| `OTEL_SERVICE_NAME` | `oc-gateway` | OpenTelemetry service name |
 | `METRICS_ADDR` | `127.0.0.1:9090` | Internal Prometheus metrics listener address |
 
 ---
@@ -504,44 +730,55 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 
 ```
 OpenClause/
-├── api/
-│   └── openapi.yaml              # OpenAPI 3.1 specification
+├── api/openapi.yaml                # OpenAPI 3.1 specification
 ├── cmd/
-│   ├── gateway/                   # Gateway service
-│   ├── approvals/                 # Approvals service (+ web UI)
-│   ├── connector-slack/           # Slack connector
-│   ├── connector-jira/            # Jira connector
-│   ├── connector-template/        # Example connector using SDK
-│   └── archiver/                  # Evidence archival worker/CLI
+│   ├── gateway/                    # Gateway service (:8080)
+│   ├── console-api/                # Console API service (:8090)
+│   ├── approvals/                  # Approvals service (:8081)
+│   ├── connector-slack/            # Slack connector
+│   ├── connector-jira/             # Jira connector
+│   ├── connector-template/         # Example connector using SDK
+│   ├── archiver/                   # Evidence archival worker/CLI
+│   ├── verify/                     # Evidence bundle verification CLI
+│   └── llm-summarizer/            # Optional LLM summarizer (Python FastAPI)
 ├── pkg/
-│   ├── types/                     # Canonical schema, validation, errors
-│   ├── policy/                    # OPA HTTP client
-│   ├── evidence/                  # Canonicalization, hash chain, Postgres store
-│   ├── auth/                      # API key middleware, internal auth
-│   ├── otel/                      # OpenTelemetry setup
-│   ├── config/                    # Shared environment variable helpers
-│   ├── connectors/                # Connector interface, registry, routing
-│   │   └── sdk/                   # Connector SDK helper
-│   └── approvals/                 # Approval types, store, handlers
-│   ├── archiver/                  # Bundle builder + archival service
-│   └── sdk/client/                # Go client SDK
+│   ├── types/                      # Canonical schema, validation, errors
+│   ├── policy/                     # OPA HTTP client + shadow evaluator
+│   ├── evidence/                   # Canonicalization, hash chain, Postgres store
+│   ├── auth/                       # API key middleware (env + DB), composite store
+│   ├── console/                    # Console store (CRUD, analytics, JWT)
+│   ├── connectors/                 # Connector interface, registry, routing
+│   │   ├── sdk/                    # Connector SDK helper
+│   │   └── builtins/              # Built-in connectors (GitHub, AWS, etc.)
+│   ├── approvals/                  # Approval types, store, handlers, summary
+│   ├── risk/                       # Risk scoring interfaces + implementations
+│   ├── archiver/                   # Bundle builder + archival service
+│   ├── otel/                       # OpenTelemetry setup
+│   ├── config/                     # Shared environment variable helpers
+│   └── sdk/client/                 # Go client SDK
+├── sdk/
+│   ├── python/                     # Python SDK (pip)
+│   ├── typescript/                 # TypeScript SDK (npm)
+│   └── java/                       # Java SDK (gradle)
+├── web/console/                    # React admin console (Vite + TypeScript)
 ├── policy/
-│   ├── bundles/v0/                # OPA policy bundle (main.rego + data.json)
-│   └── tests/                     # OPA policy tests
+│   ├── bundles/v0/                 # OPA policy bundle (main.rego + data.json)
+│   └── tests/                      # OPA policy tests
 ├── migrations/
-│   ├── 001_initial.sql            # Postgres schema (DDL only)
-│   └── 002_seed.sql               # Development seed data (tenants, agents)
+│   ├── 001_initial.sql             # Postgres schema
+│   └── 002_seed.sql                # Development seed data
 ├── deploy/
-│   ├── docker-compose.yml         # Local development stack
-│   ├── helm/                      # Helm charts (gateway, approvals, connectors)
-│   ├── terraform/                 # AWS infrastructure (EKS, RDS, S3, ALB)
-│   └── dashboards/                # Grafana dashboard JSON
-├── .github/workflows/
-│   └── ci.yml                     # CI: test, lint, policy-test, build, deploy
-├── Dockerfile                     # Multi-stage build (one binary per image, non-root)
-├── Makefile                       # dev, test, build, deploy targets
-├── .env.example                   # Environment variable reference
-└── readme.md                      # This file
+│   ├── docker-compose.yml          # Local development stack
+│   ├── helm/                       # Helm charts (gateway, approvals, connectors)
+│   ├── terraform/                  # AWS infrastructure (EKS, RDS, S3, ALB)
+│   └── dashboards/                 # Grafana dashboard JSON
+├── docs/CONNECTORS.md              # Connector development guide
+├── CONTRIBUTING.md                 # Contribution guide
+├── .github/workflows/ci.yml        # CI: test, lint, policy-test, build, deploy
+├── Dockerfile                      # Multi-stage build (one binary per image, non-root)
+├── Makefile                        # dev, test, build, deploy targets
+├── .env.example                    # Environment variable reference
+└── readme.md                       # This file
 ```
 
 ---
@@ -560,28 +797,31 @@ OpenClause/
 | `make go-test` | Run Go unit tests only |
 | `make policy-test` | Run OPA policy tests only |
 | `make lint` | Run golangci-lint |
-| `make build` | Build all Go binaries to `bin/` (includes archiver + connector-template) |
+| `make build` | Build all Go binaries to `bin/` |
 | `make docker-build` | Build Docker images locally |
 | `make clean` | Remove build artifacts and containers |
 
 ### Running tests
 
 ```bash
-# All tests
-make test
-
-# Go unit tests only
-go test ./... -v
-
-# Policy tests only
-opa test policy/bundles/v0/ policy/tests/ -v
+go test ./...             # All Go tests
+go test -race ./...       # With race detector
+opa test policy/bundles/v0/ policy/tests/ -v   # Policy tests
 ```
 
-### Building locally (without Docker)
+### Console UI development
+
+```bash
+cd web/console
+npm install
+npm run dev    # Starts on http://localhost:3000 with API proxy to :8090
+```
+
+### Building locally
 
 ```bash
 make build
-# Binaries output to bin/gateway, bin/approvals, bin/connector-slack, bin/connector-jira, bin/connector-template, bin/archiver
+# Binaries: bin/gateway, bin/approvals, bin/console-api, bin/connector-*, bin/archiver, bin/verify
 ```
 
 ---
@@ -594,7 +834,7 @@ make build
 make dev
 ```
 
-Runs gateway, approvals, 2 connectors, OPA, Postgres, and MinIO. See `deploy/docker-compose.yml`.
+Runs all services including the console UI. See `deploy/docker-compose.yml`.
 
 ### Kubernetes (Helm)
 
@@ -603,16 +843,8 @@ Helm charts are in `deploy/helm/` for each service. All charts include:
 - Deployments with liveness (`/healthz`) and readiness (`/readyz`) probes
 - Pod and container security contexts (`runAsNonRoot`, `readOnlyRootFilesystem`, `drop ALL`)
 - ClusterIP services
-- Deny-by-default NetworkPolicies (connectors allow TCP 443 egress for external APIs)
-- Optional `secretRef` for loading secrets from Kubernetes Secrets (`values.secretRef`)
-- Gateway chart includes Ingress with TLS
-
-```bash
-helm install oc-gateway deploy/helm/gateway/ -f custom-values.yaml
-helm install oc-approvals deploy/helm/approvals/
-helm install oc-connector-slack deploy/helm/connector-slack/
-helm install oc-connector-jira deploy/helm/connector-jira/
-```
+- Deny-by-default NetworkPolicies
+- Optional `secretRef` for loading secrets from Kubernetes Secrets
 
 ### Cloud (Terraform)
 
@@ -625,13 +857,6 @@ Terraform modules in `deploy/terraform/` provision AWS infrastructure:
 | `storage` | S3 bucket with versioning + encryption |
 | `secrets` | Secrets Manager for credentials |
 | `loadbalancer` | ALB + ACM certificate |
-
-```bash
-cd deploy/terraform
-terraform init
-terraform plan -var-file=prod.tfvars
-terraform apply
-```
 
 ### CI/CD
 
@@ -650,4 +875,4 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 Copyright © 2026 Bogdan Turcanu.
 
 Licensed under the **Apache License 2.0** with the **Commons Clause License Condition v1.0**.  
-You may use, modify, and redistribute this software under Apache 2.0, but you may **not “Sell”** the software (including offering it as part of a paid product/service) without a separate commercial license from the licensor. See the `LICENSE` file for full terms.
+You may use, modify, and redistribute this software under Apache 2.0, but you may **not "Sell"** the software (including offering it as part of a paid product/service) without a separate commercial license from the licensor. See the `LICENSE` file for full terms.

@@ -18,8 +18,8 @@ ON CONFLICT (id) DO NOTHING;
 -- sk-test-key-1 → SHA-256 hash
 -- sk-test-key-2 → SHA-256 hash
 INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status) VALUES
-    ('key-1', 'tenant1', 'Dev Key 1', 'sk-test-', 'e3e7a807044dfd09b1437e488cae0d2acab79b77e9af3aa9f80e60fbf58b64c7', 'active'),
-    ('key-2', 'tenant2', 'Dev Key 2', 'sk-test-', '1f3870be274f6c49b3e31a0c6728957f0a2b88c6ef2da54537bb27a9ba277a96', 'active')
+    ('key-1', 'tenant1', 'Dev Key 1', 'sk-test-', 'c1fa602237f88a7c84dc1cff004a4f10f0e85127b2a3461aa33aea6694808262', 'active'),
+    ('key-2', 'tenant2', 'Dev Key 2', 'sk-test-', '1e65193bdb95bdb11459530aacbb10e034c09c302fe378abe229774ea3ddc6f1', 'active')
 ON CONFLICT (id) DO NOTHING;
 
 -- Bootstrap console admin user
