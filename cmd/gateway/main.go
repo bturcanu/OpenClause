@@ -75,6 +75,7 @@ func main() {
 	envKeyStore := auth.NewKeyStore(os.Getenv("API_KEYS"))
 	dbKeyStore := auth.NewDBKeyStore(pool)
 	keyStore := auth.NewCompositeKeyStore(envKeyStore, dbKeyStore)
+	tenantChecker := auth.NewDBTenantChecker(pool)
 
 	connectorReg := connectors.NewRegistry()
 	connectorReg.Register("slack", config.EnvOr("CONNECTOR_SLACK_URL", "http://localhost:8082"))
@@ -85,13 +86,14 @@ func main() {
 		connectorReg.RegisterBuiltin(bc.Name(), bc.Actions(), bc.Exec)
 	}
 
+	publicApprovalsURL := config.EnvOr("PUBLIC_APPROVALS_URL", config.EnvOr("APPROVALS_URL", "http://localhost:8081"))
 	gw := &Gateway{
 		log:            log,
 		evidence:       evidenceLogger,
 		policy:         policyClient,
 		connectors:     connectorReg,
 		approvals:      approvalsStore,
-		approvalsURL:   config.EnvOr("APPROVALS_URL", "http://localhost:8081"),
+		approvalsURL:   publicApprovalsURL,
 		rateLimiters:   make(map[string]*list.Element),
 		rlList:         list.New(),
 		perTenantLimit: config.EnvOrInt("RATE_LIMIT_PER_TENANT", 100),
@@ -104,7 +106,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(middleware.Logger)
-	r.Use(auth.APIKeyAuth(keyStore))
+	r.Use(auth.APIKeyAuth(keyStore, tenantChecker))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

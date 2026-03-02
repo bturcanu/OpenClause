@@ -110,6 +110,7 @@ services:
       POSTGRES_SSLMODE: disable
       OPA_URL: http://opa:8181
       APPROVALS_URL: http://approvals:8081
+      PUBLIC_APPROVALS_URL: http://localhost:8081
       CONNECTOR_SLACK_URL: http://connector-slack:8082
       CONNECTOR_JIRA_URL: http://connector-jira:8083
       S3_ENDPOINT: http://minio:9000

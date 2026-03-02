@@ -30,3 +30,10 @@ export const api = {
     apiFetch(path, { method: 'DELETE' }).then(r => r.json()),
   getBlob: (path: string) => apiFetch(path).then(r => r.blob()),
 };
+
+export function formatDate(value: string | undefined | null, style: 'full' | 'date' = 'full'): string {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+  return style === 'date' ? d.toLocaleDateString() : d.toLocaleString();
+}

@@ -25,8 +25,17 @@ type KeyLookup interface {
 	Lookup(apiKey string) (tenantID string, ok bool)
 }
 
+// TenantStatusChecker verifies a tenant is active. Checked after key lookup
+// so that env-based keys still respect tenant disable status in the DB.
+type TenantStatusChecker interface {
+	IsTenantActive(ctx context.Context, tenantID string) bool
+}
+
 // APIKeyAuth returns middleware that validates API keys and sets tenant context.
-func APIKeyAuth(keys KeyLookup) func(http.Handler) http.Handler {
+// If tenantChecker is non-nil, the middleware also verifies the tenant is active
+// after a successful key lookup, ensuring disabled tenants are rejected even
+// when the key comes from the env-based store.
+func APIKeyAuth(keys KeyLookup, tenantChecker TenantStatusChecker) func(http.Handler) http.Handler {
 	skipPaths := map[string]bool{
 		"/healthz": true,
 		"/readyz":  true,
@@ -40,7 +49,6 @@ func APIKeyAuth(keys KeyLookup) func(http.Handler) http.Handler {
 
 			apiKey := r.Header.Get("X-API-Key")
 			if apiKey == "" {
-				// Also check Authorization: Bearer
 				auth := r.Header.Get("Authorization")
 				if strings.HasPrefix(auth, "Bearer ") {
 					apiKey = strings.TrimPrefix(auth, "Bearer ")
@@ -55,6 +63,11 @@ func APIKeyAuth(keys KeyLookup) func(http.Handler) http.Handler {
 			tenantID, ok := keys.Lookup(apiKey)
 			if !ok {
 				types.ErrUnauthorized("invalid API key").WriteJSON(w)
+				return
+			}
+
+			if tenantChecker != nil && !tenantChecker.IsTenantActive(r.Context(), tenantID) {
+				types.ErrForbidden("tenant disabled").WriteJSON(w)
 				return
 			}
 

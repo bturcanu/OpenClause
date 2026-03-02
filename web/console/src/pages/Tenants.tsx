@@ -1,12 +1,11 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface Tenant {
   id: string
   name: string
-  slug: string
-  plan: string
+  status: string
   created_at: string
 }
 
@@ -15,7 +14,7 @@ export default function Tenants() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ name: '', slug: '', plan: 'free' })
+  const [form, setForm] = useState({ name: '' })
   const [creating, setCreating] = useState(false)
 
   async function fetchTenants() {
@@ -36,8 +35,8 @@ export default function Tenants() {
     setCreating(true)
     setError('')
     try {
-      await api.post('/admin/tenants', form)
-      setForm({ name: '', slug: '', plan: 'free' })
+      await api.post('/admin/tenants', { name: form.name })
+      setForm({ name: '' })
       setShowForm(false)
       await fetchTenants()
     } catch (err: any) {
@@ -68,19 +67,7 @@ export default function Tenants() {
             <div className="form-inline">
               <div className="form-group">
                 <label>Name</label>
-                <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
-              </div>
-              <div className="form-group">
-                <label>Slug</label>
-                <input value={form.slug} onChange={e => setForm(f => ({ ...f, slug: e.target.value }))} required />
-              </div>
-              <div className="form-group">
-                <label>Plan</label>
-                <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value }))}>
-                  <option value="free">Free</option>
-                  <option value="pro">Pro</option>
-                  <option value="enterprise">Enterprise</option>
-                </select>
+                <input value={form.name} onChange={e => setForm({ name: e.target.value })} required />
               </div>
               <button className="btn btn-primary" disabled={creating}>
                 {creating ? 'Creating…' : 'Create'}
@@ -95,8 +82,8 @@ export default function Tenants() {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Slug</th>
-              <th>Plan</th>
+              <th>ID</th>
+              <th>Status</th>
               <th>Created</th>
               <th></th>
             </tr>
@@ -110,9 +97,13 @@ export default function Tenants() {
               tenants.map(t => (
                 <tr key={t.id}>
                   <td><Link to={`/tenants/${t.id}`}>{t.name}</Link></td>
-                  <td><span className="badge badge-gray">{t.slug}</span></td>
-                  <td><span className="badge badge-blue">{t.plan}</span></td>
-                  <td>{new Date(t.created_at).toLocaleDateString()}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{t.id.slice(0, 12)}</td>
+                  <td>
+                    <span className={`badge ${t.status === 'active' ? 'badge-green' : 'badge-red'}`}>
+                      {t.status}
+                    </span>
+                  </td>
+                  <td>{formatDate(t.created_at, 'date')}</td>
                   <td><Link to={`/tenants/${t.id}`} className="btn btn-outline btn-sm">View</Link></td>
                 </tr>
               ))

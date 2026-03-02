@@ -133,6 +133,8 @@ func (s *Store) GetRequest(ctx context.Context, id string) (*ApprovalRequest, er
 const defaultPendingLimit = 200
 
 // ListPending returns pending requests for a tenant (paginated).
+// When tenantID is empty, all pending requests across tenants are returned
+// (used by platform admins).
 func (s *Store) ListPending(ctx context.Context, tenantID string, limit, offset int) ([]ApprovalRequest, error) {
 	if limit <= 0 || limit > defaultPendingLimit {
 		limit = defaultPendingLimit
@@ -141,13 +143,25 @@ func (s *Store) ListPending(ctx context.Context, tenantID string, limit, offset 
 		offset = 0
 	}
 
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, event_id, tenant_id, agent_id, tool, action, resource,
-		       risk_score, reason, deny_reason, status, created_at, expires_at
-		FROM approval_requests
-		WHERE tenant_id = $1 AND status = 'pending' AND expires_at > NOW()
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	var rows pgx.Rows
+	var err error
+	if tenantID != "" {
+		rows, err = s.pool.Query(ctx, `
+			SELECT id, event_id, tenant_id, agent_id, tool, action, resource,
+			       risk_score, reason, deny_reason, status, created_at, expires_at
+			FROM approval_requests
+			WHERE tenant_id = $1 AND status = 'pending' AND expires_at > NOW()
+			ORDER BY created_at DESC
+			LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	} else {
+		rows, err = s.pool.Query(ctx, `
+			SELECT id, event_id, tenant_id, agent_id, tool, action, resource,
+			       risk_score, reason, deny_reason, status, created_at, expires_at
+			FROM approval_requests
+			WHERE status = 'pending' AND expires_at > NOW()
+			ORDER BY created_at DESC
+			LIMIT $1 OFFSET $2`, limit, offset)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("approvals.ListPending: %w", err)
 	}

@@ -1,11 +1,11 @@
 import { useState, useEffect, FormEvent } from 'react'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface AlertRule {
   id: string
   name: string
-  condition: string
-  channel: string
+  rule_type: string
+  notify_kind: string
   enabled: boolean
   created_at: string
 }
@@ -13,10 +13,9 @@ interface AlertRule {
 interface AlertEvent {
   id: string
   rule_id: string
-  rule_name: string
   message: string
   severity: string
-  fired_at: string
+  created_at: string
 }
 
 export default function Alerts() {
@@ -119,7 +118,7 @@ export default function Alerts() {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Condition</th>
+              <th>Type</th>
               <th>Channel</th>
               <th>Status</th>
               <th>Created</th>
@@ -135,15 +134,15 @@ export default function Alerts() {
                 <tr key={r.id}>
                   <td style={{ fontWeight: 600 }}>{r.name}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: 12, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {r.condition}
+                    {r.rule_type}
                   </td>
-                  <td><span className="badge badge-gray">{r.channel}</span></td>
+                  <td><span className="badge badge-gray">{r.notify_kind}</span></td>
                   <td>
                     {r.enabled !== false
                       ? <span className="badge badge-green">Active</span>
                       : <span className="badge badge-gray">Disabled</span>}
                   </td>
-                  <td>{new Date(r.created_at).toLocaleDateString()}</td>
+                  <td>{formatDate(r.created_at, 'date')}</td>
                 </tr>
               ))
             )}
@@ -168,14 +167,14 @@ export default function Alerts() {
             ) : (
               events.map(ev => (
                 <tr key={ev.id}>
-                  <td style={{ fontWeight: 600 }}>{ev.rule_name || ev.rule_id?.slice(0, 8)}</td>
+                  <td style={{ fontWeight: 600 }}>{ev.rule_id?.slice(0, 8)}</td>
                   <td>
                     <span className={`badge ${ev.severity === 'critical' ? 'badge-red' : ev.severity === 'warning' ? 'badge-yellow' : 'badge-gray'}`}>
                       {ev.severity}
                     </span>
                   </td>
                   <td>{ev.message}</td>
-                  <td>{new Date(ev.fired_at).toLocaleString()}</td>
+                  <td>{formatDate(ev.created_at)}</td>
                 </tr>
               ))
             )}

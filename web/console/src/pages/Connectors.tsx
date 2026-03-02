@@ -2,12 +2,9 @@ import { useState, useEffect } from 'react'
 import { api } from '../api'
 
 interface Connector {
-  id: string
-  name: string
-  type: string
+  tool: string
   actions: string[]
-  description?: string
-  enabled?: boolean
+  event_count: number
 }
 
 export default function Connectors() {
@@ -40,17 +37,11 @@ export default function Connectors() {
       ) : (
         <div className="connector-grid">
           {connectors.map(c => (
-            <div key={c.id} className="connector-card">
+            <div key={c.tool} className="connector-card">
               <div className="flex-between">
-                <h4>{c.name}</h4>
-                {c.enabled !== false
-                  ? <span className="badge badge-green">Active</span>
-                  : <span className="badge badge-gray">Disabled</span>}
+                <h4>{c.tool}</h4>
+                <span className="badge badge-gray">{c.event_count} events</span>
               </div>
-              <div className="cc-type">{c.type}</div>
-              {c.description && (
-                <p style={{ fontSize: 13, color: '#475569', marginBottom: 10 }}>{c.description}</p>
-              )}
               <div className="cc-actions">
                 {(c.actions || []).map(action => (
                   <span key={action} className="badge badge-blue">{action}</span>

@@ -17,8 +17,8 @@ make dev
 # On Windows (PowerShell) — run commands manually:
 docker compose -f deploy/docker-compose.yml up --build -d
 # Wait for postgres, then run migrations:
-docker compose -f deploy/docker-compose.yml exec -T postgres `
-  psql -U openclause -d openclause -f /dev/stdin < migrations/001_initial.sql
+Get-Content migrations/001_initial.sql | docker compose -f deploy/docker-compose.yml exec -T postgres `
+  psql -U openclause -d openclause -v ON_ERROR_STOP=1
 ```
 
 Verify health:
@@ -84,6 +84,11 @@ Get-Content docs\seed_dev.sql | docker compose -f deploy/docker-compose.yml exec
 curl -s http://localhost:8090/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@openclause.dev","password":"admin123"}'
+```
+
+```powershell
+$body = @{ email = "admin@openclause.dev"; password = "admin123" } | ConvertTo-Json
+$token = (Invoke-RestMethod -Method Post -Uri "http://localhost:8090/auth/login" -ContentType "application/json" -Body $body).token
 ```
 
 Save the `token` from the response:
@@ -252,7 +257,7 @@ curl -s "http://localhost:8090/admin/tenants/tenant1/status" \
   -H "Content-Type: application/json" \
   -d '{"status":"disabled"}'
 
-# Try using the API key — should get 401 (DB-backed keys check tenant status)
+# Try using the API key — should get 403 "tenant disabled"
 curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
@@ -265,8 +270,8 @@ curl -s "http://localhost:8090/admin/tenants/tenant1/status" \
   -d '{"status":"active"}'
 ```
 
-> Note: the `API_KEYS` env-based keystore bypasses the tenant-status check.
-> Only DB-backed keys (created via console API) enforce it.
+> Tenant status is enforced for **all** API keys (both env-based and DB-backed).
+> The auth middleware checks tenant status in the database after key validation.
 
 ## 14. Policy Simulation
 
@@ -300,6 +305,43 @@ make dev-down
 docker compose -f deploy/docker-compose.yml down -v
 ```
 
+## Windows PowerShell Tips
+
+PowerShell `curl` is an alias for `Invoke-WebRequest`. Use `curl.exe` to invoke
+the real curl binary, or use `Invoke-RestMethod` natively.
+
+**Avoid quoting pitfalls** — write JSON to a temp file instead of inline:
+
+```powershell
+@'
+{"tenant_id":"tenant1","agent_id":"agent-1","tool":"slack","action":"channel.list","risk_score":1,"idempotency_key":"test-allow-1"}
+'@ | Set-Content -NoNewline toolcall.json
+
+curl.exe -s "http://localhost:8080/v1/toolcalls" `
+  -H "X-API-Key: sk-test-key-1" `
+  -H "Content-Type: application/json" `
+  --data-binary "@toolcall.json"
+```
+
+**Login and capture token:**
+
+```powershell
+$body = @{ email = "admin@openclause.dev"; password = "admin123" } | ConvertTo-Json
+$resp = Invoke-RestMethod -Method Post -Uri "http://localhost:8090/auth/login" `
+  -ContentType "application/json" -Body $body
+$TOKEN = $resp.token
+```
+
+**Disable / re-enable tenant:**
+
+```powershell
+@'{"status":"disabled"}'@ | Set-Content -NoNewline tenant-disable.json
+curl.exe -s "http://localhost:8090/admin/tenants/tenant1/status" `
+  -H "Authorization: Bearer $TOKEN" `
+  -H "Content-Type: application/json" `
+  --data-binary "@tenant-disable.json"
+```
+
 ## Quick Reference: Ports
 
 | Service | Port | Auth |
@@ -309,6 +351,7 @@ docker compose -f deploy/docker-compose.yml down -v
 | Slack connector | 8082 | `X-Internal-Token` header |
 | Jira connector | 8083 | `X-Internal-Token` header |
 | Console API | 8090 | `Authorization: Bearer <JWT>` |
+| Console UI | 3000 | JWT via browser |
 | OPA | 8181 | None |
 | MinIO Console | 9001 | minioadmin / minioadmin |
 | Postgres | 5432 | openclause / changeme |

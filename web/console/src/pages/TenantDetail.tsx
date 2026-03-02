@@ -1,12 +1,12 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface Tenant {
   id: string
   name: string
-  slug: string
-  plan: string
+  status: string
+  config: any
   created_at: string
 }
 
@@ -20,8 +20,8 @@ interface Agent {
 interface ApiKey {
   id: string
   key_prefix: string
-  label: string
-  revoked: boolean
+  name: string
+  status: string
   created_at: string
 }
 
@@ -34,7 +34,7 @@ export default function TenantDetail() {
   const [error, setError] = useState('')
 
   const [agentForm, setAgentForm] = useState({ name: '' })
-  const [keyForm, setKeyForm] = useState({ label: '' })
+  const [keyForm, setKeyForm] = useState({ name: '' })
   const [newKeyRaw, setNewKeyRaw] = useState('')
   const [creating, setCreating] = useState(false)
 
@@ -76,9 +76,9 @@ export default function TenantDetail() {
     setCreating(true)
     setNewKeyRaw('')
     try {
-      const data = await api.post(`/admin/tenants/${id}/apikeys`, keyForm)
+      const data = await api.post(`/admin/tenants/${id}/apikeys`, { name: keyForm.name })
       setNewKeyRaw(data.raw_key || data.key || '')
-      setKeyForm({ label: '' })
+      setKeyForm({ name: '' })
       await fetchAll()
     } catch (err: any) {
       setError(err.message)
@@ -104,7 +104,7 @@ export default function TenantDetail() {
       <div className="flex-between">
         <div className="page-header">
           <h2>{tenant.name}</h2>
-          <p>Tenant management — {tenant.slug}</p>
+          <p>Tenant management — {tenant.id}</p>
         </div>
         <Link to="/tenants" className="btn btn-outline">← Back</Link>
       </div>
@@ -118,16 +118,14 @@ export default function TenantDetail() {
           <div className="detail-value">{tenant.id}</div>
         </div>
         <div className="detail-row">
-          <div className="detail-label">Slug</div>
-          <div className="detail-value">{tenant.slug}</div>
-        </div>
-        <div className="detail-row">
-          <div className="detail-label">Plan</div>
-          <div className="detail-value"><span className="badge badge-blue">{tenant.plan}</span></div>
+          <div className="detail-label">Status</div>
+          <div className="detail-value">
+            <span className={`badge ${tenant.status === 'active' ? 'badge-green' : 'badge-red'}`}>{tenant.status}</span>
+          </div>
         </div>
         <div className="detail-row">
           <div className="detail-label">Created</div>
-          <div className="detail-value">{new Date(tenant.created_at).toLocaleString()}</div>
+          <div className="detail-value">{formatDate(tenant.created_at)}</div>
         </div>
       </div>
 
@@ -163,7 +161,7 @@ export default function TenantDetail() {
                 <tr key={a.id}>
                   <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{a.id.slice(0, 12)}…</td>
                   <td>{a.name}</td>
-                  <td>{new Date(a.created_at).toLocaleDateString()}</td>
+                  <td>{formatDate(a.created_at, 'date')}</td>
                 </tr>
               ))
             )}
@@ -178,8 +176,8 @@ export default function TenantDetail() {
         <form onSubmit={createKey}>
           <div className="form-inline">
             <div className="form-group">
-              <label>Label</label>
-              <input value={keyForm.label} onChange={e => setKeyForm({ label: e.target.value })} required />
+              <label>Name</label>
+              <input value={keyForm.name} onChange={e => setKeyForm({ name: e.target.value })} required />
             </div>
             <button className="btn btn-primary" disabled={creating}>Create</button>
           </div>
@@ -199,7 +197,7 @@ export default function TenantDetail() {
           <thead>
             <tr>
               <th>Prefix</th>
-              <th>Label</th>
+              <th>Name</th>
               <th>Status</th>
               <th>Created</th>
               <th></th>
@@ -212,15 +210,15 @@ export default function TenantDetail() {
               apiKeys.map(k => (
                 <tr key={k.id}>
                   <td style={{ fontFamily: 'monospace' }}>{k.key_prefix}…</td>
-                  <td>{k.label}</td>
+                  <td>{k.name}</td>
                   <td>
-                    {k.revoked
+                    {k.status === 'revoked'
                       ? <span className="badge badge-red">Revoked</span>
                       : <span className="badge badge-green">Active</span>}
                   </td>
-                  <td>{new Date(k.created_at).toLocaleDateString()}</td>
+                  <td>{formatDate(k.created_at, 'date')}</td>
                   <td>
-                    {!k.revoked && (
+                    {k.status !== 'revoked' && (
                       <button className="btn btn-danger btn-sm" onClick={() => revokeKey(k.id)}>Revoke</button>
                     )}
                   </td>

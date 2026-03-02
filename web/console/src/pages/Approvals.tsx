@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface Approval {
   id: string
@@ -90,7 +90,7 @@ export default function Approvals() {
                   <td>{a.action}</td>
                   <td>{a.risk_score}</td>
                   <td>{a.agent_id?.slice(0, 8) || '—'}</td>
-                  <td>{new Date(a.created_at).toLocaleString()}</td>
+                  <td>{formatDate(a.created_at)}</td>
                   <td><span className="badge badge-pending">{a.status || 'pending'}</span></td>
                   <td>
                     <div className="btn-group">
@@ -150,7 +150,7 @@ export default function Approvals() {
             </div>
             <div className="detail-row">
               <div className="detail-label">Created</div>
-              <div className="detail-value">{new Date(selected.created_at).toLocaleString()}</div>
+              <div className="detail-value">{formatDate(selected.created_at)}</div>
             </div>
             {selected.payload && (
               <div className="detail-row">

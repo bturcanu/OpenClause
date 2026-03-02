@@ -87,3 +87,27 @@ func (c *CompositeKeyStore) Lookup(apiKey string) (tenantID string, ok bool) {
 	}
 	return "", false
 }
+
+// DBTenantChecker verifies tenant status directly against the database.
+// Used by the auth middleware to enforce tenant disabling even for env-based keys.
+type DBTenantChecker struct {
+	pool *pgxpool.Pool
+}
+
+func NewDBTenantChecker(pool *pgxpool.Pool) *DBTenantChecker {
+	return &DBTenantChecker{pool: pool}
+}
+
+func (c *DBTenantChecker) IsTenantActive(ctx context.Context, tenantID string) bool {
+	var status string
+	err := c.pool.QueryRow(ctx,
+		`SELECT status FROM tenants WHERE id = $1`, tenantID,
+	).Scan(&status)
+	if err != nil {
+		// If tenant doesn't exist in DB (e.g. env-only dev setup), allow through.
+		// The keystore already validated the key; missing DB row means the tenant
+		// was provisioned via env only and has no DB record to disable.
+		return true
+	}
+	return status == "active"
+}

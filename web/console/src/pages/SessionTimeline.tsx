@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface TimelineEvent {
-  id: string
+  event_id: string
   tool: string
   action: string
   decision: string
   risk_score: number
-  created_at: string
+  received_at: string
 }
 
 export default function SessionTimeline() {
@@ -45,11 +45,11 @@ export default function SessionTimeline() {
       ) : (
         <div className="timeline">
           {events.map(ev => (
-            <div key={ev.id} className={`timeline-item ${ev.decision}`}>
-              <div className="tl-time">{new Date(ev.created_at).toLocaleString()}</div>
+            <div key={ev.event_id} className={`timeline-item ${ev.decision}`}>
+              <div className="tl-time">{formatDate(ev.received_at)}</div>
               <div className="tl-content">
                 <div className="tl-title">
-                  <Link to={`/events/${ev.id}`}>{ev.tool} → {ev.action}</Link>
+                  <Link to={`/events/${ev.event_id}`}>{ev.tool} → {ev.action}</Link>
                 </div>
                 <div className="tl-meta">
                   <span className={`badge badge-${ev.decision}`}>{ev.decision}</span>

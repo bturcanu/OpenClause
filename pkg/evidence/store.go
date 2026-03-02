@@ -166,6 +166,7 @@ func (s *Store) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEn
 	var env types.ToolCallEnvelope
 	var tenantID, agentID, tool, action string
 	var riskScore int
+	var decisionStr string
 	var idempotencyKey, sessionID, userID, sourceIP, traceID string
 	var requestedAt time.Time
 	var policyJSON []byte
@@ -178,7 +179,7 @@ func (s *Store) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEn
 		&tenantID, &agentID,
 		&tool, &action,
 		&env.PayloadJSON, &env.PayloadCanon, &riskScore,
-		&env.Decision, &policyJSON,
+		&decisionStr, &policyJSON,
 		&idempotencyKey, &sessionID,
 		&userID, &sourceIP, &traceID,
 		&env.ReceivedAt, &requestedAt,
@@ -191,6 +192,8 @@ func (s *Store) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEn
 	if err != nil {
 		return nil, fmt.Errorf("evidence.GetEvent: %w", err)
 	}
+	env.Decision = types.Decision(decisionStr)
+
 	// Rebuild the full original request from persisted payload_json so fields
 	// such as params/resource/risk_factors are preserved for resume execution.
 	if len(env.PayloadJSON) > 0 {

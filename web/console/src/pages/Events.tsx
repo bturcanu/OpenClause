@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface Event {
-  id: string
+  event_id: string
   tool: string
   action: string
   decision: string
@@ -11,7 +11,7 @@ interface Event {
   tenant_id: string
   session_id: string
   agent_id: string
-  created_at: string
+  received_at: string
 }
 
 export default function Events() {
@@ -147,8 +147,8 @@ export default function Events() {
               <tr><td colSpan={8} style={{ textAlign: 'center', padding: 32, color: '#94a3b8' }}>No events found</td></tr>
             ) : (
               events.map(ev => (
-                <tr key={ev.id}>
-                  <td><Link to={`/events/${ev.id}`}>{ev.id.slice(0, 8)}…</Link></td>
+                <tr key={ev.event_id}>
+                  <td><Link to={`/events/${ev.event_id}`}>{ev.event_id.slice(0, 8)}…</Link></td>
                   <td>{ev.tool}</td>
                   <td>{ev.action}</td>
                   <td><span className={`badge badge-${ev.decision}`}>{ev.decision}</span></td>
@@ -159,7 +159,7 @@ export default function Events() {
                       <Link to={`/sessions/${ev.session_id}`}>{ev.session_id.slice(0, 8)}…</Link>
                     ) : '—'}
                   </td>
-                  <td>{new Date(ev.created_at).toLocaleString()}</td>
+                  <td>{formatDate(ev.received_at)}</td>
                 </tr>
               ))
             )}

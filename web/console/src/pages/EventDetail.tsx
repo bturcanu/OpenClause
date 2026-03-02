@@ -1,23 +1,22 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface EventData {
-  id: string
+  event_id: string
   tenant_id: string
   agent_id: string
   session_id: string
   tool: string
   action: string
-  payload: any
+  payload_json: any
   risk_score: number
   decision: string
-  policy_version_id: string
   policy_result: any
   prev_hash: string
   hash: string
-  execution_result: any
-  created_at: string
+  result: any
+  received_at: string
 }
 
 export default function EventDetail() {
@@ -43,7 +42,7 @@ export default function EventDetail() {
         <div className="flex-between">
           <div>
             <h2>Event Detail</h2>
-            <p>{event.id}</p>
+            <p>{event.event_id}</p>
           </div>
           <Link to="/events" className="btn btn-outline">← Back to Events</Link>
         </div>
@@ -88,20 +87,16 @@ export default function EventDetail() {
           </div>
         </div>
         <div className="detail-row">
-          <div className="detail-label">Policy Version</div>
-          <div className="detail-value">{event.policy_version_id || '—'}</div>
-        </div>
-        <div className="detail-row">
-          <div className="detail-label">Created At</div>
-          <div className="detail-value">{new Date(event.created_at).toLocaleString()}</div>
+          <div className="detail-label">Received At</div>
+          <div className="detail-value">{formatDate(event.received_at)}</div>
         </div>
       </div>
 
-      {event.payload && (
+      {event.payload_json && (
         <div className="detail-panel">
           <h3>Request Payload</h3>
           <pre style={{ background: '#f1f5f9', padding: 16, borderRadius: 6, fontSize: 12, overflow: 'auto' }}>
-            {JSON.stringify(event.payload, null, 2)}
+            {typeof event.payload_json === 'string' ? event.payload_json : JSON.stringify(event.payload_json, null, 2)}
           </pre>
         </div>
       )}
@@ -110,16 +105,16 @@ export default function EventDetail() {
         <div className="detail-panel">
           <h3>Policy Result</h3>
           <pre style={{ background: '#f1f5f9', padding: 16, borderRadius: 6, fontSize: 12, overflow: 'auto' }}>
-            {JSON.stringify(event.policy_result, null, 2)}
+            {typeof event.policy_result === 'string' ? event.policy_result : JSON.stringify(event.policy_result, null, 2)}
           </pre>
         </div>
       )}
 
-      {event.execution_result && (
+      {event.result && (
         <div className="detail-panel">
           <h3>Execution Result</h3>
           <pre style={{ background: '#f1f5f9', padding: 16, borderRadius: 6, fontSize: 12, overflow: 'auto' }}>
-            {JSON.stringify(event.execution_result, null, 2)}
+            {JSON.stringify(event.result, null, 2)}
           </pre>
         </div>
       )}

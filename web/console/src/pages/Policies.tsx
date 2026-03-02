@@ -1,12 +1,12 @@
 import { useState, useEffect, FormEvent } from 'react'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface PolicyVersion {
-  id: string
-  version: number
-  rego_source: string
-  created_by: string
-  created_at: string
+  id: number
+  version: string
+  deployed_by: string
+  deployed_at: string
+  notes: string
 }
 
 interface SimulationResult {
@@ -115,8 +115,8 @@ export default function Policies() {
             <tr>
               <th>Version</th>
               <th>ID</th>
-              <th>Created By</th>
-              <th>Created At</th>
+              <th>Deployed By</th>
+              <th>Deployed At</th>
             </tr>
           </thead>
           <tbody>
@@ -128,9 +128,9 @@ export default function Policies() {
               versions.map(v => (
                 <tr key={v.id}>
                   <td><span className="badge badge-blue">v{v.version}</span></td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{v.id.slice(0, 12)}…</td>
-                  <td>{v.created_by || '—'}</td>
-                  <td>{new Date(v.created_at).toLocaleString()}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{String(v.id)}</td>
+                  <td>{v.deployed_by || '—'}</td>
+                  <td>{formatDate(v.deployed_at)}</td>
                 </tr>
               ))
             )}

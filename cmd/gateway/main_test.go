@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/approvals"
+	"github.com/bturcanu/OpenClause/pkg/auth"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/go-chi/chi/v5"
@@ -335,6 +336,52 @@ func TestHandleToolCall_BadJSON(t *testing.T) {
 	rr := postToolCall(t, gw, []byte(`{invalid json`))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestExecute_WrongTenantReturns404(t *testing.T) {
+	const parentID = "00000000-0000-0000-0000-000000000003"
+	fe := newFakeEvidence()
+	fe.events[parentID] = &types.ToolCallEnvelope{
+		EventID:  parentID,
+		Request:  types.ToolCallRequest{TenantID: "tenant1"},
+		Decision: types.DecisionApprove,
+	}
+	gw := newTestGateway(fe, &fakeConnectors{}, &fakeApprovals{}, nil)
+
+	ks := auth.NewKeyStore("other-tenant:sk-other")
+	r := chi.NewRouter()
+	r.Use(auth.APIKeyAuth(ks, nil))
+	r.Post("/v1/toolcalls/{event_id}/execute", gw.HandleExecuteToolCall)
+	req := httptest.NewRequest(http.MethodPost, "/v1/toolcalls/"+parentID+"/execute", http.NoBody)
+	req.Header.Set("X-API-Key", "sk-other")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestExecute_AwaitingApprovalReturns409(t *testing.T) {
+	const parentID = "00000000-0000-0000-0000-000000000004"
+	fe := newFakeEvidence()
+	fe.events[parentID] = &types.ToolCallEnvelope{
+		EventID: parentID,
+		Request: types.ToolCallRequest{
+			TenantID: "tenant1",
+			AgentID:  "agent-1",
+			Tool:     "jira",
+			Action:   "issue.delete",
+		},
+		Decision: types.DecisionApprove,
+	}
+	fa := &fakeApprovals{usesLeft: 0}
+	gw := newTestGateway(fe, &fakeConnectors{}, fa, nil)
+
+	rr := executeRequest(t, gw, parentID)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409 (awaiting approval), got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

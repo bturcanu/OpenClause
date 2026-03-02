@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface OverviewData {
   total_events: number
@@ -17,12 +17,12 @@ interface TimeseriesBucket {
 }
 
 interface Event {
-  id: string
+  event_id: string
   tool: string
   action: string
   decision: string
   risk_score: number
-  created_at: string
+  received_at: string
   tenant_id: string
 }
 
@@ -103,8 +103,8 @@ export default function Overview() {
             ))}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8' }}>
-            {timeseries.length > 0 && <span>{new Date(timeseries[0].bucket).toLocaleDateString()}</span>}
-            {timeseries.length > 1 && <span>{new Date(timeseries[timeseries.length - 1].bucket).toLocaleDateString()}</span>}
+            {timeseries.length > 0 && <span>{formatDate(timeseries[0].bucket, 'date')}</span>}
+            {timeseries.length > 1 && <span>{formatDate(timeseries[timeseries.length - 1].bucket, 'date')}</span>}
           </div>
         </div>
       )}
@@ -126,12 +126,12 @@ export default function Overview() {
               <tr><td colSpan={5} style={{ textAlign: 'center', color: '#94a3b8' }}>No events yet</td></tr>
             ) : (
               events.map(ev => (
-                <tr key={ev.id}>
-                  <td><Link to={`/events/${ev.id}`}>{ev.tool}</Link></td>
+                <tr key={ev.event_id}>
+                  <td><Link to={`/events/${ev.event_id}`}>{ev.tool}</Link></td>
                   <td>{ev.action}</td>
                   <td><span className={`badge badge-${ev.decision}`}>{ev.decision}</span></td>
                   <td>{ev.risk_score}</td>
-                  <td>{new Date(ev.created_at).toLocaleString()}</td>
+                  <td>{formatDate(ev.received_at)}</td>
                 </tr>
               ))
             )}

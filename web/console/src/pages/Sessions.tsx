@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, formatDate } from '../api'
 
 interface Session {
   id: string
@@ -57,8 +57,8 @@ export default function Sessions() {
                   <td>{s.tenant_id?.slice(0, 8) || '—'}</td>
                   <td>{s.agent_id?.slice(0, 8) || '—'}</td>
                   <td>{s.event_count ?? '—'}</td>
-                  <td>{new Date(s.started_at).toLocaleString()}</td>
-                  <td>{s.ended_at ? new Date(s.ended_at).toLocaleString() : <span className="badge badge-green">Active</span>}</td>
+                  <td>{formatDate(s.started_at)}</td>
+                  <td>{s.ended_at ? formatDate(s.ended_at) : <span className="badge badge-green">Active</span>}</td>
                   <td><Link to={`/sessions/${s.id}`} className="btn btn-outline btn-sm">Timeline</Link></td>
                 </tr>
               ))
