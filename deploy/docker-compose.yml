@@ -61,7 +61,9 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      POSTGRES_SSLMODE: disable
       APPROVALS_ADDR: :8081
+      CONNECTOR_SLACK_URL: http://connector-slack:8082
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +107,7 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      POSTGRES_SSLMODE: disable
       OPA_URL: http://opa:8181
       APPROVALS_URL: http://approvals:8081
       CONNECTOR_SLACK_URL: http://connector-slack:8082
@@ -135,8 +138,9 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      POSTGRES_SSLMODE: disable
       CONSOLE_API_ADDR: :8090
-      CONSOLE_JWT_SECRET: ${CONSOLE_JWT_SECRET:-change-me-in-production-openclause-jwt-secret}
+      CONSOLE_JWT_SECRET: ${CONSOLE_JWT_SECRET:?CONSOLE_JWT_SECRET must be set in .env}
       OPA_URL: http://opa:8181
     depends_on:
       postgres:
