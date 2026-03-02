@@ -19,8 +19,14 @@ func TenantFromContext(ctx context.Context) string {
 	return v
 }
 
+// KeyLookup abstracts API key validation so both in-memory and DB-backed
+// stores can be used interchangeably by the middleware.
+type KeyLookup interface {
+	Lookup(apiKey string) (tenantID string, ok bool)
+}
+
 // APIKeyAuth returns middleware that validates API keys and sets tenant context.
-func APIKeyAuth(keys *KeyStore) func(http.Handler) http.Handler {
+func APIKeyAuth(keys KeyLookup) func(http.Handler) http.Handler {
 	skipPaths := map[string]bool{
 		"/healthz": true,
 		"/readyz":  true,

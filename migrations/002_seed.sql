@@ -2,13 +2,39 @@
 -- 002_seed.sql — Development seed data (do NOT run in production)
 -- ═══════════════════════════════════════════════════════════════════════════
 
-INSERT INTO tenants (id, name) VALUES
-    ('tenant1', 'Acme Corp'),
-    ('tenant2', 'Globex Inc')
+-- Bootstrap admin tenant
+INSERT INTO tenants (id, name, status) VALUES
+    ('tenant1', 'Acme Corp', 'active'),
+    ('tenant2', 'Globex Inc', 'active')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO agents (id, tenant_id, name) VALUES
-    ('agent-1', 'tenant1', 'Research Assistant'),
-    ('agent-2', 'tenant1', 'Ops Bot'),
-    ('agent-3', 'tenant2', 'Support Agent')
+INSERT INTO agents (id, tenant_id, name, status) VALUES
+    ('agent-1', 'tenant1', 'Research Assistant', 'active'),
+    ('agent-2', 'tenant1', 'Ops Bot', 'active'),
+    ('agent-3', 'tenant2', 'Support Agent', 'active')
+ON CONFLICT (id) DO NOTHING;
+
+-- Bootstrap API keys (hashed with SHA-256)
+-- sk-test-key-1 → SHA-256 hash
+-- sk-test-key-2 → SHA-256 hash
+INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status) VALUES
+    ('key-1', 'tenant1', 'Dev Key 1', 'sk-test-', 'e3e7a807044dfd09b1437e488cae0d2acab79b77e9af3aa9f80e60fbf58b64c7', 'active'),
+    ('key-2', 'tenant2', 'Dev Key 2', 'sk-test-', '1f3870be274f6c49b3e31a0c6728957f0a2b88c6ef2da54537bb27a9ba277a96', 'active')
+ON CONFLICT (id) DO NOTHING;
+
+-- Bootstrap console admin user
+-- Email: admin@openclause.dev
+-- Password: admin123 (bcrypt hash)
+INSERT INTO users (id, email, password_hash, name, status) VALUES
+    ('user-admin', 'admin@openclause.dev', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'Platform Admin', 'active')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO user_roles (id, user_id, tenant_id, role) VALUES
+    ('role-admin', 'user-admin', NULL, 'platform_admin')
+ON CONFLICT (id) DO NOTHING;
+
+-- Sample sessions for demo
+INSERT INTO sessions (id, tenant_id, agent_id, started_at) VALUES
+    ('session-1', 'tenant1', 'agent-1', NOW() - interval '1 hour'),
+    ('session-2', 'tenant1', 'agent-2', NOW() - interval '30 minutes')
 ON CONFLICT (id) DO NOTHING;

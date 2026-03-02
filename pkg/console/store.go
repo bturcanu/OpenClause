@@ -1,0 +1,1301 @@
+package console
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Types
+// ──────────────────────────────────────────────────────────────────────────────
+
+type Tenant struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Status    string          `json:"status"`
+	Config    json.RawMessage `json:"config"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type Agent struct {
+	ID        string          `json:"id"`
+	TenantID  string          `json:"tenant_id"`
+	Name      string          `json:"name"`
+	Status    string          `json:"status"`
+	Labels    json.RawMessage `json:"labels,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type APIKey struct {
+	ID         string     `json:"id"`
+	TenantID   string     `json:"tenant_id"`
+	Name       string     `json:"name"`
+	KeyPrefix  string     `json:"key_prefix"`
+	Status     string     `json:"status"`
+	CreatedAt  time.Time  `json:"created_at"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RawKey     string     `json:"raw_key,omitempty"`
+}
+
+type APIKeyCreateResult struct {
+	APIKey
+	RawKey string `json:"raw_key"`
+}
+
+type User struct {
+	ID        string    `json:"id"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type UserRole struct {
+	ID       string  `json:"id"`
+	UserID   string  `json:"user_id"`
+	TenantID *string `json:"tenant_id,omitempty"`
+	Role     string  `json:"role"`
+}
+
+type AnalyticsOverview struct {
+	TotalEvents      int64 `json:"total_events"`
+	AllowCount       int64 `json:"allow_count"`
+	DenyCount        int64 `json:"deny_count"`
+	ApproveCount     int64 `json:"approve_count"`
+	PendingApprovals int64 `json:"pending_approvals"`
+	ActiveTenants    int64 `json:"active_tenants"`
+	ActiveAgents     int64 `json:"active_agents"`
+}
+
+type EventListItem struct {
+	EventID    string    `json:"event_id"`
+	TenantID   string    `json:"tenant_id"`
+	AgentID    string    `json:"agent_id"`
+	Tool       string    `json:"tool"`
+	Action     string    `json:"action"`
+	Resource   string    `json:"resource"`
+	RiskScore  int       `json:"risk_score"`
+	Decision   string    `json:"decision"`
+	SessionID  string    `json:"session_id"`
+	TraceID    string    `json:"trace_id"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
+type EventDetail struct {
+	EventListItem
+	PayloadJSON  json.RawMessage `json:"payload_json"`
+	PolicyResult json.RawMessage `json:"policy_result,omitempty"`
+	Hash         string          `json:"hash"`
+	PrevHash     string          `json:"prev_hash"`
+	Result       *EventResult    `json:"result,omitempty"`
+}
+
+type EventResult struct {
+	Status     string          `json:"status"`
+	OutputJSON json.RawMessage `json:"output_json,omitempty"`
+	ErrorMsg   string          `json:"error_msg,omitempty"`
+	DurationMS int64           `json:"duration_ms"`
+}
+
+type Session struct {
+	ID         string     `json:"id"`
+	TenantID   string     `json:"tenant_id"`
+	AgentID    string     `json:"agent_id"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	EventCount int64      `json:"event_count,omitempty"`
+}
+
+type PolicyVersion struct {
+	ID         int64           `json:"id"`
+	TenantID   *string         `json:"tenant_id,omitempty"`
+	BundleHash string          `json:"bundle_hash"`
+	Version    string          `json:"version"`
+	PolicyData json.RawMessage `json:"policy_data,omitempty"`
+	DeployedBy string          `json:"deployed_by,omitempty"`
+	DeployedAt time.Time       `json:"deployed_at"`
+	Notes      string          `json:"notes,omitempty"`
+}
+
+type AlertRule struct {
+	ID           string          `json:"id"`
+	TenantID     string          `json:"tenant_id"`
+	Name         string          `json:"name"`
+	RuleType     string          `json:"rule_type"`
+	Config       json.RawMessage `json:"config"`
+	NotifyKind   string          `json:"notify_kind"`
+	NotifyTarget string          `json:"notify_target"`
+	Enabled      bool            `json:"enabled"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+type AlertEvent struct {
+	ID        string          `json:"id"`
+	RuleID    string          `json:"rule_id"`
+	TenantID  string          `json:"tenant_id"`
+	Severity  string          `json:"severity"`
+	Message   string          `json:"message"`
+	Details   json.RawMessage `json:"details,omitempty"`
+	Notified  bool            `json:"notified"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Store
+// ──────────────────────────────────────────────────────────────────────────────
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+// Pool exposes the underlying connection pool for ad-hoc queries
+// (e.g., approval grant creation in the console-api).
+func (s *Store) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
+const maxLimit = 100
+
+func clampLimit(limit int) int {
+	if limit <= 0 || limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
+func clampOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tenants
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) CreateTenant(ctx context.Context, name string, config json.RawMessage) (*Tenant, error) {
+	t := &Tenant{
+		ID:     uuid.NewString(),
+		Name:   name,
+		Status: "active",
+		Config: config,
+	}
+	if len(t.Config) == 0 {
+		t.Config = json.RawMessage(`{}`)
+	}
+
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO tenants (id, name, status, config)
+		VALUES ($1, $2, $3, $4)
+		RETURNING created_at`,
+		t.ID, t.Name, t.Status, t.Config,
+	).Scan(&t.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateTenant: %w", err)
+	}
+	return t, nil
+}
+
+func (s *Store) ListTenants(ctx context.Context, limit, offset int) ([]Tenant, error) {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, status, config, created_at
+		FROM tenants
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListTenants: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Tenant, 0)
+	for rows.Next() {
+		var t Tenant
+		if err := rows.Scan(&t.ID, &t.Name, &t.Status, &t.Config, &t.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListTenants scan: %w", err)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListTenants iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) GetTenant(ctx context.Context, id string) (*Tenant, error) {
+	var t Tenant
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, status, config, created_at
+		FROM tenants WHERE id = $1`, id,
+	).Scan(&t.ID, &t.Name, &t.Status, &t.Config, &t.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenant: %w", err)
+	}
+	return &t, nil
+}
+
+func (s *Store) UpdateTenantStatus(ctx context.Context, id, status string) error {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE tenants SET status = $2 WHERE id = $1`, id, status)
+	if err != nil {
+		return fmt.Errorf("console.UpdateTenantStatus: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.UpdateTenantStatus: tenant %s not found", id)
+	}
+	return nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Agents
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) CreateAgent(ctx context.Context, tenantID, name string) (*Agent, error) {
+	a := &Agent{
+		ID:       uuid.NewString(),
+		TenantID: tenantID,
+		Name:     name,
+		Status:   "active",
+		Labels:   json.RawMessage(`{}`),
+	}
+
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO agents (id, tenant_id, name, status, labels)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING created_at`,
+		a.ID, a.TenantID, a.Name, a.Status, a.Labels,
+	).Scan(&a.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateAgent: %w", err)
+	}
+	return a, nil
+}
+
+func (s *Store) ListAgents(ctx context.Context, tenantID string, limit, offset int) ([]Agent, error) {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, status, labels, created_at
+		FROM agents
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListAgents: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Agent, 0)
+	for rows.Next() {
+		var a Agent
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.Labels, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListAgents scan: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListAgents iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateAgentStatus(ctx context.Context, id, status string) error {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE agents SET status = $2 WHERE id = $1`, id, status)
+	if err != nil {
+		return fmt.Errorf("console.UpdateAgentStatus: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.UpdateAgentStatus: agent %s not found", id)
+	}
+	return nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// API Keys
+// ──────────────────────────────────────────────────────────────────────────────
+
+func generateAPIKey() (raw string, prefix string, hash string, err error) {
+	b := make([]byte, 32)
+	if _, err = rand.Read(b); err != nil {
+		return "", "", "", fmt.Errorf("generate random bytes: %w", err)
+	}
+	raw = "sk-oc-" + hex.EncodeToString(b)
+	prefix = raw[:8]
+	h := sha256.Sum256([]byte(raw))
+	hash = hex.EncodeToString(h[:])
+	return raw, prefix, hash, nil
+}
+
+func hashAPIKey(raw string) string {
+	h := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(h[:])
+}
+
+func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKeyCreateResult, error) {
+	raw, prefix, keyHash, err := generateAPIKey()
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateAPIKey: %w", err)
+	}
+
+	k := APIKey{
+		ID:        uuid.NewString(),
+		TenantID:  tenantID,
+		Name:      name,
+		KeyPrefix: prefix,
+		Status:    "active",
+	}
+
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING created_at`,
+		k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status,
+	).Scan(&k.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateAPIKey: %w", err)
+	}
+
+	return &APIKeyCreateResult{APIKey: k, RawKey: raw}, nil
+}
+
+func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, key_prefix, status, created_at, revoked_at, last_used_at
+		FROM api_keys
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListAPIKeys: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]APIKey, 0)
+	for rows.Next() {
+		var k APIKey
+		if err := rows.Scan(&k.ID, &k.TenantID, &k.Name, &k.KeyPrefix, &k.Status,
+			&k.CreatedAt, &k.RevokedAt, &k.LastUsedAt); err != nil {
+			return nil, fmt.Errorf("console.ListAPIKeys scan: %w", err)
+		}
+		out = append(out, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListAPIKeys iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) RevokeAPIKey(ctx context.Context, keyID string) error {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE api_keys SET status = 'revoked', revoked_at = NOW()
+		WHERE id = $1 AND status = 'active'`, keyID)
+	if err != nil {
+		return fmt.Errorf("console.RevokeAPIKey: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.RevokeAPIKey: key %s not found or already revoked", keyID)
+	}
+	return nil
+}
+
+func (s *Store) LookupAPIKey(ctx context.Context, rawKey string) (tenantID string, keyID string, err error) {
+	if len(rawKey) < 8 {
+		return "", "", fmt.Errorf("console.LookupAPIKey: invalid key format")
+	}
+	prefix := rawKey[:8]
+	computedHash := hashAPIKey(rawKey)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, key_hash
+		FROM api_keys
+		WHERE key_prefix = $1 AND status = 'active'`, prefix)
+	if err != nil {
+		return "", "", fmt.Errorf("console.LookupAPIKey: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, tid, storedHash string
+		if err := rows.Scan(&id, &tid, &storedHash); err != nil {
+			return "", "", fmt.Errorf("console.LookupAPIKey scan: %w", err)
+		}
+		if subtle.ConstantTimeCompare([]byte(computedHash), []byte(storedHash)) == 1 {
+			rows.Close()
+			_, _ = s.pool.Exec(ctx, `
+				UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`, id)
+			return tid, id, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", fmt.Errorf("console.LookupAPIKey iteration: %w", err)
+	}
+	return "", "", fmt.Errorf("console.LookupAPIKey: key not found")
+}
+
+func (s *Store) RotateAPIKeys(ctx context.Context, tenantID string) (*APIKeyCreateResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeys begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	_, err = tx.Exec(ctx, `
+		UPDATE api_keys SET status = 'revoked', revoked_at = NOW()
+		WHERE tenant_id = $1 AND status = 'active'`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeys revoke: %w", err)
+	}
+
+	raw, prefix, keyHash, err := generateAPIKey()
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeys: %w", err)
+	}
+
+	k := APIKey{
+		ID:        uuid.NewString(),
+		TenantID:  tenantID,
+		Name:      "rotated-key",
+		KeyPrefix: prefix,
+		Status:    "active",
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING created_at`,
+		k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status,
+	).Scan(&k.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeys insert: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeys commit: %w", err)
+	}
+
+	return &APIKeyCreateResult{APIKey: k, RawKey: raw}, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Users
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) CreateUser(ctx context.Context, email, password, name, role string, tenantID *string) (*User, error) {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateUser hash password: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateUser begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	u := &User{
+		ID:    uuid.NewString(),
+		Email: email,
+		Name:  name,
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (id, email, password_hash, name)
+		VALUES ($1, $2, $3, $4)
+		RETURNING status, created_at`,
+		u.ID, u.Email, string(hashed), u.Name,
+	).Scan(&u.Status, &u.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateUser insert user: %w", err)
+	}
+
+	roleID := uuid.NewString()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_roles (id, user_id, tenant_id, role)
+		VALUES ($1, $2, $3, $4)`,
+		roleID, u.ID, tenantID, role)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateUser insert role: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("console.CreateUser commit: %w", err)
+	}
+	return u, nil
+}
+
+func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (*User, []UserRole, error) {
+	var u User
+	var passwordHash string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, email, password_hash, name, status, created_at
+		FROM users WHERE email = $1`, email,
+	).Scan(&u.ID, &u.Email, &passwordHash, &u.Name, &u.Status, &u.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil, fmt.Errorf("console.AuthenticateUser: invalid credentials")
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("console.AuthenticateUser: %w", err)
+	}
+
+	if u.Status != "active" {
+		return nil, nil, fmt.Errorf("console.AuthenticateUser: user account disabled")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+		return nil, nil, fmt.Errorf("console.AuthenticateUser: invalid credentials")
+	}
+
+	roles, err := s.GetUserRoles(ctx, u.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("console.AuthenticateUser: %w", err)
+	}
+	return &u, roles, nil
+}
+
+func (s *Store) GetUserRoles(ctx context.Context, userID string) ([]UserRole, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, tenant_id, role
+		FROM user_roles WHERE user_id = $1`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetUserRoles: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]UserRole, 0)
+	for rows.Next() {
+		var r UserRole
+		if err := rows.Scan(&r.ID, &r.UserID, &r.TenantID, &r.Role); err != nil {
+			return nil, fmt.Errorf("console.GetUserRoles scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetUserRoles iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, email, name, status, created_at
+		FROM users WHERE id = $1`, id,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.Status, &u.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetUser: %w", err)
+	}
+	return &u, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Analytics
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) GetAnalyticsOverview(ctx context.Context, tenantID string, since time.Time) (*AnalyticsOverview, error) {
+	var o AnalyticsOverview
+
+	// Event counts — optionally scoped to a tenant.
+	var eventQuery string
+	var eventArgs []any
+	if tenantID != "" {
+		eventQuery = `
+			SELECT
+				COUNT(*),
+				COUNT(*) FILTER (WHERE decision = 'allow'),
+				COUNT(*) FILTER (WHERE decision = 'deny'),
+				COUNT(*) FILTER (WHERE decision = 'approve')
+			FROM tool_events
+			WHERE tenant_id = $1 AND received_at >= $2`
+		eventArgs = []any{tenantID, since}
+	} else {
+		eventQuery = `
+			SELECT
+				COUNT(*),
+				COUNT(*) FILTER (WHERE decision = 'allow'),
+				COUNT(*) FILTER (WHERE decision = 'deny'),
+				COUNT(*) FILTER (WHERE decision = 'approve')
+			FROM tool_events
+			WHERE received_at >= $1`
+		eventArgs = []any{since}
+	}
+
+	err := s.pool.QueryRow(ctx, eventQuery, eventArgs...).Scan(
+		&o.TotalEvents, &o.AllowCount, &o.DenyCount, &o.ApproveCount)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetAnalyticsOverview events: %w", err)
+	}
+
+	// Pending approvals.
+	var pendingQuery string
+	var pendingArgs []any
+	if tenantID != "" {
+		pendingQuery = `
+			SELECT COUNT(*) FROM approval_requests
+			WHERE tenant_id = $1 AND status = 'pending' AND expires_at > NOW()`
+		pendingArgs = []any{tenantID}
+	} else {
+		pendingQuery = `
+			SELECT COUNT(*) FROM approval_requests
+			WHERE status = 'pending' AND expires_at > NOW()`
+	}
+
+	err = s.pool.QueryRow(ctx, pendingQuery, pendingArgs...).Scan(&o.PendingApprovals)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetAnalyticsOverview pending: %w", err)
+	}
+
+	// Active tenants + agents.
+	err = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM tenants WHERE status = 'active'`).Scan(&o.ActiveTenants)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetAnalyticsOverview tenants: %w", err)
+	}
+
+	if tenantID != "" {
+		err = s.pool.QueryRow(ctx, `
+			SELECT COUNT(*) FROM agents WHERE tenant_id = $1 AND status = 'active'`,
+			tenantID).Scan(&o.ActiveAgents)
+	} else {
+		err = s.pool.QueryRow(ctx, `
+			SELECT COUNT(*) FROM agents WHERE status = 'active'`).Scan(&o.ActiveAgents)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetAnalyticsOverview agents: %w", err)
+	}
+
+	return &o, nil
+}
+
+func (s *Store) GetDecisionTimeseries(ctx context.Context, tenantID string, since time.Time, bucketMinutes int) ([]map[string]any, error) {
+	if bucketMinutes <= 0 {
+		bucketMinutes = 60
+	}
+	bucketSec := int64(bucketMinutes) * 60
+
+	var query string
+	var args []any
+	if tenantID != "" {
+		query = `
+			SELECT
+				to_timestamp(floor(extract(epoch FROM received_at) / $3) * $3) AS bucket,
+				COUNT(*) AS total,
+				COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+				COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+				COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count
+			FROM tool_events
+			WHERE tenant_id = $1 AND received_at >= $2
+			GROUP BY bucket
+			ORDER BY bucket ASC`
+		args = []any{tenantID, since, bucketSec}
+	} else {
+		query = `
+			SELECT
+				to_timestamp(floor(extract(epoch FROM received_at) / $2) * $2) AS bucket,
+				COUNT(*) AS total,
+				COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+				COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+				COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count
+			FROM tool_events
+			WHERE received_at >= $1
+			GROUP BY bucket
+			ORDER BY bucket ASC`
+		args = []any{since, bucketSec}
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetDecisionTimeseries: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		var bucket time.Time
+		var total, allow, deny, approve int64
+		if err := rows.Scan(&bucket, &total, &allow, &deny, &approve); err != nil {
+			return nil, fmt.Errorf("console.GetDecisionTimeseries scan: %w", err)
+		}
+		out = append(out, map[string]any{
+			"bucket":        bucket,
+			"total":         total,
+			"allow_count":   allow,
+			"deny_count":    deny,
+			"approve_count": approve,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetDecisionTimeseries iteration: %w", err)
+	}
+	return out, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Events / Audit Trail
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) ListEvents(ctx context.Context, tenantID, agentID, tool, action, decision, sessionID string, limit, offset int) ([]EventListItem, error) {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+
+	var clauses []string
+	var args []any
+	argIdx := 1
+
+	addFilter := func(col, val string) {
+		if val != "" {
+			clauses = append(clauses, fmt.Sprintf("%s = $%d", col, argIdx))
+			args = append(args, val)
+			argIdx++
+		}
+	}
+
+	addFilter("tenant_id", tenantID)
+	addFilter("agent_id", agentID)
+	addFilter("tool", tool)
+	addFilter("action", action)
+	addFilter("decision", decision)
+	addFilter("session_id", sessionID)
+
+	where := ""
+	if len(clauses) > 0 {
+		where = "WHERE " + strings.Join(clauses, " AND ")
+	}
+
+	query := fmt.Sprintf(`
+		SELECT event_id, tenant_id, agent_id, tool, action,
+		       COALESCE(payload_json->>'resource', ''), risk_score,
+		       decision, session_id, trace_id, received_at
+		FROM tool_events
+		%s
+		ORDER BY received_at DESC
+		LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListEvents: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]EventListItem, 0)
+	for rows.Next() {
+		var e EventListItem
+		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
+			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
+			&e.ReceivedAt); err != nil {
+			return nil, fmt.Errorf("console.ListEvents scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListEvents iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) GetEventDetail(ctx context.Context, eventID string) (*EventDetail, error) {
+	var d EventDetail
+	var policyResult []byte
+	var resultStatus *string
+	var resultOutput []byte
+	var resultError *string
+	var resultDuration *int64
+
+	err := s.pool.QueryRow(ctx, `
+		SELECT e.event_id, e.tenant_id, e.agent_id, e.tool, e.action,
+		       COALESCE(e.payload_json->>'resource', ''), e.risk_score,
+		       e.decision, e.session_id, e.trace_id, e.received_at,
+		       e.payload_json, e.policy_result, e.hash, e.prev_hash,
+		       r.status, r.output_json, r.error_msg, r.duration_ms
+		FROM tool_events e
+		LEFT JOIN tool_results r ON r.event_id = e.event_id
+		WHERE e.event_id = $1`, eventID,
+	).Scan(
+		&d.EventID, &d.TenantID, &d.AgentID, &d.Tool, &d.Action,
+		&d.Resource, &d.RiskScore,
+		&d.Decision, &d.SessionID, &d.TraceID, &d.ReceivedAt,
+		&d.PayloadJSON, &policyResult, &d.Hash, &d.PrevHash,
+		&resultStatus, &resultOutput, &resultError, &resultDuration,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetEventDetail: %w", err)
+	}
+
+	if len(policyResult) > 0 {
+		d.PolicyResult = policyResult
+	}
+
+	if resultStatus != nil {
+		d.Result = &EventResult{
+			Status: *resultStatus,
+		}
+		if len(resultOutput) > 0 {
+			d.Result.OutputJSON = resultOutput
+		}
+		if resultError != nil {
+			d.Result.ErrorMsg = *resultError
+		}
+		if resultDuration != nil {
+			d.Result.DurationMS = *resultDuration
+		}
+	}
+
+	return &d, nil
+}
+
+func (s *Store) ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error {
+	rows, err := s.pool.Query(ctx, `
+		SELECT event_id, tenant_id, agent_id, tool, action,
+		       COALESCE(payload_json->>'resource', ''), risk_score,
+		       decision, session_id, trace_id, received_at
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2 AND received_at <= $3
+		ORDER BY received_at ASC`, tenantID, since, until)
+	if err != nil {
+		return fmt.Errorf("console.ExportEventsCSV: %w", err)
+	}
+	defer rows.Close()
+
+	cw := csv.NewWriter(w)
+	defer cw.Flush()
+
+	header := []string{"event_id", "tenant_id", "agent_id", "tool", "action",
+		"resource", "risk_score", "decision", "session_id", "trace_id", "received_at"}
+	if err := cw.Write(header); err != nil {
+		return fmt.Errorf("console.ExportEventsCSV write header: %w", err)
+	}
+
+	for rows.Next() {
+		var e EventListItem
+		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
+			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
+			&e.ReceivedAt); err != nil {
+			return fmt.Errorf("console.ExportEventsCSV scan: %w", err)
+		}
+		record := []string{
+			e.EventID, e.TenantID, e.AgentID, e.Tool, e.Action,
+			e.Resource, strconv.Itoa(e.RiskScore), e.Decision,
+			e.SessionID, e.TraceID, e.ReceivedAt.Format(time.RFC3339),
+		}
+		if err := cw.Write(record); err != nil {
+			return fmt.Errorf("console.ExportEventsCSV write row: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("console.ExportEventsCSV iteration: %w", err)
+	}
+	return nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Sessions
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) ListSessions(ctx context.Context, tenantID string, limit, offset int) ([]Session, error) {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.id, s.tenant_id, s.agent_id, s.started_at, s.ended_at,
+		       COALESCE(ec.cnt, 0)
+		FROM sessions s
+		LEFT JOIN (
+			SELECT session_id, COUNT(*) AS cnt
+			FROM tool_events
+			WHERE tenant_id = $1 AND session_id != ''
+			GROUP BY session_id
+		) ec ON ec.session_id = s.id
+		WHERE s.tenant_id = $1
+		ORDER BY s.started_at DESC
+		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListSessions: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Session, 0)
+	for rows.Next() {
+		var sess Session
+		if err := rows.Scan(&sess.ID, &sess.TenantID, &sess.AgentID,
+			&sess.StartedAt, &sess.EndedAt, &sess.EventCount); err != nil {
+			return nil, fmt.Errorf("console.ListSessions scan: %w", err)
+		}
+		out = append(out, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListSessions iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string) ([]EventListItem, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT event_id, tenant_id, agent_id, tool, action,
+		       COALESCE(payload_json->>'resource', ''), risk_score,
+		       decision, session_id, trace_id, received_at
+		FROM tool_events
+		WHERE session_id = $1
+		ORDER BY received_at ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetSessionTimeline: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]EventListItem, 0)
+	for rows.Next() {
+		var e EventListItem
+		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
+			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
+			&e.ReceivedAt); err != nil {
+			return nil, fmt.Errorf("console.GetSessionTimeline scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetSessionTimeline iteration: %w", err)
+	}
+	return out, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Policy Versions
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) CreatePolicyVersion(ctx context.Context, tenantID *string, version, bundleHash, deployedBy, notes string, policyData json.RawMessage) (*PolicyVersion, error) {
+	pv := &PolicyVersion{
+		TenantID:   tenantID,
+		Version:    version,
+		BundleHash: bundleHash,
+		DeployedBy: deployedBy,
+		Notes:      notes,
+		PolicyData: policyData,
+	}
+	if len(pv.PolicyData) == 0 {
+		pv.PolicyData = json.RawMessage(`{}`)
+	}
+
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO policy_versions (tenant_id, version, bundle_hash, deployed_by, notes, policy_data)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, deployed_at`,
+		pv.TenantID, pv.Version, pv.BundleHash, pv.DeployedBy, pv.Notes, pv.PolicyData,
+	).Scan(&pv.ID, &pv.DeployedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreatePolicyVersion: %w", err)
+	}
+	return pv, nil
+}
+
+func (s *Store) ListPolicyVersions(ctx context.Context, tenantID string, limit int) ([]PolicyVersion, error) {
+	limit = clampLimit(limit)
+
+	var query string
+	var args []any
+	if tenantID != "" {
+		query = `
+			SELECT id, tenant_id, bundle_hash, version, policy_data, deployed_by, deployed_at, notes
+			FROM policy_versions
+			WHERE tenant_id = $1
+			ORDER BY deployed_at DESC
+			LIMIT $2`
+		args = []any{tenantID, limit}
+	} else {
+		query = `
+			SELECT id, tenant_id, bundle_hash, version, policy_data, deployed_by, deployed_at, notes
+			FROM policy_versions
+			ORDER BY deployed_at DESC
+			LIMIT $1`
+		args = []any{limit}
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListPolicyVersions: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]PolicyVersion, 0)
+	for rows.Next() {
+		var pv PolicyVersion
+		if err := rows.Scan(&pv.ID, &pv.TenantID, &pv.BundleHash, &pv.Version,
+			&pv.PolicyData, &pv.DeployedBy, &pv.DeployedAt, &pv.Notes); err != nil {
+			return nil, fmt.Errorf("console.ListPolicyVersions scan: %w", err)
+		}
+		out = append(out, pv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListPolicyVersions iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) GetPolicyVersion(ctx context.Context, id int64) (*PolicyVersion, error) {
+	var pv PolicyVersion
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, bundle_hash, version, policy_data, deployed_by, deployed_at, notes
+		FROM policy_versions WHERE id = $1`, id,
+	).Scan(&pv.ID, &pv.TenantID, &pv.BundleHash, &pv.Version,
+		&pv.PolicyData, &pv.DeployedBy, &pv.DeployedAt, &pv.Notes)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetPolicyVersion: %w", err)
+	}
+	return &pv, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Alert Rules
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) CreateAlertRule(ctx context.Context, rule AlertRule) (*AlertRule, error) {
+	rule.ID = uuid.NewString()
+	if len(rule.Config) == 0 {
+		rule.Config = json.RawMessage(`{}`)
+	}
+
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO alert_rules (id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING created_at`,
+		rule.ID, rule.TenantID, rule.Name, rule.RuleType,
+		rule.Config, rule.NotifyKind, rule.NotifyTarget, rule.Enabled,
+	).Scan(&rule.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateAlertRule: %w", err)
+	}
+	return &rule, nil
+}
+
+func (s *Store) ListAlertRules(ctx context.Context, tenantID string) ([]AlertRule, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled, created_at
+		FROM alert_rules
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListAlertRules: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]AlertRule, 0)
+	for rows.Next() {
+		var r AlertRule
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.RuleType,
+			&r.Config, &r.NotifyKind, &r.NotifyTarget, &r.Enabled, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListAlertRules scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListAlertRules iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateAlertRule(ctx context.Context, id string, enabled bool) error {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE alert_rules SET enabled = $2 WHERE id = $1`, id, enabled)
+	if err != nil {
+		return fmt.Errorf("console.UpdateAlertRule: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.UpdateAlertRule: rule %s not found", id)
+	}
+	return nil
+}
+
+func (s *Store) CreateAlertEvent(ctx context.Context, ruleID, tenantID, severity, message string, details json.RawMessage) (*AlertEvent, error) {
+	ae := &AlertEvent{
+		ID:       uuid.NewString(),
+		RuleID:   ruleID,
+		TenantID: tenantID,
+		Severity: severity,
+		Message:  message,
+		Details:  details,
+	}
+	if len(ae.Details) == 0 {
+		ae.Details = json.RawMessage(`{}`)
+	}
+
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO alert_events (id, rule_id, tenant_id, severity, message, details)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING notified, created_at`,
+		ae.ID, ae.RuleID, ae.TenantID, ae.Severity, ae.Message, ae.Details,
+	).Scan(&ae.Notified, &ae.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateAlertEvent: %w", err)
+	}
+	return ae, nil
+}
+
+func (s *Store) ListAlertEvents(ctx context.Context, tenantID string, limit, offset int) ([]AlertEvent, error) {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, rule_id, tenant_id, severity, message, details, notified, created_at
+		FROM alert_events
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListAlertEvents: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]AlertEvent, 0)
+	for rows.Next() {
+		var ae AlertEvent
+		if err := rows.Scan(&ae.ID, &ae.RuleID, &ae.TenantID, &ae.Severity,
+			&ae.Message, &ae.Details, &ae.Notified, &ae.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListAlertEvents scan: %w", err)
+		}
+		out = append(out, ae)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListAlertEvents iteration: %w", err)
+	}
+	return out, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Usage Counters
+// ──────────────────────────────────────────────────────────────────────────────
+
+type UsageCounter struct {
+	TenantID       string `json:"tenant_id"`
+	CounterDate    string `json:"counter_date"`
+	Requests       int64  `json:"requests"`
+	Approvals      int64  `json:"approvals"`
+	Executions     int64  `json:"executions"`
+	ConnectorCalls int64  `json:"connector_calls"`
+}
+
+var validUsageFields = map[string]string{
+	"requests":        "requests",
+	"approvals":       "approvals",
+	"executions":      "executions",
+	"connector_calls": "connector_calls",
+}
+
+// IncrementUsageCounter atomically increments a daily usage counter for the
+// given tenant. Field must be one of: requests, approvals, executions,
+// connector_calls.
+func (s *Store) IncrementUsageCounter(ctx context.Context, tenantID string, field string) error {
+	col, ok := validUsageFields[field]
+	if !ok {
+		return fmt.Errorf("console.IncrementUsageCounter: invalid field %q", field)
+	}
+
+	today := time.Now().UTC().Format("2006-01-02")
+	query := fmt.Sprintf(`
+		INSERT INTO usage_counters (tenant_id, counter_date, %s)
+		VALUES ($1, $2, 1)
+		ON CONFLICT (tenant_id, counter_date)
+		DO UPDATE SET %s = usage_counters.%s + 1`, col, col, col)
+
+	_, err := s.pool.Exec(ctx, query, tenantID, today)
+	if err != nil {
+		return fmt.Errorf("console.IncrementUsageCounter: %w", err)
+	}
+	return nil
+}
+
+// GetUsageCounters returns daily usage counters for a tenant since the given
+// timestamp, ordered by date ascending.
+func (s *Store) GetUsageCounters(ctx context.Context, tenantID string, since time.Time) ([]UsageCounter, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT tenant_id, counter_date::text, requests, approvals, executions, connector_calls
+		FROM usage_counters
+		WHERE tenant_id = $1 AND counter_date >= $2::date
+		ORDER BY counter_date ASC`, tenantID, since)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetUsageCounters: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]UsageCounter, 0)
+	for rows.Next() {
+		var uc UsageCounter
+		if err := rows.Scan(&uc.TenantID, &uc.CounterDate, &uc.Requests,
+			&uc.Approvals, &uc.Executions, &uc.ConnectorCalls); err != nil {
+			return nil, fmt.Errorf("console.GetUsageCounters scan: %w", err)
+		}
+		out = append(out, uc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetUsageCounters iteration: %w", err)
+	}
+	return out, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Connectors (metadata from observed tool events)
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (s *Store) ListConnectors(ctx context.Context) ([]map[string]any, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT tool, array_agg(DISTINCT action ORDER BY action) AS actions, COUNT(*) AS event_count
+		FROM tool_events
+		GROUP BY tool
+		ORDER BY tool`)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListConnectors: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		var tool string
+		var actions []string
+		var eventCount int64
+		if err := rows.Scan(&tool, &actions, &eventCount); err != nil {
+			return nil, fmt.Errorf("console.ListConnectors scan: %w", err)
+		}
+		out = append(out, map[string]any{
+			"tool":        tool,
+			"actions":     actions,
+			"event_count": eventCount,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListConnectors iteration: %w", err)
+	}
+	return out, nil
+}

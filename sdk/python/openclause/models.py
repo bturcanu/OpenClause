@@ -1,0 +1,124 @@
+"""Typed request and response models for the OpenClause API."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ToolCallRequest:
+    """Represents a tool-call submission to the OpenClause gateway."""
+
+    tenant_id: str
+    agent_id: str
+    tool: str
+    action: str
+    idempotency_key: str
+    params: dict | None = None
+    resource: str = ""
+    risk_score: int = 0
+    risk_factors: list[str] | None = None
+    user_id: str = ""
+    session_id: str = ""
+    trace_id: str = ""
+    schema_version: str = "1.0"
+
+    def to_dict(self) -> dict:
+        payload: dict = {
+            "tenant_id": self.tenant_id,
+            "agent_id": self.agent_id,
+            "tool": self.tool,
+            "action": self.action,
+            "idempotency_key": self.idempotency_key,
+            "schema_version": self.schema_version,
+        }
+        if self.params is not None:
+            payload["params"] = self.params
+        if self.resource:
+            payload["resource"] = self.resource
+        if self.risk_score:
+            payload["risk_score"] = self.risk_score
+        if self.risk_factors:
+            payload["risk_factors"] = self.risk_factors
+        if self.user_id:
+            payload["user_id"] = self.user_id
+        if self.session_id:
+            payload["session_id"] = self.session_id
+        if self.trace_id:
+            payload["trace_id"] = self.trace_id
+        return payload
+
+
+@dataclass
+class ExecutionResult:
+    """Result returned after a tool call is executed."""
+
+    status: str
+    output_json: dict | None = None
+    error: str = ""
+    duration_ms: int = 0
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ExecutionResult:
+        return cls(
+            status=data.get("status", ""),
+            output_json=data.get("output_json"),
+            error=data.get("error", ""),
+            duration_ms=data.get("duration_ms", 0),
+        )
+
+
+@dataclass
+class ToolCallResponse:
+    """Response from the OpenClause gateway for a tool-call operation."""
+
+    event_id: str
+    decision: str
+    reason: str = ""
+    approval_url: str = ""
+    result: ExecutionResult | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ToolCallResponse:
+        result = None
+        if data.get("result"):
+            result = ExecutionResult.from_dict(data["result"])
+        return cls(
+            event_id=data.get("event_id", ""),
+            decision=data.get("decision", ""),
+            reason=data.get("reason", ""),
+            approval_url=data.get("approval_url", ""),
+            result=result,
+        )
+
+
+@dataclass
+class ToolCallEvent:
+    """Full event record returned by GET /v1/toolcalls/{event_id}."""
+
+    event_id: str
+    decision: str
+    tenant_id: str = ""
+    agent_id: str = ""
+    tool: str = ""
+    action: str = ""
+    reason: str = ""
+    approval_url: str = ""
+    result: ExecutionResult | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ToolCallEvent:
+        result = None
+        if data.get("result"):
+            result = ExecutionResult.from_dict(data["result"])
+        return cls(
+            event_id=data.get("event_id", ""),
+            decision=data.get("decision", ""),
+            tenant_id=data.get("tenant_id", ""),
+            agent_id=data.get("agent_id", ""),
+            tool=data.get("tool", ""),
+            action=data.get("action", ""),
+            reason=data.get("reason", ""),
+            approval_url=data.get("approval_url", ""),
+            result=result,
+        )

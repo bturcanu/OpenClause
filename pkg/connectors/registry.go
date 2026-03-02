@@ -14,10 +14,24 @@ import (
 
 const maxConnectorResponseBytes = 4 << 20 // 4 MB
 
+// ConnectorInfo describes a registered connector for listing/discovery.
+type ConnectorInfo struct {
+	Name    string   `json:"name"`
+	BaseURL string   `json:"base_url,omitempty"`
+	Actions []string `json:"actions"`
+	Type    string   `json:"type"` // "remote" or "builtin"
+}
+
+type builtinEntry struct {
+	actions []string
+	handler func(context.Context, ExecRequest) ExecResponse
+}
+
 // Registry maps tool names to connector base URLs. Thread-safe.
 type Registry struct {
 	mu            sync.RWMutex
 	routes        map[string]string // tool → base URL
+	builtins      map[string]builtinEntry
 	httpClient    *http.Client
 	internalToken string
 }
@@ -25,29 +39,74 @@ type Registry struct {
 // NewRegistry creates a connector registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		routes: make(map[string]string),
+		routes:   make(map[string]string),
+		builtins: make(map[string]builtinEntry),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
-// Register maps a tool name to a connector URL.
+// Register maps a tool name to a remote connector URL.
 func (r *Registry) Register(tool, baseURL string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.routes[tool] = baseURL
 }
 
+// RegisterBuiltin registers an in-process connector that is invoked
+// directly without HTTP. Remote connectors take precedence if both exist
+// for the same tool name.
+func (r *Registry) RegisterBuiltin(name string, actions []string, handler func(context.Context, ExecRequest) ExecResponse) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.builtins[name] = builtinEntry{actions: actions, handler: handler}
+}
+
+// ListAll returns metadata for every registered connector (remote + builtin).
+func (r *Registry) ListAll() []ConnectorInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	seen := make(map[string]bool, len(r.routes)+len(r.builtins))
+	out := make([]ConnectorInfo, 0, len(r.routes)+len(r.builtins))
+
+	for tool, baseURL := range r.routes {
+		seen[tool] = true
+		out = append(out, ConnectorInfo{
+			Name:    tool,
+			BaseURL: baseURL,
+			Type:    "remote",
+		})
+	}
+	for name, entry := range r.builtins {
+		if seen[name] {
+			continue
+		}
+		out = append(out, ConnectorInfo{
+			Name:    name,
+			Actions: entry.actions,
+			Type:    "builtin",
+		})
+	}
+	return out
+}
+
 // Exec routes the request to the correct connector and returns the result.
+// Remote connectors (HTTP) take precedence; built-in connectors are used as fallback.
 func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, error) {
 	r.mu.RLock()
-	baseURL, ok := r.routes[req.Tool]
+	baseURL, hasRemote := r.routes[req.Tool]
+	builtin, hasBuiltin := r.builtins[req.Tool]
 	token := r.internalToken
 	client := r.httpClient
 	r.mu.RUnlock()
 
-	if !ok {
+	if !hasRemote && hasBuiltin {
+		resp := builtin.handler(ctx, req)
+		return &resp, nil
+	}
+	if !hasRemote {
 		return nil, fmt.Errorf("no connector registered for tool %q", req.Tool)
 	}
 

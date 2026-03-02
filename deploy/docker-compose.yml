@@ -123,6 +123,38 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  console-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: console-api
+    ports:
+      - "8090:8090"
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      CONSOLE_API_ADDR: :8090
+      CONSOLE_JWT_SECRET: ${CONSOLE_JWT_SECRET:-change-me-in-production-openclause-jwt-secret}
+      OPA_URL: http://opa:8181
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+    restart: unless-stopped
+
+  console-ui:
+    build:
+      context: ../web/console
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - console-api
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   minio_data:

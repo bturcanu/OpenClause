@@ -7,6 +7,7 @@
 CREATE TABLE IF NOT EXISTS tenants (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     config      JSONB DEFAULT '{}',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -17,15 +18,68 @@ CREATE TABLE IF NOT EXISTS agents (
     id          TEXT PRIMARY KEY,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id),
     name        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     labels      JSONB DEFAULT '{}',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
 
+-- ── API Keys (DB-backed, hashed) ────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+    name        TEXT NOT NULL DEFAULT '',
+    key_prefix  TEXT NOT NULL,
+    key_hash    TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at  TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix) WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash) WHERE status = 'active';
+
+-- ── Console Users ───────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    name          TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    id        TEXT PRIMARY KEY,
+    user_id   TEXT NOT NULL REFERENCES users(id),
+    tenant_id TEXT,
+    role      TEXT NOT NULL CHECK (role IN ('platform_admin', 'tenant_admin', 'approver', 'viewer')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, tenant_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
+
+-- ── Sessions ────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+    agent_id    TEXT NOT NULL,
+    metadata    JSONB DEFAULT '{}',
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at    TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(tenant_id, agent_id, started_at DESC);
+
 -- ── Tool events (one per incoming request) ──────────────────────────────────
--- NOTE: For high-volume deployments, consider adding declarative range
--- partitioning on received_at.
 
 CREATE TABLE IF NOT EXISTS tool_events (
     event_seq        BIGSERIAL UNIQUE NOT NULL,
@@ -67,6 +121,10 @@ CREATE INDEX IF NOT EXISTS idx_tool_events_tool_action
 
 CREATE INDEX IF NOT EXISTS idx_tool_events_tenant_seq
     ON tool_events(tenant_id, event_seq ASC);
+
+CREATE INDEX IF NOT EXISTS idx_tool_events_session
+    ON tool_events(tenant_id, session_id, received_at ASC)
+    WHERE session_id != '';
 
 -- ── Tool results (execution outcomes) ───────────────────────────────────────
 
@@ -160,11 +218,11 @@ CREATE TABLE IF NOT EXISTS approval_notification_outbox (
     reason                TEXT DEFAULT '',
     approver_group        TEXT DEFAULT '',
     approval_url          TEXT NOT NULL,
-    notify_kind           TEXT NOT NULL,          -- webhook | slack
+    notify_kind           TEXT NOT NULL,
     notify_url            TEXT DEFAULT '',
     secret_ref            TEXT DEFAULT '',
     slack_channel         TEXT DEFAULT '',
-    status                TEXT NOT NULL DEFAULT 'pending', -- pending|processing|sent|failed
+    status                TEXT NOT NULL DEFAULT 'pending',
     attempt_count         INTEGER NOT NULL DEFAULT 0,
     next_attempt_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_error            TEXT DEFAULT '',
@@ -189,9 +247,58 @@ CREATE TABLE IF NOT EXISTS evidence_archive_checkpoints (
 -- ── Policy versions (track bundle deployments) ─────────────────────────────
 
 CREATE TABLE IF NOT EXISTS policy_versions (
-    id          BIGSERIAL PRIMARY KEY,
-    bundle_hash TEXT NOT NULL,
-    version     TEXT NOT NULL,
-    deployed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    notes       TEXT DEFAULT ''
+    id           BIGSERIAL PRIMARY KEY,
+    tenant_id    TEXT REFERENCES tenants(id),
+    bundle_hash  TEXT NOT NULL,
+    version      TEXT NOT NULL,
+    policy_data  JSONB DEFAULT '{}',
+    deployed_by  TEXT DEFAULT '',
+    deployed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    notes        TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_versions_tenant
+    ON policy_versions(tenant_id, deployed_at DESC);
+
+-- ── Alert rules ─────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+    name        TEXT NOT NULL,
+    rule_type   TEXT NOT NULL CHECK (rule_type IN ('deny_spike', 'approve_backlog', 'unusual_tool', 'volume_spike')),
+    config      JSONB NOT NULL DEFAULT '{}',
+    notify_kind TEXT NOT NULL DEFAULT 'webhook',
+    notify_target TEXT NOT NULL DEFAULT '',
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_rules_tenant ON alert_rules(tenant_id, enabled);
+
+-- ── Alert events ────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS alert_events (
+    id          TEXT PRIMARY KEY,
+    rule_id     TEXT NOT NULL REFERENCES alert_rules(id),
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+    severity    TEXT NOT NULL DEFAULT 'warning',
+    message     TEXT NOT NULL,
+    details     JSONB DEFAULT '{}',
+    notified    BOOLEAN NOT NULL DEFAULT false,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_tenant ON alert_events(tenant_id, created_at DESC);
+
+-- ── Usage counters (cost/budget controls scaffold) ──────────────────────────
+
+CREATE TABLE IF NOT EXISTS usage_counters (
+    tenant_id    TEXT NOT NULL REFERENCES tenants(id),
+    counter_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    requests     BIGINT NOT NULL DEFAULT 0,
+    approvals    BIGINT NOT NULL DEFAULT 0,
+    executions   BIGINT NOT NULL DEFAULT 0,
+    connector_calls BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, counter_date)
 );

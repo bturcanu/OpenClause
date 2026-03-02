@@ -1,0 +1,161 @@
+import { randomUUID } from "crypto";
+import {
+  ClientOptions,
+  ToolCallRequest,
+  ToolCallResponse,
+  WaitForApprovalOptions,
+} from "./models";
+import {
+  APIError,
+  AuthenticationError,
+  OpenClauseError,
+  TimeoutError,
+} from "./errors";
+
+const MAX_REQUEST_BODY_BYTES = 1_048_576; // 1 MB
+const MAX_RESPONSE_BODY_BYTES = 4_194_304; // 4 MB
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_WAIT_TIMEOUT_MS = 300_000; // 5 minutes
+
+export class OpenClauseClient {
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
+  private readonly timeoutMs: number;
+
+  constructor(options: ClientOptions) {
+    if (!options.baseUrl) throw new OpenClauseError("baseUrl is required");
+    if (!options.apiKey) throw new OpenClauseError("apiKey is required");
+
+    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.apiKey = options.apiKey;
+    this.timeoutMs = options.timeout ?? DEFAULT_TIMEOUT_MS;
+  }
+
+  async submitToolCall(request: ToolCallRequest): Promise<ToolCallResponse> {
+    return this.post<ToolCallResponse>("/v1/tool-calls", request);
+  }
+
+  async getEvent(eventId: string): Promise<ToolCallResponse> {
+    return this.get<ToolCallResponse>(`/v1/tool-calls/${encodeURIComponent(eventId)}`);
+  }
+
+  async execute(eventId: string): Promise<ToolCallResponse> {
+    return this.post<ToolCallResponse>(
+      `/v1/tool-calls/${encodeURIComponent(eventId)}/execute`,
+      {},
+    );
+  }
+
+  async waitForApproval(
+    eventId: string,
+    options?: WaitForApprovalOptions,
+  ): Promise<ToolCallResponse> {
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+    const pollIntervalMs = options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    const deadline = Date.now() + timeoutMs;
+
+    let attempt = 0;
+    while (Date.now() < deadline) {
+      const response = await this.getEvent(eventId);
+      if (response.decision !== "approve") {
+        return response;
+      }
+
+      attempt++;
+      const backoff = Math.min(
+        pollIntervalMs * Math.pow(2, attempt - 1),
+        30_000,
+      );
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+
+      await this.sleep(Math.min(backoff, remaining));
+    }
+
+    throw new TimeoutError(
+      `Approval wait timed out after ${timeoutMs}ms for event ${eventId}`,
+    );
+  }
+
+  static generateIdempotencyKey(): string {
+    return randomUUID();
+  }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    const json = JSON.stringify(body);
+    const bodyBytes = new TextEncoder().encode(json);
+    if (bodyBytes.length > MAX_REQUEST_BODY_BYTES) {
+      throw new OpenClauseError(
+        `Request body exceeds ${MAX_REQUEST_BODY_BYTES} byte limit`,
+      );
+    }
+
+    return this.request<T>(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: json,
+    });
+  }
+
+  private async get<T>(path: string): Promise<T> {
+    return this.request<T>(path, { method: "GET" });
+  }
+
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+  ): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        ...init,
+        headers: {
+          "X-API-Key": this.apiKey,
+          ...init.headers,
+        },
+        signal: controller.signal,
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        throw new AuthenticationError();
+      }
+
+      const contentLength = response.headers.get("content-length");
+      if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_BODY_BYTES) {
+        throw new OpenClauseError(
+          `Response body exceeds ${MAX_RESPONSE_BODY_BYTES} byte limit`,
+        );
+      }
+
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new APIError(
+          `API request failed: ${response.status} ${response.statusText}`,
+          response.status,
+          text,
+        );
+      }
+
+      return JSON.parse(text) as T;
+    } catch (err) {
+      if (err instanceof OpenClauseError) throw err;
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new TimeoutError(`Request to ${path} timed out after ${this.timeoutMs}ms`);
+      }
+      throw new OpenClauseError(
+        `Request failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}

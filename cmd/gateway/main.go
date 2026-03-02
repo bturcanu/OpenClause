@@ -20,6 +20,7 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/auth"
 	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
+	"github.com/bturcanu/OpenClause/pkg/connectors/builtins"
 	"github.com/bturcanu/OpenClause/pkg/evidence"
 	ocOtel "github.com/bturcanu/OpenClause/pkg/otel"
 	"github.com/bturcanu/OpenClause/pkg/policy"
@@ -72,12 +73,18 @@ func main() {
 	evidenceLogger := evidence.NewLogger(evidenceStore, log)
 	policyClient := policy.NewClient(config.EnvOr("OPA_URL", "http://localhost:8181"))
 	approvalsStore := approvals.NewStore(pool)
-	keyStore := auth.NewKeyStore(os.Getenv("API_KEYS"))
+	envKeyStore := auth.NewKeyStore(os.Getenv("API_KEYS"))
+	dbKeyStore := auth.NewDBKeyStore(pool)
+	keyStore := auth.NewCompositeKeyStore(envKeyStore, dbKeyStore)
 
 	connectorReg := connectors.NewRegistry()
 	connectorReg.Register("slack", config.EnvOr("CONNECTOR_SLACK_URL", "http://localhost:8082"))
 	connectorReg.Register("jira", config.EnvOr("CONNECTOR_JIRA_URL", "http://localhost:8083"))
 	connectorReg.SetInternalToken(os.Getenv("INTERNAL_AUTH_TOKEN"))
+
+	for _, bc := range builtins.All() {
+		connectorReg.RegisterBuiltin(bc.Name(), bc.Actions(), bc.Exec)
+	}
 
 	gw := &Gateway{
 		log:            log,
@@ -115,6 +122,10 @@ func main() {
 	r.Post("/v1/toolcalls", gw.HandleToolCall)
 	r.Get("/v1/toolcalls/{event_id}", gw.HandleGetEvent)
 	r.Post("/v1/toolcalls/{event_id}/execute", gw.HandleExecuteToolCall)
+	r.Get("/v1/connectors", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(connectorReg.ListAll())
+	})
 
 	// ── Metrics (internal) ───────────────────────────────────────────────
 	metricsAddr := config.EnvOr("METRICS_ADDR", "127.0.0.1:9090")
