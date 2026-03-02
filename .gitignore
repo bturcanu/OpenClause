@@ -11,3 +11,4 @@ __pycache__/
 node_modules/
 dist/
 .git/COMMIT_MSG_NEW.txt
+.ai/

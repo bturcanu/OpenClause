@@ -24,11 +24,12 @@ func (e *ValidationError) Error() string {
 // ──────────────────────────────────────────────────────────────────────────────
 
 type APIError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-	Details   any    `json:"details,omitempty"`
-	HTTPCode  int    `json:"-"`
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+	Retryable     bool   `json:"retryable"`
+	Details       any    `json:"details,omitempty"`
+	RetryAfterSec int    `json:"retry_after_sec,omitempty"`
+	HTTPCode      int    `json:"-"`
 }
 
 func (e *APIError) Error() string {
@@ -38,8 +39,13 @@ func (e *APIError) Error() string {
 // WriteJSON writes the error as JSON to the response writer.
 func (e *APIError) WriteJSON(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
+	if e.RetryAfterSec > 0 {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", e.RetryAfterSec))
+	}
 	w.WriteHeader(e.HTTPCode)
-	_ = json.NewEncoder(w).Encode(e)
+	if err := json.NewEncoder(w).Encode(e); err != nil {
+		http.Error(w, "internal encoding error", http.StatusInternalServerError)
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -75,7 +81,7 @@ func ErrInternal(msg string) *APIError {
 }
 
 func ErrRateLimited() *APIError {
-	return &APIError{Code: "RATE_LIMITED", Message: "too many requests", Retryable: true, HTTPCode: http.StatusTooManyRequests}
+	return &APIError{Code: "RATE_LIMITED", Message: "too many requests", Retryable: true, RetryAfterSec: 1, HTTPCode: http.StatusTooManyRequests}
 }
 
 func ErrConnectorTimeout(tool string) *APIError {

@@ -299,16 +299,39 @@ func (s *Store) LinkExecutionToParent(ctx context.Context, parentEventID, execut
 	return false, fmt.Errorf("evidence.LinkExecutionToParent: %w", err)
 }
 
+// LockParentExecution acquires an advisory lock keyed on the parent event ID
+// for the duration of the transaction. Returns a commit/rollback function.
+// This prevents the double-execution race (HIGH-03) where two concurrent
+// /execute requests both consume a grant and execute the connector.
+func (s *Store) LockParentExecution(ctx context.Context, parentEventID string) (unlock func(), err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("evidence.LockParentExecution begin: %w", err)
+	}
+	h := fnv.New64a()
+	h.Write([]byte("oc:exec:"))
+	h.Write([]byte(parentEventID))
+	lockID := int64(h.Sum64())
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockID); err != nil {
+		tx.Rollback(ctx) //nolint:errcheck
+		return nil, fmt.Errorf("evidence.LockParentExecution lock: %w", err)
+	}
+	return func() { tx.Commit(ctx) }, nil //nolint:errcheck
+}
+
 // GetChainEvents returns events for chain verification in insertion order.
 // The returned window starts strictly after afterSeq.
+// MED-01: limited to archiveBatchSize rows per call.
 func (s *Store) GetChainEvents(ctx context.Context, tenantID string, afterSeq int64) ([]ChainEvent, error) {
+	const archiveBatchSize = 10000
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.event_seq, e.event_id, e.prev_hash, e.hash, e.payload_canon, r.result_canon, e.received_at
 		FROM tool_events e
 		LEFT JOIN tool_results r ON r.event_id = e.event_id
 		WHERE e.tenant_id = $1
 		  AND e.event_seq > $2
-		ORDER BY e.event_seq ASC`, tenantID, afterSeq)
+		ORDER BY e.event_seq ASC
+		LIMIT $3`, tenantID, afterSeq, archiveBatchSize)
 	if err != nil {
 		return nil, fmt.Errorf("evidence.GetChainEvents: %w", err)
 	}

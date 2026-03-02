@@ -468,6 +468,17 @@ func (s *Store) MarkNotificationFailed(ctx context.Context, id string, lastErr s
 	return nil
 }
 
+// ExpirePendingRequests transitions stale pending requests to 'expired' (MED-07).
+func (s *Store) ExpirePendingRequests(ctx context.Context) (int64, error) {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE approval_requests SET status = 'expired', updated_at = NOW()
+		WHERE status = 'pending' AND expires_at <= NOW()`)
+	if err != nil {
+		return 0, fmt.Errorf("approvals.ExpirePendingRequests: %w", err)
+	}
+	return res.RowsAffected(), nil
+}
+
 func buildApprovalURL(baseURL, requestID string) string {
 	base := strings.TrimRight(baseURL, "/")
 	if base == "" {

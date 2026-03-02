@@ -64,6 +64,8 @@ func (r *Registry) RegisterBuiltin(name string, actions []string, handler func(c
 }
 
 // ListAll returns metadata for every registered connector (remote + builtin).
+// BaseURL is intentionally omitted from the public response to avoid leaking
+// internal service URLs (HIGH-06).
 func (r *Registry) ListAll() []ConnectorInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -71,12 +73,11 @@ func (r *Registry) ListAll() []ConnectorInfo {
 	seen := make(map[string]bool, len(r.routes)+len(r.builtins))
 	out := make([]ConnectorInfo, 0, len(r.routes)+len(r.builtins))
 
-	for tool, baseURL := range r.routes {
+	for tool := range r.routes {
 		seen[tool] = true
 		out = append(out, ConnectorInfo{
-			Name:    tool,
-			BaseURL: baseURL,
-			Type:    "remote",
+			Name: tool,
+			Type: "remote",
 		})
 	}
 	for name, entry := range r.builtins {

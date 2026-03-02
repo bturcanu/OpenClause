@@ -48,9 +48,7 @@ migrate:
 	@echo ">>> Running migrations..."
 	@docker compose -f deploy/docker-compose.yml exec -T postgres \
 		psql -U openclause -d openclause < migrations/001_initial.sql
-	@docker compose -f deploy/docker-compose.yml exec -T postgres \
-		psql -U openclause -d openclause < migrations/002_seed.sql
-	@echo "✓ Migrations complete (001_initial + 002_seed)"
+	@echo "✓ Migrations complete (001_initial)"
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 

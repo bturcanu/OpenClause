@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,15 +17,20 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bturcanu/OpenClause/pkg/approvals"
 	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/console"
+	"github.com/bturcanu/OpenClause/pkg/policy"
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const maxBodyBytes = 1 << 20
+
+// knownInsecureJWTSecret is the default value from early development.
+// The server MUST NOT start with this value.
+const knownInsecureJWTSecret = "change-me-in-production-openclause-jwt-secret"
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -36,7 +39,18 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, buildPostgresDSN())
+	// CRIT-02: Require JWT secret at startup, reject known insecure default.
+	jwtSecret := os.Getenv("CONSOLE_JWT_SECRET")
+	if jwtSecret == "" || jwtSecret == knownInsecureJWTSecret {
+		log.Error("CONSOLE_JWT_SECRET is required and must not be the default insecure value")
+		os.Exit(1)
+	}
+	if len(jwtSecret) < 32 {
+		log.Error("CONSOLE_JWT_SECRET must be at least 32 bytes")
+		os.Exit(1)
+	}
+
+	pool, err := pgxpool.New(ctx, config.PostgresDSN())
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
 		os.Exit(1)
@@ -44,16 +58,27 @@ func main() {
 	defer pool.Close()
 
 	store := console.NewStore(pool)
+	approvalsStore := approvals.NewStore(pool)
+	approverAuth := approvals.NewApproverAuthorizer(
+		os.Getenv("APPROVER_EMAIL_ALLOWLIST"),
+		os.Getenv("APPROVER_SLACK_ALLOWLIST"),
+	)
+
 	jwtCfg := console.JWTConfig{
-		Secret:      config.EnvOr("CONSOLE_JWT_SECRET", "change-me-in-production-openclause-jwt-secret"),
+		Secret:      jwtSecret,
 		Issuer:      "openclause-console",
 		ExpiryHours: config.EnvOrInt("CONSOLE_JWT_EXPIRY_HOURS", 24),
 	}
 
+	// CRIT-01: Parse allowed CORS origins from env.
+	allowedOrigins := parseCORSOrigins(os.Getenv("CONSOLE_CORS_ORIGINS"))
+
 	api := &ConsoleAPI{
-		log:    log,
-		store:  store,
-		jwtCfg: jwtCfg,
+		log:            log,
+		store:          store,
+		jwtCfg:         jwtCfg,
+		approvalsStore: approvalsStore,
+		approverAuth:   approverAuth,
 	}
 
 	r := chi.NewRouter()
@@ -61,7 +86,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
-	r.Use(corsMiddleware)
+	r.Use(corsMiddleware(allowedOrigins))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -82,53 +107,42 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(api.jwtAuthMiddleware)
 
-		// Analytics
 		r.Get("/admin/analytics/overview", api.handleAnalyticsOverview)
 		r.Get("/admin/analytics/timeseries", api.handleAnalyticsTimeseries)
 
-		// Tenants
 		r.Post("/admin/tenants", api.requireRole("platform_admin", api.handleCreateTenant))
 		r.Get("/admin/tenants", api.handleListTenants)
 		r.Get("/admin/tenants/{tenant_id}", api.handleGetTenant)
 		r.Post("/admin/tenants/{tenant_id}/status", api.requireRole("platform_admin", api.handleUpdateTenantStatus))
 
-		// Agents
 		r.Post("/admin/tenants/{tenant_id}/agents", api.requireTenantRole("tenant_admin", api.handleCreateAgent))
 		r.Get("/admin/tenants/{tenant_id}/agents", api.requireTenantAccess(api.handleListAgents))
 
-		// API Keys
 		r.Post("/admin/tenants/{tenant_id}/apikeys", api.requireTenantRole("tenant_admin", api.handleCreateAPIKey))
 		r.Get("/admin/tenants/{tenant_id}/apikeys", api.requireTenantAccess(api.handleListAPIKeys))
 		r.Post("/admin/tenants/{tenant_id}/apikeys/{key_id}/revoke", api.requireTenantRole("tenant_admin", api.handleRevokeAPIKey))
 
-		// Approvals
 		r.Get("/admin/approvals/pending", api.handleListPendingApprovals)
 		r.Post("/admin/approvals/{id}/approve", api.requireRole("approver", api.handleApproveRequest))
 		r.Post("/admin/approvals/{id}/deny", api.requireRole("approver", api.handleDenyRequest))
 
-		// Events / Audit Trail
 		r.Get("/admin/events", api.handleListEvents)
 		r.Get("/admin/events/{event_id}", api.handleGetEventDetail)
 		r.Get("/admin/events/export/csv", api.handleExportEventsCSV)
 
-		// Sessions
 		r.Get("/admin/sessions", api.handleListSessions)
 		r.Get("/admin/sessions/{session_id}/timeline", api.handleSessionTimeline)
 
-		// Policy
 		r.Get("/admin/policy/versions", api.handleListPolicyVersions)
 		r.Post("/admin/policy/versions", api.requireRole("tenant_admin", api.handleCreatePolicyVersion))
 		r.Post("/admin/policy/simulate", api.handleSimulatePolicy)
 
-		// Alerts
 		r.Get("/admin/alerts/rules", api.handleListAlertRules)
 		r.Post("/admin/alerts/rules", api.requireRole("tenant_admin", api.handleCreateAlertRule))
 		r.Get("/admin/alerts/events", api.handleListAlertEvents)
 
-		// Connectors
 		r.Get("/v1/connectors", api.handleListConnectors)
 
-		// Reports
 		r.Get("/admin/reports/activity", api.handleListEvents)
 		r.Get("/admin/reports/export/csv", api.handleExportEventsCSV)
 		r.Get("/admin/reports/export/bundle", api.handleExportBundle)
@@ -162,9 +176,11 @@ func main() {
 }
 
 type ConsoleAPI struct {
-	log    *slog.Logger
-	store  *console.Store
-	jwtCfg console.JWTConfig
+	log            *slog.Logger
+	store          *console.Store
+	jwtCfg         console.JWTConfig
+	approvalsStore *approvals.Store
+	approverAuth   *approvals.ApproverAuthorizer
 }
 
 type claimsKey struct{}
@@ -264,9 +280,14 @@ func hasRole(claims *console.JWTClaims, role string) bool {
 	return false
 }
 
+// HIGH-02: tenantScope now returns "!!deny!!" sentinel for non-platform_admin
+// users with an empty tenant claim, preventing cross-tenant data leaks.
 func tenantScope(claims *console.JWTClaims) string {
 	if hasRole(claims, "platform_admin") {
 		return ""
+	}
+	if claims.Tenant == "" {
+		return "!!deny!!"
 	}
 	return claims.Tenant
 }
@@ -305,6 +326,12 @@ func (api *ConsoleAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// HIGH-02: Reject non-platform_admin users who have no tenant scope.
+	if scopedTenant == "" && !containsRole(roleNames, "platform_admin") {
+		writeError(w, http.StatusForbidden, "user has no tenant assignment")
+		return
+	}
+
 	token, err := console.GenerateToken(api.jwtCfg, console.JWTClaims{
 		Sub:    user.ID,
 		Email:  user.Email,
@@ -327,6 +354,15 @@ func (api *ConsoleAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"roles": roleNames,
 		},
 	})
+}
+
+func containsRole(roles []string, role string) bool {
+	for _, r := range roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -538,7 +574,7 @@ func (api *ConsoleAPI) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Approvals
+// Approvals — HIGH-01: uses approvals store + approver allowlist
 // ──────────────────────────────────────────────────────────────────────────────
 
 func (api *ConsoleAPI) handleListPendingApprovals(w http.ResponseWriter, r *http.Request) {
@@ -548,118 +584,58 @@ func (api *ConsoleAPI) handleListPendingApprovals(w http.ResponseWriter, r *http
 		tenant = r.URL.Query().Get("tenant_id")
 	}
 	limit, offset := parsePagination(r)
-	ctx := r.Context()
-
-	rows, err := api.store.Pool().Query(ctx, `
-		SELECT id, event_id, tenant_id, agent_id, tool, action, resource,
-		       risk_score, reason, deny_reason, status, created_at, expires_at
-		FROM approval_requests
-		WHERE ($1 = '' OR tenant_id = $1) AND status = 'pending' AND expires_at > NOW()
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3`, tenant, limit, offset)
+	reqs, err := api.approvalsStore.ListPending(r.Context(), tenant, limit, offset)
 	if err != nil {
 		api.log.Error("list pending approvals failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list pending approvals")
 		return
 	}
-	defer rows.Close()
-
-	type approval struct {
-		ID         string    `json:"id"`
-		EventID    string    `json:"event_id"`
-		TenantID   string    `json:"tenant_id"`
-		AgentID    string    `json:"agent_id"`
-		Tool       string    `json:"tool"`
-		Action     string    `json:"action"`
-		Resource   string    `json:"resource"`
-		RiskScore  int       `json:"risk_score"`
-		Reason     string    `json:"reason"`
-		DenyReason string    `json:"deny_reason,omitempty"`
-		Status     string    `json:"status"`
-		CreatedAt  time.Time `json:"created_at"`
-		ExpiresAt  time.Time `json:"expires_at"`
-	}
-	results := make([]approval, 0)
-	for rows.Next() {
-		var a approval
-		if err := rows.Scan(
-			&a.ID, &a.EventID, &a.TenantID, &a.AgentID,
-			&a.Tool, &a.Action, &a.Resource,
-			&a.RiskScore, &a.Reason, &a.DenyReason, &a.Status,
-			&a.CreatedAt, &a.ExpiresAt,
-		); err != nil {
-			api.log.Error("scan pending approval failed", "error", err)
-			continue
-		}
-		results = append(results, a)
-	}
-	writeJSON(w, http.StatusOK, results)
+	writeJSON(w, http.StatusOK, reqs)
 }
 
 func (api *ConsoleAPI) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	claims := claimsFromCtx(r.Context())
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-
-	ctx := r.Context()
 	approver := claims.Email
 
-	tx, err := api.store.Pool().Begin(ctx)
+	req, err := api.approvalsStore.GetRequest(r.Context(), id)
 	if err != nil {
-		api.log.Error("begin tx failed", "error", err)
+		api.log.Error("get approval request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to approve")
 		return
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	if req == nil {
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
 
-	res, err := tx.Exec(ctx, `
-		UPDATE approval_requests SET status = 'approved', updated_at = NOW()
-		WHERE id = $1 AND status = 'pending' AND expires_at > NOW()`, id)
+	// HIGH-05: Enforce tenant scoping
+	scope := tenantScope(claims)
+	if scope != "" && req.TenantID != scope {
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
+
+	// HIGH-01: Enforce approver allowlist
+	if api.approverAuth != nil && !api.approverAuth.AllowEmail(req.TenantID, approver) {
+		writeError(w, http.StatusForbidden, "approver is not allowed for tenant")
+		return
+	}
+
+	grant, err := api.approvalsStore.GrantRequest(r.Context(), id, approvals.GrantInput{
+		Approver: approver,
+		MaxUses:  1,
+	})
 	if err != nil {
 		api.log.Error("approve request failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to approve")
-		return
-	}
-	if res.RowsAffected() == 0 {
-		writeError(w, http.StatusConflict, "request not found, already resolved, or expired")
+		writeError(w, http.StatusInternalServerError, "failed to approve request")
 		return
 	}
 
-	var tenantID, agentID, tool, action, resource string
-	row := tx.QueryRow(ctx, `
-		SELECT tenant_id, agent_id, tool, action, resource FROM approval_requests WHERE id = $1`, id)
-	if err := row.Scan(&tenantID, &agentID, &tool, &action, &resource); err != nil {
-		api.log.Error("fetch approval details failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to create grant")
-		return
-	}
-
-	grantID := "grant-" + uuid.NewString()
-	now := time.Now().UTC()
-	_, err = tx.Exec(ctx, `
-		INSERT INTO approval_grants (
-			id, request_id, tenant_id, approver,
-			scope_tool, scope_action, scope_resource_pattern, scope_tenant_id, scope_agent_id,
-			max_uses, uses_left, expires_at, granted_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		grantID, id, tenantID, approver,
-		tool, action, resource, tenantID, agentID,
-		1, 1, now.Add(time.Hour), now)
-	if err != nil {
-		api.log.Error("create grant failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to create grant")
-		return
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		api.log.Error("commit failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to finalize approval")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "grant_id": grantID})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "grant_id": grant.ID})
 }
 
+// MED-05: handleDenyRequest — properly handles decode errors and RowsAffected.
 func (api *ConsoleAPI) handleDenyRequest(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	claims := claimsFromCtx(r.Context())
@@ -667,14 +643,35 @@ func (api *ConsoleAPI) handleDenyRequest(w http.ResponseWriter, r *http.Request)
 	var in struct {
 		Reason string `json:"reason"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
 
-	_, err := api.store.Pool().Exec(r.Context(), `
-		UPDATE approval_requests SET status = 'denied', deny_reason = $2, denied_by = $3, updated_at = NOW()
-		WHERE id = $1 AND status = 'pending'`, id, in.Reason, claims.Email)
+	req, err := api.approvalsStore.GetRequest(r.Context(), id)
 	if err != nil {
-		api.log.Error("deny request failed", "error", err)
+		api.log.Error("get approval request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to deny")
+		return
+	}
+	if req == nil {
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
+
+	// HIGH-05: Enforce tenant scoping
+	scope := tenantScope(claims)
+	if scope != "" && req.TenantID != scope {
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
+
+	if err := api.approvalsStore.DenyRequest(r.Context(), id, approvals.DenyInput{
+		Approver: claims.Email,
+		Reason:   in.Reason,
+	}); err != nil {
+		api.log.Error("deny request failed", "error", err)
+		writeError(w, http.StatusConflict, "request not found or already resolved")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "denied"})
@@ -730,6 +727,11 @@ func (api *ConsoleAPI) handleExportEventsCSV(w http.ResponseWriter, r *http.Requ
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
+	// MED-06: require tenant for CSV export
+	if tenant == "" {
+		writeError(w, http.StatusBadRequest, "tenant_id required for CSV export")
+		return
+	}
 	since := parseSince(r, 7*24*time.Hour)
 	until := time.Now().UTC()
 	if v := r.URL.Query().Get("until"); v != "" {
@@ -779,7 +781,9 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=openclause-bundle-%s-%s.json", tenant, time.Now().Format("20060102")))
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(bundle)
+	if err := enc.Encode(bundle); err != nil {
+		api.log.Error("encode bundle failed", "error", err)
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -804,7 +808,9 @@ func (api *ConsoleAPI) handleListSessions(w http.ResponseWriter, r *http.Request
 
 func (api *ConsoleAPI) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
-	events, err := api.store.GetSessionTimeline(r.Context(), sessionID)
+	claims := claimsFromCtx(r.Context())
+	scope := tenantScope(claims)
+	events, err := api.store.GetSessionTimeline(r.Context(), sessionID, scope)
 	if err != nil {
 		api.log.Error("session timeline failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get session timeline")
@@ -859,6 +865,7 @@ func (api *ConsoleAPI) handleCreatePolicyVersion(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusCreated, pv)
 }
 
+// MED-03: Uses the correct OPA package path via shared constant.
 func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var in struct {
@@ -875,7 +882,7 @@ func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Reque
 	}
 
 	opaURL := config.EnvOr("OPA_URL", "http://localhost:8181")
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"input": map[string]any{
 			"toolcall": map[string]any{
 				"tenant_id":  in.TenantID,
@@ -890,8 +897,12 @@ func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Reque
 			},
 		},
 	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build simulation request")
+		return
+	}
 
-	resp, err := http.Post(opaURL+"/v1/data/openclause/main", "application/json", strings.NewReader(string(body)))
+	resp, err := http.Post(opaURL+policy.OPAPolicyPath, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to reach policy engine")
 		return
@@ -900,7 +911,9 @@ func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Reque
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var opaResp map[string]any
-	_ = json.Unmarshal(respBody, &opaResp)
+	if err := json.Unmarshal(respBody, &opaResp); err != nil {
+		api.log.Error("decode OPA simulation response failed", "error", err)
+	}
 
 	result := map[string]any{
 		"simulation": true,
@@ -978,7 +991,7 @@ func (api *ConsoleAPI) handleListAlertEvents(w http.ResponseWriter, r *http.Requ
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Connectors
+// Connectors — HIGH-06: no internal URLs exposed
 // ──────────────────────────────────────────────────────────────────────────────
 
 func (api *ConsoleAPI) handleListConnectors(w http.ResponseWriter, r *http.Request) {
@@ -998,7 +1011,9 @@ func (api *ConsoleAPI) handleListConnectors(w http.ResponseWriter, r *http.Reque
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("writeJSON encode failed", "error", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
@@ -1018,8 +1033,8 @@ func parsePagination(r *http.Request) (limit, offset int) {
 			offset = n
 		}
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > 100 {
+		limit = 100
 	}
 	return
 }
@@ -1033,28 +1048,35 @@ func parseSince(r *http.Request, defaultDuration time.Duration) time.Time {
 	return time.Now().UTC().Add(-defaultDuration)
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusNoContent)
-			return
+// CRIT-01: Configurable CORS origin allowlist.
+func parseCORSOrigins(raw string) map[string]bool {
+	m := make(map[string]bool)
+	for _, o := range strings.Split(raw, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			m[o] = true
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	return m
 }
 
-func buildPostgresDSN() string {
-	sslmode := config.EnvOr("POSTGRES_SSLMODE", "disable")
-	u := &url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(config.EnvOr("POSTGRES_USER", "openclause"), config.EnvOr("POSTGRES_PASSWORD", "changeme")),
-		Host:     net.JoinHostPort(config.EnvOr("POSTGRES_HOST", "localhost"), config.EnvOr("POSTGRES_PORT", "5432")),
-		Path:     config.EnvOr("POSTGRES_DB", "openclause"),
-		RawQuery: "sslmode=" + url.QueryEscape(sslmode),
+func corsMiddleware(allowed map[string]bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && allowed[origin] {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Vary", "Origin")
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
-	return u.String()
 }

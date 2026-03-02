@@ -6,9 +6,7 @@ import (
 	"crypto/subtle"
 	"html/template"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -44,8 +42,7 @@ func main() {
 	}
 
 	// ── Postgres ─────────────────────────────────────────────────────────
-	dbURL := buildPostgresDSN()
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := pgxpool.New(ctx, config.PostgresDSN())
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
 		os.Exit(1)
@@ -143,10 +140,15 @@ func main() {
 				select {
 				case <-ctx.Done():
 					return
-				case <-t.C:
-					if err := dispatcher.DispatchOnce(ctx); err != nil {
-						log.Error("notification dispatch failed", "error", err)
-					}
+			case <-t.C:
+				if err := dispatcher.DispatchOnce(ctx); err != nil {
+					log.Error("notification dispatch failed", "error", err)
+				}
+				if n, err := store.ExpirePendingRequests(ctx); err != nil {
+					log.Error("expire pending requests failed", "error", err)
+				} else if n > 0 {
+					log.Info("expired stale approval requests", "count", n)
+				}
 				}
 			}
 		}()
@@ -225,14 +227,3 @@ var pendingTmpl = template.Must(template.New("pending").Parse(`<!DOCTYPE html>
 </body>
 </html>`))
 
-func buildPostgresDSN() string {
-	sslmode := config.EnvOr("POSTGRES_SSLMODE", "disable")
-	u := &url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(config.EnvOr("POSTGRES_USER", "openclause"), config.EnvOr("POSTGRES_PASSWORD", "changeme")),
-		Host:     net.JoinHostPort(config.EnvOr("POSTGRES_HOST", "localhost"), config.EnvOr("POSTGRES_PORT", "5432")),
-		Path:     config.EnvOr("POSTGRES_DB", "openclause"),
-		RawQuery: "sslmode=" + url.QueryEscape(sslmode),
-	}
-	return u.String()
-}

@@ -60,7 +60,9 @@ CREATE TABLE IF NOT EXISTS user_roles (
     tenant_id TEXT,
     role      TEXT NOT NULL CHECK (role IN ('platform_admin', 'tenant_admin', 'approver', 'viewer')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(user_id, tenant_id, role)
+    UNIQUE(user_id, tenant_id, role),
+    -- HIGH-02: Non-platform_admin roles MUST have a tenant_id.
+    CHECK (role = 'platform_admin' OR tenant_id IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
@@ -192,8 +194,8 @@ CREATE TABLE IF NOT EXISTS approval_grants (
     scope_resource_pattern  TEXT DEFAULT '',
     scope_tenant_id         TEXT NOT NULL,
     scope_agent_id          TEXT DEFAULT '',
-    max_uses                INTEGER NOT NULL DEFAULT 1,
-    uses_left               INTEGER NOT NULL DEFAULT 1,
+    max_uses                INTEGER NOT NULL DEFAULT 1 CHECK (max_uses >= 1),
+    uses_left               INTEGER NOT NULL DEFAULT 1 CHECK (uses_left >= 0),
     expires_at              TIMESTAMPTZ NOT NULL,
     granted_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ

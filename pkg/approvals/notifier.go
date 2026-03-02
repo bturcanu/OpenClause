@@ -43,6 +43,7 @@ func (TemplateSummarizer) Summarize(n NotificationOutbox) string {
 type Dispatcher struct {
 	store                 notificationStore
 	httpClient            *http.Client
+	internalHTTPClient    *http.Client // for Slack/internal connector calls (no SSRF filter)
 	source                string
 	secrets               map[string]string
 	summarizer            Summarizer
@@ -60,13 +61,38 @@ type notificationStore interface {
 
 func NewDispatcher(store notificationStore, source string, secrets map[string]string, slackURL, internalToken string) *Dispatcher {
 	return &Dispatcher{
-		store:         store,
-		httpClient:    &http.Client{Timeout: 10 * time.Second},
-		source:        source,
-		secrets:       secrets,
-		summarizer:    TemplateSummarizer{},
-		slackURL:      strings.TrimRight(slackURL, "/"),
-		internalToken: internalToken,
+		store:              store,
+		httpClient:         &http.Client{Timeout: 10 * time.Second, Transport: SafeTransport()},
+		internalHTTPClient: &http.Client{Timeout: 10 * time.Second},
+		source:             source,
+		secrets:            secrets,
+		summarizer:         TemplateSummarizer{},
+		slackURL:           strings.TrimRight(slackURL, "/"),
+		internalToken:      internalToken,
+	}
+}
+
+// SafeTransport returns an http.Transport that blocks connections to
+// private, loopback, and link-local IP addresses (MED-02: DNS rebinding defense).
+func SafeTransport() *http.Transport {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	return &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid address: %w", err)
+			}
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, fmt.Errorf("dns resolve: %w", err)
+			}
+			for _, ip := range ips {
+				if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
+					return nil, fmt.Errorf("resolved IP %s is private/loopback — blocked", ip.IP)
+				}
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+		},
 	}
 }
 
@@ -153,6 +179,12 @@ func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox
 			return fmt.Errorf("webhook URL validation: %w", err)
 		}
 	}
+	// When SkipWebhookValidation is set (testing), use the internal client
+	// which does not have the SafeTransport so it can reach localhost test servers.
+	webhookClient := d.httpClient
+	if d.SkipWebhookValidation {
+		webhookClient = d.internalHTTPClient
+	}
 	body, err := BuildApprovalRequestedCloudEvent(item, d.source, d.summarizer.Summarize(item))
 	if err != nil {
 		return err
@@ -169,7 +201,7 @@ func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox
 	if secret, ok := d.secrets[item.SecretRef]; ok && secret != "" {
 		req.Header.Set("X-OC-Signature-256", SignBodyHMACSHA256(body, secret))
 	}
-	resp, err := d.httpClient.Do(req)
+	resp, err := webhookClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -221,7 +253,7 @@ func (d *Dispatcher) deliverSlack(ctx context.Context, item NotificationOutbox) 
 	if d.internalToken != "" {
 		req.Header.Set("X-Internal-Token", d.internalToken)
 	}
-	resp, err := d.httpClient.Do(req)
+	resp, err := d.internalHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

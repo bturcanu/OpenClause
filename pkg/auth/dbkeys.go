@@ -35,7 +35,10 @@ func (db *DBKeyStore) Lookup(apiKey string) (tenantID string, ok bool) {
 	defer cancel()
 
 	rows, err := db.pool.Query(ctx,
-		`SELECT id, tenant_id, key_hash FROM api_keys WHERE key_prefix = $1 AND status = 'active'`,
+		`SELECT ak.id, ak.tenant_id, ak.key_hash
+		 FROM api_keys ak
+		 JOIN tenants t ON t.id = ak.tenant_id AND t.status = 'active'
+		 WHERE ak.key_prefix = $1 AND ak.status = 'active'`,
 		prefix,
 	)
 	if err != nil {

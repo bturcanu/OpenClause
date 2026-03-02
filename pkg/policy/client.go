@@ -15,6 +15,9 @@ import (
 
 const maxOPAResponseBytes = 1 << 20 // 1 MB
 
+// OPAPolicyPath is the canonical OPA data path for the OpenClause policy package.
+const OPAPolicyPath = "/v1/data/oc/main"
+
 // Client calls OPA over HTTP to evaluate tool-call policies.
 type Client struct {
 	baseURL    string
@@ -56,7 +59,7 @@ func (c *Client) Evaluate(ctx context.Context, input types.PolicyInput) (*types.
 		return nil, fmt.Errorf("policy marshal: %w", err)
 	}
 
-	url := c.baseURL + "/v1/data/oc/main"
+	url := c.baseURL + OPAPolicyPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("policy new request: %w", err)

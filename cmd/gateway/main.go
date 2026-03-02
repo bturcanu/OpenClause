@@ -7,10 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
+	"container/list"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -61,7 +60,7 @@ func main() {
 	}
 
 	// ── Postgres ─────────────────────────────────────────────────────────
-	pool, err := pgxpool.New(ctx, buildPostgresDSN())
+	pool, err := pgxpool.New(ctx, config.PostgresDSN())
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
 		os.Exit(1)
@@ -93,7 +92,8 @@ func main() {
 		connectors:     connectorReg,
 		approvals:      approvalsStore,
 		approvalsURL:   config.EnvOr("APPROVALS_URL", "http://localhost:8081"),
-		rateLimiters:   make(map[string]*rate.Limiter),
+		rateLimiters:   make(map[string]*list.Element),
+		rlList:         list.New(),
 		perTenantLimit: config.EnvOrInt("RATE_LIMIT_PER_TENANT", 100),
 	}
 
@@ -181,6 +181,11 @@ func main() {
 // Gateway handler
 // ──────────────────────────────────────────────────────────────────────────────
 
+type rlEntry struct {
+	tenantID string
+	limiter  *rate.Limiter
+}
+
 type Gateway struct {
 	log            *slog.Logger
 	evidence       gatewayEvidence
@@ -188,8 +193,8 @@ type Gateway struct {
 	connectors     gatewayConnectors
 	approvals      gatewayApprovals
 	approvalsURL   string
-	rateLimiters   map[string]*rate.Limiter
-	rlOrder        []string
+	rateLimiters   map[string]*list.Element
+	rlList         *list.List
 	rlMu           sync.Mutex
 	perTenantLimit int
 }
@@ -200,6 +205,7 @@ type gatewayEvidence interface {
 	GetEvent(context.Context, string) (*types.ToolCallEnvelope, error)
 	GetExecutionByParentEvent(context.Context, string) (*types.ToolCallResponse, error)
 	LinkExecutionToParent(context.Context, string, string, string) (bool, error)
+	LockParentExecution(context.Context, string) (func(), error)
 }
 
 type gatewayPolicy interface {
@@ -404,6 +410,31 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// HIGH-03: Advisory lock prevents double-execution when concurrent
+	// requests race on the same parent event.
+	unlock, err := gw.evidence.LockParentExecution(ctx, parentEventID)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "lock parent execution failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("failed to lock execution").WriteJSON(w)
+		return
+	}
+	defer unlock()
+
+	// Re-check after acquiring the lock — another request may have completed.
+	existing, err = gw.evidence.GetExecutionByParentEvent(ctx, parentEventID)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "get linked execution after lock failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("failed to retrieve prior execution").WriteJSON(w)
+		return
+	}
+	if existing != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(existing); err != nil {
+			gw.log.ErrorContext(ctx, "response encode failed", "error", err)
+		}
+		return
+	}
+
 	grant, err := gw.approvals.FindAndConsumeGrant(
 		ctx,
 		parent.Request.TenantID,
@@ -551,32 +582,26 @@ func (gw *Gateway) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 // Rate limiting (bounded map with eviction)
 // ──────────────────────────────────────────────────────────────────────────────
 
+// MED-09: O(1) LRU using container/list.
 func (gw *Gateway) allowRate(tenantID string) bool {
 	gw.rlMu.Lock()
 	defer gw.rlMu.Unlock()
 
-	lim, ok := gw.rateLimiters[tenantID]
-	if ok {
-		// Move to end of LRU order.
-		for i, k := range gw.rlOrder {
-			if k == tenantID {
-				gw.rlOrder = append(gw.rlOrder[:i], gw.rlOrder[i+1:]...)
-				break
-			}
-		}
-		gw.rlOrder = append(gw.rlOrder, tenantID)
-		return lim.Allow()
+	if elem, ok := gw.rateLimiters[tenantID]; ok {
+		gw.rlList.MoveToBack(elem)
+		return elem.Value.(*rlEntry).limiter.Allow()
 	}
 
-	if len(gw.rateLimiters) >= maxRateLimiters {
-		oldest := gw.rlOrder[0]
-		gw.rlOrder = gw.rlOrder[1:]
-		delete(gw.rateLimiters, oldest)
+	if gw.rlList.Len() >= maxRateLimiters {
+		oldest := gw.rlList.Front()
+		gw.rlList.Remove(oldest)
+		delete(gw.rateLimiters, oldest.Value.(*rlEntry).tenantID)
 	}
 
-	lim = rate.NewLimiter(rate.Limit(gw.perTenantLimit), gw.perTenantLimit*2)
-	gw.rateLimiters[tenantID] = lim
-	gw.rlOrder = append(gw.rlOrder, tenantID)
+	lim := rate.NewLimiter(rate.Limit(gw.perTenantLimit), gw.perTenantLimit*2)
+	entry := &rlEntry{tenantID: tenantID, limiter: lim}
+	elem := gw.rlList.PushBack(entry)
+	gw.rateLimiters[tenantID] = elem
 	return lim.Allow()
 }
 
@@ -608,14 +633,3 @@ func (gw *Gateway) executeConnector(ctx context.Context, eventID string, req typ
 	}
 }
 
-func buildPostgresDSN() string {
-	sslmode := config.EnvOr("POSTGRES_SSLMODE", "disable")
-	u := &url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(config.EnvOr("POSTGRES_USER", "openclause"), config.EnvOr("POSTGRES_PASSWORD", "changeme")),
-		Host:     net.JoinHostPort(config.EnvOr("POSTGRES_HOST", "localhost"), config.EnvOr("POSTGRES_PORT", "5432")),
-		Path:     config.EnvOr("POSTGRES_DB", "openclause"),
-		RawQuery: "sslmode=" + url.QueryEscape(sslmode),
-	}
-	return u.String()
-}

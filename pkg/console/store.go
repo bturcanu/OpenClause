@@ -1015,14 +1015,20 @@ func (s *Store) ListSessions(ctx context.Context, tenantID string, limit, offset
 	return out, nil
 }
 
-func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string) ([]EventListItem, error) {
-	rows, err := s.pool.Query(ctx, `
+func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, tenantScope string) ([]EventListItem, error) {
+	query := `
 		SELECT event_id, tenant_id, agent_id, tool, action,
 		       COALESCE(payload_json->>'resource', ''), risk_score,
 		       decision, session_id, trace_id, received_at
 		FROM tool_events
-		WHERE session_id = $1
-		ORDER BY received_at ASC`, sessionID)
+		WHERE session_id = $1`
+	args := []any{sessionID}
+	if tenantScope != "" {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenantScope)
+	}
+	query += ` ORDER BY received_at ASC`
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("console.GetSessionTimeline: %w", err)
 	}

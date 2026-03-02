@@ -38,14 +38,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		config.EnvOr("POSTGRES_USER", "openclause"),
-		config.EnvOr("POSTGRES_PASSWORD", "changeme"),
-		config.EnvOr("POSTGRES_HOST", "localhost"),
-		config.EnvOr("POSTGRES_PORT", "5432"),
-		config.EnvOr("POSTGRES_DB", "openclause"),
-	)
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := pgxpool.New(ctx, config.PostgresDSN())
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
 		os.Exit(1)

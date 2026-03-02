@@ -77,3 +77,8 @@ func (l *Logger) GetExecutionByParentEvent(ctx context.Context, parentEventID st
 func (l *Logger) LinkExecutionToParent(ctx context.Context, parentEventID, executionEventID, consumedGrantID string) (bool, error) {
 	return l.store.LinkExecutionToParent(ctx, parentEventID, executionEventID, consumedGrantID)
 }
+
+// LockParentExecution delegates to the store.
+func (l *Logger) LockParentExecution(ctx context.Context, parentEventID string) (func(), error) {
+	return l.store.LockParentExecution(ctx, parentEventID)
+}
