@@ -28,6 +28,10 @@ import (
 
 const maxBodyBytes = 1 << 20
 
+// tenantDenySentinel is returned by tenantScope for non-admin users with no tenant.
+// Handlers MUST check for this and return 403 before passing to the DB layer.
+const tenantDenySentinel = "!!deny!!"
+
 // knownInsecureJWTSecret is the default value from early development.
 // The server MUST NOT start with this value.
 const knownInsecureJWTSecret = "change-me-in-production-openclause-jwt-secret"
@@ -280,14 +284,16 @@ func hasRole(claims *console.JWTClaims, role string) bool {
 	return false
 }
 
-// HIGH-02: tenantScope now returns "!!deny!!" sentinel for non-platform_admin
-// users with an empty tenant claim, preventing cross-tenant data leaks.
+// HIGH-02: tenantScope returns tenantDenySentinel for non-platform_admin users
+// with an empty tenant claim. Handlers MUST check for this and return 403
+// before passing to the DB layer; otherwise tenant_id='!!deny!!' is queried
+// and returns empty results instead of enforcing the security boundary.
 func tenantScope(claims *console.JWTClaims) string {
 	if hasRole(claims, "platform_admin") {
 		return ""
 	}
 	if claims.Tenant == "" {
-		return "!!deny!!"
+		return tenantDenySentinel
 	}
 	return claims.Tenant
 }
@@ -371,8 +377,13 @@ func containsRole(roles []string, role string) bool {
 
 func (api *ConsoleAPI) handleAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
+	scope := tenantScope(claims)
+	if scope == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	since := parseSince(r, 24*time.Hour)
-	overview, err := api.store.GetAnalyticsOverview(r.Context(), tenantScope(claims), since)
+	overview, err := api.store.GetAnalyticsOverview(r.Context(), scope, since)
 	if err != nil {
 		api.log.Error("analytics overview failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get analytics")
@@ -428,6 +439,10 @@ func (api *ConsoleAPI) handleCreateTenant(w http.ResponseWriter, r *http.Request
 
 func (api *ConsoleAPI) handleListTenants(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
+	if !hasRole(claims, "platform_admin") && claims.Tenant == "" {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if claims.Tenant != "" && !hasRole(claims, "platform_admin") {
 		t, err := api.store.GetTenant(r.Context(), claims.Tenant)
 		if err != nil || t == nil {
@@ -451,6 +466,10 @@ func (api *ConsoleAPI) handleGetTenant(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "tenant_id")
 	claims := claimsFromCtx(r.Context())
 	scope := tenantScope(claims)
+	if scope == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if scope != "" && scope != id {
 		writeError(w, http.StatusNotFound, "tenant not found")
 		return
@@ -580,6 +599,10 @@ func (api *ConsoleAPI) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request
 func (api *ConsoleAPI) handleListPendingApprovals(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
@@ -661,6 +684,10 @@ func (api *ConsoleAPI) handleDenyRequest(w http.ResponseWriter, r *http.Request)
 
 	// HIGH-05: Enforce tenant scoping
 	scope := tenantScope(claims)
+	if scope == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if scope != "" && req.TenantID != scope {
 		writeError(w, http.StatusNotFound, "approval request not found")
 		return
@@ -685,6 +712,10 @@ func (api *ConsoleAPI) handleListEvents(w http.ResponseWriter, r *http.Request) 
 	claims := claimsFromCtx(r.Context())
 	q := r.URL.Query()
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if tenant == "" {
 		tenant = q.Get("tenant_id")
 	}
@@ -724,6 +755,10 @@ func (api *ConsoleAPI) handleGetEventDetail(w http.ResponseWriter, r *http.Reque
 func (api *ConsoleAPI) handleExportEventsCSV(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
@@ -793,6 +828,10 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 func (api *ConsoleAPI) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
@@ -826,6 +865,10 @@ func (api *ConsoleAPI) handleSessionTimeline(w http.ResponseWriter, r *http.Requ
 func (api *ConsoleAPI) handleListPolicyVersions(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	versions, err := api.store.ListPolicyVersions(r.Context(), tenant, 50)
 	if err != nil {
 		api.log.Error("list policy versions failed", "error", err)
@@ -937,6 +980,10 @@ func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Reque
 func (api *ConsoleAPI) handleListAlertRules(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
@@ -977,6 +1024,10 @@ func (api *ConsoleAPI) handleCreateAlertRule(w http.ResponseWriter, r *http.Requ
 func (api *ConsoleAPI) handleListAlertEvents(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
