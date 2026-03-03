@@ -12,3 +12,10 @@ node_modules/
 dist/
 .git/COMMIT_MSG_NEW.txt
 .ai/
+
+# Local API payload samples
+approve.json
+create-tenant.json
+tenant-disable.json
+tenant-enable.json
+toolcall*.json
