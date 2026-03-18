@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from 'react'
+import { useState, useEffect, FormEvent, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
 
@@ -32,6 +32,7 @@ export default function TenantDetail() {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const fetchSeq = useRef(0)
 
   const [agentForm, setAgentForm] = useState({ name: '' })
   const [keyForm, setKeyForm] = useState({ name: '' })
@@ -39,19 +40,27 @@ export default function TenantDetail() {
   const [creating, setCreating] = useState(false)
 
   async function fetchAll() {
+    const seq = ++fetchSeq.current
+    setLoading(true)
+    setError('')
+    setTenant(null)
+    setAgents([])
+    setApiKeys([])
+
     try {
       const [t, ag, keys] = await Promise.all([
         api.get(`/admin/tenants/${id}`).catch(() => null),
         api.get(`/admin/tenants/${id}/agents`).catch(() => []),
         api.get(`/admin/tenants/${id}/apikeys`).catch(() => []),
       ])
-      if (t) setTenant(t)
+      if (seq !== fetchSeq.current) return
+      setTenant(t ?? null)
       setAgents(Array.isArray(ag) ? ag : ag?.agents || [])
       setApiKeys(Array.isArray(keys) ? keys : keys?.api_keys || [])
     } catch (err: any) {
-      setError(err.message)
+      if (seq === fetchSeq.current) setError(err.message)
     } finally {
-      setLoading(false)
+      if (seq === fetchSeq.current) setLoading(false)
     }
   }
 

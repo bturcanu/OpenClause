@@ -329,6 +329,52 @@ func TestHandleToolCall_DenyPath(t *testing.T) {
 	}
 }
 
+type nilPolicy struct{}
+
+func (f nilPolicy) Evaluate(context.Context, types.PolicyInput) (*types.PolicyResult, error) {
+	return nil, nil
+}
+
+func TestHandleToolCall_PolicyNilResultDefaultsDeny(t *testing.T) {
+	fe := newFakeEvidence()
+	fc := &fakeConnectors{output: json.RawMessage(`{"ok":true}`)}
+	fa := &fakeApprovals{}
+	gw := newTestGateway(fe, fc, fa, nilPolicy{})
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		RiskScore:      2,
+		IdempotencyKey: "k3",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp types.ToolCallResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Decision != types.DecisionDeny {
+		t.Fatalf("expected deny, got %s", resp.Decision)
+	}
+	if resp.Reason != "policy evaluation returned nil" {
+		t.Fatalf("expected deny reason, got %q", resp.Reason)
+	}
+
+	if len(fe.events) != 1 {
+		t.Fatalf("expected exactly 1 recorded evidence event, got %d", len(fe.events))
+	}
+	for _, env := range fe.events {
+		if env.Decision != types.DecisionDeny {
+			t.Fatalf("expected recorded decision=deny, got %s", env.Decision)
+		}
+	}
+}
+
 func TestHandleToolCall_BadJSON(t *testing.T) {
 	fe := newFakeEvidence()
 	gw := newTestGateway(fe, &fakeConnectors{}, &fakeApprovals{}, nil)

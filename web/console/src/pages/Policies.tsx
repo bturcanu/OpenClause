@@ -98,7 +98,7 @@ export default function Policies() {
                 rows={10}
                 value={createForm.rego_source}
                 onChange={e => setCreateForm({ rego_source: e.target.value })}
-                placeholder="package openclause&#10;&#10;default decision = &quot;allow&quot;"
+                placeholder={`package openclause\n\ndefault decision = "allow"`}
                 required
               />
             </div>

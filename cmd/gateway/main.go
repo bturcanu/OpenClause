@@ -3,13 +3,13 @@
 package main
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
-	"container/list"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -288,9 +288,17 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policyResult, err := gw.policy.Evaluate(ctx, policyInput)
+	// Fail-closed: treat any policy evaluation anomaly as a deny.
+	// Some policy clients can theoretically return (nil, nil), so guard before dereferencing.
 	if err != nil {
 		gw.log.ErrorContext(ctx, "policy evaluation failed", "error", err)
-		policyResult = &types.PolicyResult{Decision: types.DecisionDeny, Reason: "policy evaluation failed"}
+	}
+	if policyResult == nil {
+		reason := "policy evaluation failed"
+		if err == nil {
+			reason = "policy evaluation returned nil"
+		}
+		policyResult = &types.PolicyResult{Decision: types.DecisionDeny, Reason: reason}
 	}
 	env.Decision = policyResult.Decision
 	env.PolicyResult = policyResult
@@ -634,4 +642,3 @@ func (gw *Gateway) executeConnector(ctx context.Context, eventID string, req typ
 		DurationMS: duration.Milliseconds(),
 	}
 }
-
