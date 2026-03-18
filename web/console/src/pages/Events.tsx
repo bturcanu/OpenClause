@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
 
@@ -18,6 +18,7 @@ export default function Events() {
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const fetchSeq = useRef(0)
   const [filters, setFilters] = useState({
     tenant_id: '',
     tool: '',
@@ -29,7 +30,9 @@ export default function Events() {
   const limit = 25
 
   const fetchEvents = useCallback(async () => {
+    const seq = ++fetchSeq.current
     setLoading(true)
+    setError('')
     try {
       const params = new URLSearchParams()
       params.set('limit', String(limit))
@@ -40,11 +43,12 @@ export default function Events() {
       if (filters.decision) params.set('decision', filters.decision)
       if (filters.session_id) params.set('session_id', filters.session_id)
       const data = await api.get(`/admin/events?${params}`)
+      if (seq !== fetchSeq.current) return
       setEvents(Array.isArray(data) ? data : data?.events || [])
     } catch (err: any) {
-      setError(err.message)
+      if (seq === fetchSeq.current) setError(err.message)
     } finally {
-      setLoading(false)
+      if (seq === fetchSeq.current) setLoading(false)
     }
   }, [filters, page])
 
