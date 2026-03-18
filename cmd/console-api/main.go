@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/console"
 	"github.com/bturcanu/OpenClause/pkg/policy"
+	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -80,6 +82,7 @@ func main() {
 	api := &ConsoleAPI{
 		log:            log,
 		store:          store,
+		exportStore:    store,
 		jwtCfg:         jwtCfg,
 		approvalsStore: approvalsStore,
 		approverAuth:   approverAuth,
@@ -182,9 +185,15 @@ func main() {
 type ConsoleAPI struct {
 	log            *slog.Logger
 	store          *console.Store
+	exportStore    exportEventsStore
 	jwtCfg         console.JWTConfig
 	approvalsStore *approvals.Store
 	approverAuth   *approvals.ApproverAuthorizer
+}
+
+type exportEventsStore interface {
+	ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error
+	ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventListItem, error)
 }
 
 type claimsKey struct{}
@@ -756,7 +765,7 @@ func (api *ConsoleAPI) handleExportEventsCSV(w http.ResponseWriter, r *http.Requ
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
 	if tenant == tenantDenySentinel {
-		writeError(w, http.StatusForbidden, "insufficient permissions")
+		types.ErrForbidden("insufficient permissions").WriteJSON(w)
 		return
 	}
 	if tenant == "" {
@@ -764,7 +773,7 @@ func (api *ConsoleAPI) handleExportEventsCSV(w http.ResponseWriter, r *http.Requ
 	}
 	// MED-06: require tenant for CSV export
 	if tenant == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id required for CSV export")
+		types.ErrBadRequest("tenant_id required for CSV export").WriteJSON(w)
 		return
 	}
 	since := parseSince(r, 7*24*time.Hour)
@@ -775,10 +784,25 @@ func (api *ConsoleAPI) handleExportEventsCSV(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	// Atomic export: buffer first, then write response headers/body only on success.
+	// This prevents returning HTTP 200 with partial CSV output if ExportEventsCSV fails.
+	const maxExportCSVBytes = 50 << 20 // 50 MiB
+	var buf bytes.Buffer
+	if err := api.exportStore.ExportEventsCSV(r.Context(), tenant, since, until, &buf); err != nil {
+		api.log.Error("export events csv failed", "error", err)
+		types.ErrInternal("failed to export events csv").WriteJSON(w)
+		return
+	}
+	if buf.Len() > maxExportCSVBytes {
+		types.ErrInternal("export exceeds maximum size").WriteJSON(w)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=openclause-events-%s.csv", time.Now().Format("20060102")))
-	if err := api.store.ExportEventsCSV(r.Context(), tenant, since, until, w); err != nil {
-		api.log.Error("export events csv failed", "error", err)
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		api.log.Error("export events csv write failed", "error", err)
 	}
 }
 
@@ -789,16 +813,16 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 		tenant = r.URL.Query().Get("tenant_id")
 	}
 	if tenant == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id required")
+		types.ErrBadRequest("tenant_id required").WriteJSON(w)
 		return
 	}
 	since := parseSince(r, 7*24*time.Hour)
 	until := time.Now().UTC()
 
-	events, err := api.store.ListEventsInRange(r.Context(), tenant, since, until, 10000)
+	events, err := api.exportStore.ListEventsInRange(r.Context(), tenant, since, until, 10000)
 	if err != nil {
 		api.log.Error("export bundle events failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to export bundle")
+		types.ErrInternal("failed to export bundle").WriteJSON(w)
 		return
 	}
 
@@ -812,13 +836,31 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 		"event_count": len(events),
 	}
 
+	// Atomic export: encode fully before writing to response.
+	const maxExportBundleBytes = 20 << 20 // 20 MiB
+	var buf bytes.Buffer
+	if err := encodeBundleJSON(&buf, bundle); err != nil {
+		api.log.Error("encode bundle failed", "error", err)
+		types.ErrInternal("failed to encode bundle").WriteJSON(w)
+		return
+	}
+	if buf.Len() > maxExportBundleBytes {
+		types.ErrInternal("export exceeds maximum size").WriteJSON(w)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=openclause-bundle-%s-%s.json", tenant, time.Now().Format("20060102")))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		api.log.Error("export bundle write failed", "error", err)
+	}
+}
+
+func encodeBundleJSON(w io.Writer, bundle map[string]any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(bundle); err != nil {
-		api.log.Error("encode bundle failed", "error", err)
-	}
+	return enc.Encode(bundle)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
