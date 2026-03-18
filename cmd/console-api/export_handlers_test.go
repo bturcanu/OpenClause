@@ -116,6 +116,36 @@ func TestHandleExportBundle_ListEventsErrorReturnsAPIError(t *testing.T) {
 	}
 }
 
+func TestHandleExportBundle_TenantDenySentinelReturns403(t *testing.T) {
+	api := newTestConsoleAPI(&fakeExportStore{})
+
+	// Non-platform-admin, empty tenant claim -> tenantScope returns tenantDenySentinel.
+	claims := &console.JWTClaims{
+		Roles:  []string{},
+		Tenant: "",
+	}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/reports/export/bundle?tenant_id=tenant-1&since=2020-01-01T00:00:00Z&until=2020-01-02T00:00:00Z",
+		nil,
+	).WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	api.handleExportBundle(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var apiErr types.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &apiErr); err != nil {
+		t.Fatalf("expected JSON APIError, got decode error=%v body=%s", err, rr.Body.String())
+	}
+	if apiErr.Code != "FORBIDDEN" {
+		t.Fatalf("expected FORBIDDEN, got %s", apiErr.Code)
+	}
+}
+
 type failingWriter struct{}
 
 func (f failingWriter) Write(_ []byte) (int, error) {

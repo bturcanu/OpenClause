@@ -809,6 +809,10 @@ func (api *ConsoleAPI) handleExportEventsCSV(w http.ResponseWriter, r *http.Requ
 func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
+	if tenant == tenantDenySentinel {
+		types.ErrForbidden("insufficient permissions").WriteJSON(w)
+		return
+	}
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
