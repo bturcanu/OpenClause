@@ -115,9 +115,9 @@ export function createMCPToolDefinitions(
           event_id: finalResponse.event_id,
           decision: finalResponse.decision,
           reason: finalResponse.reason,
-          result: finalResponse.result as unknown as
-            | Record<string, unknown>
-            | undefined,
+          // MCP "result" exposes the tool output payload (output_json) rather than
+          // the full execution wrapper.
+          result: finalResponse.result?.output_json,
         };
       },
     };
