@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/csv"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -163,11 +165,27 @@ type AlertEvent struct {
 // ──────────────────────────────────────────────────────────────────────────────
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	tokenHMACSecret []byte
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+	// Keyed hash secret for invite + password reset tokens.
+	// Fallbacks keep local dev functional without requiring extra env vars.
+	secret := os.Getenv("INVITE_RESET_TOKEN_HMAC_SECRET")
+	if secret == "" {
+		secret = os.Getenv("CONSOLE_JWT_SECRET")
+	}
+	return &Store{
+		pool:             pool,
+		tokenHMACSecret: []byte(secret),
+	}
+}
+
+func (s *Store) hashInviteResetToken(rawToken string) string {
+	mac := hmac.New(sha256.New, s.tokenHMACSecret)
+	_, _ = mac.Write([]byte(rawToken))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // Pool exposes the underlying connection pool for ad-hoc queries
@@ -912,9 +930,10 @@ type Invite struct {
 }
 
 func (s *Store) CreateInvite(ctx context.Context, token, email, tenantID, role, name string, expiresAt time.Time) error {
+	tokenHash := s.hashInviteResetToken(token)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO invites (token, email, tenant_id, role, name, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`, token, email, tenantID, role, name, expiresAt,
+		VALUES ($1, $2, $3, $4, $5, $6)`, tokenHash, email, tenantID, role, name, expiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("console.CreateInvite: %w", err)
@@ -924,10 +943,11 @@ func (s *Store) CreateInvite(ctx context.Context, token, email, tenantID, role, 
 
 func (s *Store) GetInvite(ctx context.Context, token string) (*Invite, error) {
 	var inv Invite
+	tokenHash := s.hashInviteResetToken(token)
 	err := s.pool.QueryRow(ctx, `
 		SELECT token, email, tenant_id, role, name, created_at, expires_at
 		FROM invites
-		WHERE token = $1 AND expires_at > NOW()`, token,
+		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
 	).Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.CreatedAt, &inv.ExpiresAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -945,11 +965,13 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	tokenHash := s.hashInviteResetToken(token)
+
 	var inv Invite
 	err = tx.QueryRow(ctx, `
 		SELECT token, email, tenant_id, role, name, expires_at
 		FROM invites
-		WHERE token = $1 AND expires_at > NOW()`, token,
+		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
 	).Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.ExpiresAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -1023,17 +1045,18 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 	tenantID := inv.TenantID
 	// Assign role; tolerate unique violations (role already assigned).
 	roleID := uuid.NewString()
+	// IMPORTANT: In Postgres, even if we "tolerate" a unique violation,
+	// the failed statement aborts the entire transaction. Use ON CONFLICT
+	// to avoid transaction aborts so subsequent DELETE/COMMIT succeed.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO user_roles (id, user_id, tenant_id, role)
-		VALUES ($1, $2, $3, $4)`, roleID, userID, tenantID, inv.Role)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (user_id, tenant_id, role) DO NOTHING`, roleID, userID, tenantID, inv.Role)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if !(errors.As(err, &pgErr) && pgErr.Code == "23505") {
-			return nil, fmt.Errorf("console.ConsumeInviteAccept assign role: %w", err)
-		}
+		return nil, fmt.Errorf("console.ConsumeInviteAccept assign role: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, `DELETE FROM invites WHERE token = $1`, token)
+	_, err = tx.Exec(ctx, `DELETE FROM invites WHERE token = $1`, tokenHash)
 	if err != nil {
 		return nil, fmt.Errorf("console.ConsumeInviteAccept delete invite: %w", err)
 	}
@@ -1086,9 +1109,10 @@ func (s *Store) ListInvites(ctx context.Context, tenantID *string, limit, offset
 }
 
 func (s *Store) CreatePasswordReset(ctx context.Context, token, email string, expiresAt time.Time) error {
+	tokenHash := s.hashInviteResetToken(token)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO password_resets (token, email, expires_at)
-		VALUES ($1, $2, $3)`, token, email, expiresAt)
+		VALUES ($1, $2, $3)`, tokenHash, email, expiresAt)
 	if err != nil {
 		return fmt.Errorf("console.CreatePasswordReset: %w", err)
 	}
@@ -1102,11 +1126,13 @@ func (s *Store) ConsumePasswordReset(ctx context.Context, token, password string
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	tokenHash := s.hashInviteResetToken(token)
+
 	var email string
 	err = tx.QueryRow(ctx, `
 		SELECT email
 		FROM password_resets
-		WHERE token = $1 AND expires_at > NOW()`, token,
+		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
 	).Scan(&email)
 	if err == pgx.ErrNoRows {
 		return fmt.Errorf("invalid or expired password reset token")
@@ -1131,7 +1157,7 @@ func (s *Store) ConsumePasswordReset(ctx context.Context, token, password string
 		return fmt.Errorf("password reset token email does not map to a user")
 	}
 
-	_, err = tx.Exec(ctx, `DELETE FROM password_resets WHERE token = $1`, token)
+	_, err = tx.Exec(ctx, `DELETE FROM password_resets WHERE token = $1`, tokenHash)
 	if err != nil {
 		return fmt.Errorf("console.ConsumePasswordReset delete token: %w", err)
 	}
