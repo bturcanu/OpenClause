@@ -103,13 +103,31 @@ This document tracks implementation work for OpenClause “Approver Management +
       - Audit trail: verified returned JSON contains matching `event_id`
 
 ### (6) Self-service tenant onboarding via invites
-- [ ] Extend invites to tenant_admin signup + API key generation by tenant_admin
-  - Scope: invite acceptance rules + key issuance permissions
-  - Files/services: console-api + console UI
-  - API changes: maybe new endpoints or extended invite behavior
-  - UI changes: onboarding updates
-  - Acceptance criteria: tenant_admin can self-join + generate API keys for own tenant
-  - Commit links: ``
+- [x] Extend invites to tenant_admin signup + API key generation by tenant_admin
+  - Scope: enrich `/auth/invite/accept` response with tenant context; UI onboarding next-steps + deep-link to tenant API Keys tab; add RBAC unit tests for tenant-scoped API key issuance
+  - Files/services:
+    - `pkg/console/store.go` (invite accept result payload)
+    - `cmd/console-api/main.go` (invite accept response JSON)
+    - `cmd/console-api/apikeys_rbac_test.go` (tenant_admin RBAC boundary tests)
+    - `web/console/src/pages/InviteAccept.tsx` (show tenant context/next steps for tenant_admin)
+    - `web/console/src/pages/TenantDetail.tsx` (support `?tab=api_keys` deep link)
+  - API changes: `/auth/invite/accept` now returns `{ status, user, tenant_id, role }` (existing `status` + `user` preserved)
+  - UI changes: tenant_admin invite acceptance shows next steps + link to `/tenants/:id?tab=api_keys`
+  - Acceptance criteria:
+    - tenant_admin can accept an invite for `tenant_id` and immediately create API keys for that tenant
+    - tenant_admin cannot manage other tenants' API keys (verified via RBAC tests)
+  - Commit links: `TBD`
+  - Verification notes:
+    - `go test ./... -count=1` (PASS)
+    - `go test -race ./... -count=1` (PASS)
+    - `PATH="$PWD:$PATH" make policy-test` (PASS)
+    - `web/console`: `npm install && npm run build` (PASS)
+    - `sdk/typescript`: `npm install && npm run build` (PASS)
+    - Curl smoke against updated servers (`:18090/:18080`) verified:
+      - invite accept payload: `role=tenant_admin`, `tenant_id=tenant1`
+      - allow decision: `allow_event_id=3b88f5e2-9178-4fb8-89dc-38c093313c06`
+      - deny decision: `deny_event_id=9e85b2c1-6272-404b-a120-bea7e38649c2`
+      - approve+execute: `approve_event_id=031bf987-ae15-44c6-b28e-15e9de6ba7c2`
 
 ### (7) Notification configuration UI persistence
 - [ ] Persist per-tenant notification config + surface in console UI

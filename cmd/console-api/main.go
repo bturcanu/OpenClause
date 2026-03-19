@@ -834,17 +834,22 @@ func (api *ConsoleAPI) handleInviteAccept(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	user, err := api.store.ConsumeInviteAccept(r.Context(), in.Token, in.Password, in.Name)
+	res, err := api.store.ConsumeInviteAccept(r.Context(), in.Token, in.Password, in.Name)
 	if err != nil {
 		api.log.Error("invite accept failed", "error", err)
 		writeError(w, http.StatusBadRequest, "invalid or expired token")
 		return
 	}
-	if user == nil {
+	if res == nil || res.User == nil {
 		writeError(w, http.StatusBadRequest, "invalid or expired token")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "accepted", "user": user})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":    "accepted",
+		"user":      res.User,
+		"tenant_id": res.TenantID,
+		"role":      res.Role,
+	})
 }
 
 func (api *ConsoleAPI) handleResetRequest(w http.ResponseWriter, r *http.Request) {

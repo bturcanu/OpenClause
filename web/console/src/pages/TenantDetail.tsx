@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
 
 interface Tenant {
@@ -34,6 +34,7 @@ interface Approver {
 
 export default function TenantDetail() {
   const { id } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
   const [tenant, setTenant] = useState<Tenant | null>(null)
   const [agents, setAgents] = useState<Agent[]>([])
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
@@ -53,6 +54,15 @@ export default function TenantDetail() {
 
   const [allowlistSource, setAllowlistSource] = useState<string>('db')
   const [activeTab, setActiveTab] = useState<'agents' | 'api_keys' | 'approvers'>('agents')
+
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab === 'agents' || tab === 'api_keys' || tab === 'approvers') {
+      setActiveTab(tab)
+    } else {
+      setActiveTab('agents')
+    }
+  }, [searchParams, id])
 
   async function fetchAll() {
     const seq = ++fetchSeq.current

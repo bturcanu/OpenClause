@@ -929,6 +929,14 @@ type Invite struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// InviteAcceptResult is the structured response payload for the invite acceptance flow.
+// It includes the created/updated user plus the assigned tenant-scoped role metadata.
+type InviteAcceptResult struct {
+	User     *User  `json:"user"`
+	TenantID string `json:"tenant_id"`
+	Role     string `json:"role"`
+}
+
 func (s *Store) CreateInvite(ctx context.Context, token, email, tenantID, role, name string, expiresAt time.Time) error {
 	tokenHash := s.hashInviteResetToken(token)
 	_, err := s.pool.Exec(ctx, `
@@ -958,7 +966,7 @@ func (s *Store) GetInvite(ctx context.Context, token string) (*Invite, error) {
 	return &inv, nil
 }
 
-func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name string) (*User, error) {
+func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name string) (*InviteAcceptResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("console.ConsumeInviteAccept begin tx: %w", err)
@@ -1065,7 +1073,11 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 		return nil, fmt.Errorf("console.ConsumeInviteAccept commit: %w", err)
 	}
 
-	return &u, nil
+	return &InviteAcceptResult{
+		User:     &u,
+		TenantID: inv.TenantID,
+		Role:     inv.Role,
+	}, nil
 }
 
 func (s *Store) ListInvites(ctx context.Context, tenantID *string, limit, offset int) ([]Invite, error) {
