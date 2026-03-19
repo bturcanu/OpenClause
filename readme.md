@@ -782,6 +782,40 @@ The gateway loads tenant policy config at request time, so saving or rolling bac
 4. Create version snapshots before/after major changes.
 5. If needed, select an older version and click **Rollback to Selected Version**.
 
+### Helm Charts for Console Services (Tier 3 item 12)
+New Helm charts are available for console services:
+- `deploy/helm/console-api`
+- `deploy/helm/console-ui`
+
+Each chart includes:
+- `values.yaml` defaults
+- `Deployment` with liveness/readiness probes
+- `Service` (ClusterIP)
+- Optional `Ingress`
+- Environment variable injection and optional `secretRef`
+
+#### How to install via Helm
+```bash
+# Console API
+helm upgrade --install oc-console-api ./deploy/helm/console-api \
+  --namespace openclause --create-namespace \
+  --set image.repository=ghcr.io/<org>/openclause-console-api \
+  --set image.tag=<tag> \
+  --set secretRef=console-api-secrets
+
+# Console UI
+helm upgrade --install oc-console-ui ./deploy/helm/console-ui \
+  --namespace openclause \
+  --set image.repository=ghcr.io/<org>/openclause-console-ui \
+  --set image.tag=<tag>
+```
+
+Render-only validation (without cluster apply):
+```bash
+helm template oc-console-api ./deploy/helm/console-api >/tmp/oc-console-api.yaml
+helm template oc-console-ui ./deploy/helm/console-ui >/tmp/oc-console-ui.yaml
+```
+
 ### How to configure Per-tenant Notification Routing
 1. Log in as a `tenant_admin` for the target tenant.
 2. Update routing via the Console API:
@@ -936,7 +970,7 @@ OpenClause/
 │   └── seed-dev.sh
 ├── deploy/
 │   ├── docker-compose.yml          # Local development stack
-│   ├── helm/                       # Helm charts (gateway, approvals, connectors)
+│   ├── helm/                       # Helm charts (gateway, approvals, connectors, console-api, console-ui)
 │   ├── terraform/                  # AWS infrastructure (EKS, RDS, S3, ALB)
 │   └── dashboards/                 # Grafana dashboard JSON
 ├── CONTRIBUTING.md                 # Contribution guide
@@ -1033,12 +1067,14 @@ Runs all services including the console UI. See `deploy/docker-compose.yml`.
 
 ### Kubernetes (Helm)
 
-Helm charts are in `deploy/helm/` for each service. All charts include:
+Helm charts are in `deploy/helm/` for each service. Current charts include `gateway`, `approvals`, `connector-jira`, `connector-slack`, `console-api`, and `console-ui`.
+
+Chart capabilities (chart-specific):
 
 - Deployments with liveness (`/healthz`) and readiness (`/readyz`) probes
 - Pod and container security contexts (`runAsNonRoot`, `readOnlyRootFilesystem`, `drop ALL`)
 - ClusterIP services
-- Deny-by-default NetworkPolicies
+- Optional ingresses
 - Optional `secretRef` for loading secrets from Kubernetes Secrets
 
 ### Cloud (Terraform)

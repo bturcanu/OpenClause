@@ -525,6 +525,29 @@ curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/policy/versions/
 
 Expected after rollback: the same toolcall can return `allow` again when it is below the restored threshold and in allowlists.
 
+## 14d. Helm Charts for Console Services (Tier 3 item 12)
+
+Render Helm templates for the new console charts:
+
+```bash
+# If local helm is installed:
+helm template oc-console-api ./deploy/helm/console-api | head
+helm template oc-console-ui ./deploy/helm/console-ui | head
+```
+
+If `helm` is not installed locally, use a containerized Helm binary:
+
+```bash
+docker run --rm -v "$PWD":/work -w /work alpine/helm:3.16.3 template oc-console-api ./deploy/helm/console-api > /tmp/oc-console-api.yaml
+docker run --rm -v "$PWD":/work -w /work alpine/helm:3.16.3 template oc-console-ui ./deploy/helm/console-ui > /tmp/oc-console-ui.yaml
+
+wc -l /tmp/oc-console-api.yaml /tmp/oc-console-ui.yaml
+```
+
+Expected:
+- both `helm template` commands exit successfully
+- rendered YAML includes `Deployment`, `Service`, and optional `Ingress` manifests for each chart
+
 ## 15. Run Unit Tests
 
 ```bash
