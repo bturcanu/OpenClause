@@ -317,6 +317,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `POST` | `/admin/tenants/{id}/apikeys` | tenant_admin | Create API key (returns raw key once) |
 | `GET` | `/admin/tenants/{id}/apikeys` | JWT | List API keys (never returns hashes) |
 | `POST` | `/admin/tenants/{id}/apikeys/{key_id}/revoke` | tenant_admin | Revoke API key |
+| `POST` | `/admin/tenants/{id}/apikeys/rotate` | tenant_admin | Rotate key (create new, optional primary switch, optional revoke old primary) |
 | `GET` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | List tenant-scoped approvers |
 | `POST` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | Upsert a tenant-scoped approver |
 | `DELETE` | `/admin/tenants/{tenant_id}/approvers/{user_id}` | tenant_admin | Remove a tenant-scoped approver |
@@ -736,6 +737,27 @@ The response includes:
 - `risk_heatmap` (risk_score decision distribution)
 - `per_agent` (top agents by total events)
 - `onboarding_checklist` (setup progress for the tenant)
+
+### API Key Lifecycle UX (Tier 3 item 10)
+API keys now support lifecycle metadata and safer rotation:
+- Metadata fields returned by `GET /admin/tenants/{id}/apikeys`:
+  - `last_used_at`
+  - `expires_at` (nullable)
+  - `is_primary`
+- Rotation endpoint:
+  - `POST /admin/tenants/{id}/apikeys/rotate`
+  - Payload:
+    ```json
+    {
+      "name": "rotated-2026-03",
+      "expires_at": "2030-01-01",
+      "make_primary": true,
+      "revoke_old_primary": true
+    }
+    ```
+  - Response includes `raw_key` once (must be copied immediately).
+
+Gateway validation now rejects expired DB-backed API keys (`expires_at <= now`).
 
 ### How to configure Per-tenant Notification Routing
 1. Log in as a `tenant_admin` for the target tenant.

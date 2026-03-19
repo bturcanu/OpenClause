@@ -63,6 +63,8 @@ type APIKey struct {
 	KeyPrefix  string     `json:"key_prefix"`
 	Status     string     `json:"status"`
 	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	IsPrimary  bool       `json:"is_primary"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
@@ -493,10 +495,21 @@ func hashAPIKey(raw string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKeyCreateResult, error) {
+func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string, expiresAt *time.Time) (*APIKeyCreateResult, error) {
 	raw, prefix, keyHash, err := generateAPIKey()
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateAPIKey: %w", err)
+	}
+
+	// If the tenant already has an active primary key, new keys default to non-primary.
+	var hasActivePrimary bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM api_keys
+			WHERE tenant_id = $1 AND status = 'active' AND is_primary = true
+		)`, tenantID,
+	).Scan(&hasActivePrimary); err != nil {
+		return nil, fmt.Errorf("console.CreateAPIKey primary check: %w", err)
 	}
 
 	k := APIKey{
@@ -505,13 +518,15 @@ func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKe
 		Name:      name,
 		KeyPrefix: prefix,
 		Status:    "active",
+		ExpiresAt: expiresAt,
+		IsPrimary: !hasActivePrimary,
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status, expires_at, is_primary)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING created_at`,
-		k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status,
+		k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status, k.ExpiresAt, k.IsPrimary,
 	).Scan(&k.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateAPIKey: %w", err)
@@ -522,7 +537,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKe
 
 func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, name, key_prefix, status, created_at, revoked_at, last_used_at
+		SELECT id, tenant_id, name, key_prefix, status, created_at, expires_at, is_primary, revoked_at, last_used_at
 		FROM api_keys
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC`, tenantID)
@@ -535,7 +550,7 @@ func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, err
 	for rows.Next() {
 		var k APIKey
 		if err := rows.Scan(&k.ID, &k.TenantID, &k.Name, &k.KeyPrefix, &k.Status,
-			&k.CreatedAt, &k.RevokedAt, &k.LastUsedAt); err != nil {
+			&k.CreatedAt, &k.ExpiresAt, &k.IsPrimary, &k.RevokedAt, &k.LastUsedAt); err != nil {
 			return nil, fmt.Errorf("console.ListAPIKeys scan: %w", err)
 		}
 		out = append(out, k)
@@ -546,17 +561,103 @@ func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, err
 	return out, nil
 }
 
-func (s *Store) RevokeAPIKey(ctx context.Context, keyID string) error {
+func (s *Store) RevokeAPIKeyForTenant(ctx context.Context, tenantID, keyID string) error {
 	res, err := s.pool.Exec(ctx, `
-		UPDATE api_keys SET status = 'revoked', revoked_at = NOW()
-		WHERE id = $1 AND status = 'active'`, keyID)
+		UPDATE api_keys
+		SET status = 'revoked', revoked_at = NOW(), is_primary = false
+		WHERE id = $1 AND tenant_id = $2 AND status = 'active'`, keyID, tenantID)
 	if err != nil {
-		return fmt.Errorf("console.RevokeAPIKey: %w", err)
+		return fmt.Errorf("console.RevokeAPIKeyForTenant: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("console.RevokeAPIKey: key %s not found or already revoked", keyID)
+		return fmt.Errorf("console.RevokeAPIKeyForTenant: key %s not found or already revoked", keyID)
 	}
 	return nil
+}
+
+// RotateAPIKeysPrimary implements the UX workflow:
+// create new key -> (optionally) mark it as primary -> (optionally) revoke
+// the previous active primary key.
+func (s *Store) RotateAPIKeysPrimary(
+	ctx context.Context,
+	tenantID, name string,
+	expiresAt *time.Time,
+	makePrimary bool,
+	revokeOldPrimary bool,
+) (*APIKeyCreateResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var oldPrimaryID string
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM api_keys
+		WHERE tenant_id = $1 AND status = 'active' AND is_primary = true
+		LIMIT 1`, tenantID,
+	).Scan(&oldPrimaryID)
+	if err != nil {
+		if err != pgx.ErrNoRows {
+			return nil, fmt.Errorf("console.RotateAPIKeysPrimary old primary: %w", err)
+		}
+		oldPrimaryID = ""
+	}
+
+	// If the caller wants the new key to become primary, clear primary flags
+	// for all active keys before inserting (avoids unique-index conflicts).
+	if makePrimary {
+		if _, err := tx.Exec(ctx, `
+			UPDATE api_keys
+			SET is_primary = false
+			WHERE tenant_id = $1 AND status = 'active'`, tenantID,
+		); err != nil {
+			return nil, fmt.Errorf("console.RotateAPIKeysPrimary clear primary: %w", err)
+		}
+	}
+
+	raw, prefix, keyHash, err := generateAPIKey()
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary generate: %w", err)
+	}
+
+	newKeyID := uuid.NewString()
+	k := APIKey{
+		ID:         newKeyID,
+		TenantID:   tenantID,
+		Name:       name,
+		KeyPrefix:  prefix,
+		Status:     "active",
+		ExpiresAt:  expiresAt,
+		IsPrimary:  makePrimary,
+		RevokedAt:  nil,
+		LastUsedAt: nil,
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status, expires_at, is_primary)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING created_at`, k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status, k.ExpiresAt, k.IsPrimary,
+	).Scan(&k.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary insert: %w", err)
+	}
+
+	if revokeOldPrimary && oldPrimaryID != "" && oldPrimaryID != newKeyID {
+		if _, err := tx.Exec(ctx, `
+			UPDATE api_keys
+			SET status = 'revoked', revoked_at = NOW(), is_primary = false
+			WHERE id = $1 AND tenant_id = $2 AND status = 'active'`, oldPrimaryID, tenantID,
+		); err != nil {
+			return nil, fmt.Errorf("console.RotateAPIKeysPrimary revoke old primary: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary commit: %w", err)
+	}
+
+	return &APIKeyCreateResult{APIKey: k, RawKey: raw}, nil
 }
 
 func (s *Store) LookupAPIKey(ctx context.Context, rawKey string) (tenantID string, keyID string, err error) {
@@ -569,7 +670,9 @@ func (s *Store) LookupAPIKey(ctx context.Context, rawKey string) (tenantID strin
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, key_hash
 		FROM api_keys
-		WHERE key_prefix = $1 AND status = 'active'`, prefix)
+		WHERE key_prefix = $1
+		  AND status = 'active'
+		  AND (expires_at IS NULL OR expires_at > NOW())`, prefix)
 	if err != nil {
 		return "", "", fmt.Errorf("console.LookupAPIKey: %w", err)
 	}
@@ -601,7 +704,7 @@ func (s *Store) RotateAPIKeys(ctx context.Context, tenantID string) (*APIKeyCrea
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	_, err = tx.Exec(ctx, `
-		UPDATE api_keys SET status = 'revoked', revoked_at = NOW()
+		UPDATE api_keys SET status = 'revoked', revoked_at = NOW(), is_primary = false
 		WHERE tenant_id = $1 AND status = 'active'`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("console.RotateAPIKeys revoke: %w", err)

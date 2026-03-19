@@ -186,6 +186,7 @@ func main() {
 		r.Post("/admin/tenants/{tenant_id}/apikeys", api.requireTenantRole("tenant_admin", api.handleCreateAPIKey))
 		r.Get("/admin/tenants/{tenant_id}/apikeys", api.requireTenantAccess(api.handleListAPIKeys))
 		r.Post("/admin/tenants/{tenant_id}/apikeys/{key_id}/revoke", api.requireTenantRole("tenant_admin", api.handleRevokeAPIKey))
+		r.Post("/admin/tenants/{tenant_id}/apikeys/rotate", api.requireTenantRole("tenant_admin", api.handleRotateAPIKey))
 
 		// Per-tenant notification routing configuration (webhook/slack).
 		r.Get("/admin/tenants/{tenant_id}/notification-config", api.requireTenantRole("tenant_admin", api.handleGetTenantNotificationConfig))
@@ -1226,13 +1227,34 @@ func (api *ConsoleAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request
 	tenantID := chi.URLParam(r, "tenant_id")
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var in struct {
-		Name string `json:"name"`
+		Name       string  `json:"name"`
+		ExpiresAt  *string `json:"expires_at,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	result, err := api.store.CreateAPIKey(r.Context(), tenantID, in.Name)
+	if strings.TrimSpace(in.Name) == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+
+	var expiresAt *time.Time
+	if in.ExpiresAt != nil {
+		raw := strings.TrimSpace(*in.ExpiresAt)
+		if raw == "" {
+			expiresAt = nil
+		} else {
+			parsed, err := parseOptionalExpiryAt(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			expiresAt = parsed
+		}
+	}
+
+	result, err := api.store.CreateAPIKey(r.Context(), tenantID, in.Name, expiresAt)
 	if err != nil {
 		api.log.Error("create api key failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create api key")
@@ -1253,13 +1275,93 @@ func (api *ConsoleAPI) handleListAPIKeys(w http.ResponseWriter, r *http.Request)
 }
 
 func (api *ConsoleAPI) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "tenant_id")
 	keyID := chi.URLParam(r, "key_id")
-	if err := api.store.RevokeAPIKey(r.Context(), keyID); err != nil {
+	if err := api.store.RevokeAPIKeyForTenant(r.Context(), tenantID, keyID); err != nil {
 		api.log.Error("revoke api key failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to revoke api key")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+func parseOptionalExpiryAt(raw string) (*time.Time, error) {
+	// Accept ISO date ("YYYY-MM-DD") and RFC3339 timestamps.
+	now := time.Now().UTC()
+
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		t = t.UTC()
+		if t.Before(now) {
+			return nil, fmt.Errorf("expires_at must be in the future")
+		}
+		return &t, nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		t = t.UTC()
+		if t.Before(now) {
+			return nil, fmt.Errorf("expires_at must be in the future")
+		}
+		return &t, nil
+	}
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		// Interpret the date as end-of-day in UTC.
+		t = t.UTC().Add(24*time.Hour - time.Nanosecond)
+		if t.Before(now) {
+			return nil, fmt.Errorf("expires_at must be in the future")
+		}
+		return &t, nil
+	}
+
+	return nil, fmt.Errorf("invalid expires_at format (use YYYY-MM-DD or RFC3339)")
+}
+
+func (api *ConsoleAPI) handleRotateAPIKey(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "tenant_id")
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var in struct {
+		Name             string  `json:"name"`
+		ExpiresAt       *string `json:"expires_at,omitempty"`
+		MakePrimary      *bool   `json:"make_primary,omitempty"`
+		RevokeOldPrimary *bool  `json:"revoke_old_primary,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+
+	makePrimary := true
+	if in.MakePrimary != nil {
+		makePrimary = *in.MakePrimary
+	}
+	revokeOldPrimary := true
+	if in.RevokeOldPrimary != nil {
+		revokeOldPrimary = *in.RevokeOldPrimary
+	}
+
+	var expiresAt *time.Time
+	if in.ExpiresAt != nil {
+		raw := strings.TrimSpace(*in.ExpiresAt)
+		if raw != "" {
+			parsed, err := parseOptionalExpiryAt(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			expiresAt = parsed
+		}
+	}
+
+	result, err := api.store.RotateAPIKeysPrimary(r.Context(), tenantID, in.Name, expiresAt, makePrimary, revokeOldPrimary)
+	if err != nil {
+		api.log.Error("rotate api key failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to rotate api key")
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

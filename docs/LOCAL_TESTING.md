@@ -427,6 +427,39 @@ Expected JSON fields:
 - `per_agent` (top agents by total event count)
 - `onboarding_checklist` (has_api_key/has_approver lifetime; has_toolcall/has_approval/has_execution within the selected range)
 
+## 14b. API Key Rotation + Metadata (Tier 3 item 10)
+
+Rotate key for a tenant (create new key, make it primary, revoke old primary):
+
+```bash
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/apikeys/rotate" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "rotated-local-test",
+    "expires_at": "2030-01-01",
+    "make_primary": true,
+    "revoke_old_primary": true
+  }'
+```
+
+Expected:
+- response includes `raw_key` exactly once
+- new key has `is_primary=true`
+- old primary key is revoked when `revoke_old_primary=true`
+
+Verify metadata:
+
+```bash
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/apikeys" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+Look for:
+- `last_used_at` updates after requests with that key
+- `expires_at` set when provided
+- `is_primary` flag on the active primary key
+
 ## 15. Run Unit Tests
 
 ```bash

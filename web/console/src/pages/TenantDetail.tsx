@@ -23,6 +23,9 @@ interface ApiKey {
   name: string
   status: string
   created_at: string
+  expires_at?: string | null
+  last_used_at?: string | null
+  is_primary: boolean
 }
 
 interface Approver {
@@ -135,6 +138,13 @@ export default function TenantDetail() {
   const [agentForm, setAgentForm] = useState({ name: '' })
   const [keyForm, setKeyForm] = useState({ name: '' })
   const [newKeyRaw, setNewKeyRaw] = useState('')
+  const [rotationNewKeyRaw, setRotationNewKeyRaw] = useState('')
+  const [rotationName, setRotationName] = useState('')
+  const [rotationExpiresAt, setRotationExpiresAt] = useState('')
+  const [rotationMakePrimary, setRotationMakePrimary] = useState(true)
+  const [rotationRevokeOldPrimary, setRotationRevokeOldPrimary] = useState(true)
+  const [rotating, setRotating] = useState(false)
+  const [rotationError, setRotationError] = useState('')
   const [creating, setCreating] = useState(false)
 
   const [approverEmail, setApproverEmail] = useState('')
@@ -189,6 +199,13 @@ export default function TenantDetail() {
     setAlertsError('')
     setTenantAnalytics(null)
     setAnalyticsError('')
+    setRotationNewKeyRaw('')
+    setRotationName('')
+    setRotationExpiresAt('')
+    setRotationMakePrimary(true)
+    setRotationRevokeOldPrimary(true)
+    setRotating(false)
+    setRotationError('')
     setNotifForm({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
     setAllowlistSource('db')
 
@@ -387,6 +404,39 @@ export default function TenantDetail() {
       setError(err.message)
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function rotatePrimaryKey(e: FormEvent) {
+    e.preventDefault()
+    setRotating(true)
+    setRotationError('')
+    setRotationNewKeyRaw('')
+    try {
+      if (!rotationName.trim()) throw new Error('rotation name required')
+
+      const payload: Record<string, unknown> = {
+        name: rotationName.trim(),
+        make_primary: rotationMakePrimary,
+        revoke_old_primary: rotationRevokeOldPrimary,
+      }
+      if (rotationExpiresAt.trim()) {
+        payload.expires_at = rotationExpiresAt.trim()
+      }
+
+      const rotated = (await api.post(`/admin/tenants/${id}/apikeys/rotate`, payload)) as { raw_key?: string }
+      const rawKey = rotated.raw_key || ''
+
+      await fetchAll()
+      setRotationNewKeyRaw(rawKey)
+      setRotationName('')
+      setRotationExpiresAt('')
+      setRotationMakePrimary(true)
+      setRotationRevokeOldPrimary(true)
+    } catch (err: unknown) {
+      setRotationError(err instanceof Error ? err.message : 'Failed to rotate API key')
+    } finally {
+      setRotating(false)
     }
   }
 
@@ -615,6 +665,61 @@ export default function TenantDetail() {
             )}
           </div>
 
+          <div className="form-card mt-16">
+            <h3>Rotate Primary Key</h3>
+            {rotationError && <div className="error-msg">{rotationError}</div>}
+            <div style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+              Workflow: create new key -&gt; optionally mark primary -&gt; optionally revoke old primary.
+            </div>
+
+            <form onSubmit={rotatePrimaryKey}>
+              <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div className="form-group" style={{ minWidth: 260 }}>
+                  <label>New key name</label>
+                  <input value={rotationName} onChange={e => setRotationName(e.target.value)} required placeholder="e.g., rotated-2026-03" />
+                </div>
+
+                <div className="form-group" style={{ minWidth: 220 }}>
+                  <label>Expires (optional)</label>
+                  <input
+                    type="date"
+                    value={rotationExpiresAt}
+                    onChange={e => setRotationExpiresAt(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group" style={{ minWidth: 240 }}>
+                  <label style={{ display: 'block' }}>Options</label>
+                  <div style={{ display: 'grid', gap: 8, marginTop: 6 }}>
+                    <label style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+                      <input type="checkbox" checked={rotationMakePrimary} onChange={e => setRotationMakePrimary(e.target.checked)} />
+                      <span style={{ fontSize: 13, color: '#334155' }}>Make new key primary</span>
+                    </label>
+                    <label style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+                      <input type="checkbox" checked={rotationRevokeOldPrimary} onChange={e => setRotationRevokeOldPrimary(e.target.checked)} />
+                      <span style={{ fontSize: 13, color: '#334155' }}>Revoke old primary</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                  <button className="btn btn-primary" disabled={rotating || creating}>
+                    {rotating ? 'Rotating…' : 'Rotate'}
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            {rotationNewKeyRaw && (
+              <div style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', marginBottom: 4 }}>
+                  Copy this rotated key now — it will not be shown again:
+                </p>
+                <div className="key-display">{rotationNewKeyRaw}</div>
+              </div>
+            )}
+          </div>
+
           <div className="section-title mt-16">Notification Routing</div>
           <div className="form-card">
             <h3>Approval notifications</h3>
@@ -674,25 +779,53 @@ export default function TenantDetail() {
                 <tr>
                   <th>Prefix</th>
                   <th>Name</th>
+                  <th>Primary</th>
                   <th>Status</th>
                   <th>Created</th>
+                  <th>Expires</th>
+                  <th>Last used</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {apiKeys.length === 0 ? (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No API keys</td></tr>
+                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No API keys</td></tr>
                 ) : (
                   apiKeys.map(k => (
                     <tr key={k.id}>
                       <td style={{ fontFamily: 'monospace' }}>{k.key_prefix}…</td>
                       <td>{k.name}</td>
                       <td>
+                        {k.is_primary && k.status === 'active'
+                          ? <span className="badge badge-green">Primary</span>
+                          : <span className="badge badge-gray">—</span>}
+                      </td>
+                      <td>
                         {k.status === 'revoked'
                           ? <span className="badge badge-red">Revoked</span>
                           : <span className="badge badge-green">Active</span>}
                       </td>
                       <td>{formatDate(k.created_at, 'date')}</td>
+                      <td>
+                        {k.expires_at ? (
+                          (() => {
+                            const expiresMs = new Date(k.expires_at || '').getTime()
+                            const nowMs = Date.now()
+                            const expired = !Number.isNaN(expiresMs) && expiresMs <= nowMs
+                            const expiringSoon = !Number.isNaN(expiresMs) && !expired && expiresMs <= (nowMs + 30 * 24 * 60 * 60 * 1000)
+                            return (
+                              <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                                <span>{formatDate(k.expires_at || null, 'date')}</span>
+                                {expired && <span className="badge badge-red">Expired</span>}
+                                {!expired && expiringSoon && <span className="badge badge-yellow">Expiring</span>}
+                              </span>
+                            )
+                          })()
+                        ) : (
+                          <span style={{ color: '#64748b' }}>Never</span>
+                        )}
+                      </td>
+                      <td>{k.last_used_at ? formatDate(k.last_used_at, 'date') : <span style={{ color: '#64748b' }}>—</span>}</td>
                       <td>
                         {k.status !== 'revoked' && (
                           <button className="btn btn-danger btn-sm" onClick={() => revokeKey(k.id)}>Revoke</button>

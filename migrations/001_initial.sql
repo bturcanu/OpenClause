@@ -355,3 +355,12 @@ CREATE TABLE IF NOT EXISTS usage_counters (
     connector_calls BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (tenant_id, counter_date)
 );
+
+-- ── API key schema evolution (expires + primary) ──────────────────────────
+ALTER TABLE api_keys
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT false;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_primary_active
+  ON api_keys(tenant_id)
+  WHERE status = 'active' AND is_primary = true;
