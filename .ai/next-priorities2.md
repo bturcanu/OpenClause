@@ -300,8 +300,34 @@ This document tracks implementation work for OpenClause “Approver Management +
         - audit trail verified via `GET /admin/events/{execution_event_id}`
 
 ### (12) Helm charts for console services
-- [ ] Add helm charts for console-api and console-ui
-  - Scope: chart templates, values
-  - Acceptance criteria: chart deploys locally and runs UI/API
-  - Commit links: ``
+- [x] Add helm charts for console-api and console-ui
+  - Scope:
+    - Add `deploy/helm/console-api` chart with `values.yaml`, `Deployment`, `Service`, `Ingress`, env map, optional `secretRef`, and liveness/readiness probes.
+    - Add `deploy/helm/console-ui` chart with `values.yaml`, `Deployment`, `Service`, `Ingress`, optional env/secretRef, and probes.
+    - Document helm usage/render workflow in `README.md` and `docs/LOCAL_TESTING.md`.
+  - Files/services:
+    - `deploy/helm/console-api/*`
+    - `deploy/helm/console-ui/*`
+    - `README.md`
+    - `docs/LOCAL_TESTING.md`
+  - Acceptance criteria:
+    - `helm template` renders both charts successfully.
+    - charts expose API/UI via service + optional ingress configuration.
+  - Commit links: `bb9d27e`
+  - Verification notes:
+    - `go test ./... -count=1` (PASS)
+    - policy tests: `docker run --rm -v "$PWD/policy":/policy openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v` (PASS; 17/17)
+    - `web/console`: `npm install && npm run build` (PASS)
+    - `sdk/typescript`: `npm install && npm run build` (PASS)
+    - helm render (dockerized helm due local `helm` missing):
+      - `docker run --rm -v "$PWD":/work -w /work alpine/helm:3.16.3 template oc-console-api ./deploy/helm/console-api` (PASS; rendered 97 lines)
+      - `docker run --rm -v "$PWD":/work -w /work alpine/helm:3.16.3 template oc-console-ui ./deploy/helm/console-ui` (PASS; rendered 86 lines)
+    - Docker restart: `docker compose -f deploy/docker-compose.yml up --build -d gateway console-api console-ui approvals` (PASS)
+    - Smoke (explicit tenant UUID from `.env` API key mapping):
+      - login token issued for `admin@openclause.dev`
+      - selected tenant: `338e57f1-0114-45b6-8c7f-34871c04601c`
+      - allow `event_id=bdf16010-4bb3-4ed3-9a62-212524831ae9`
+      - deny `event_id=e1e98524-e47c-470e-a506-6d65cbb2b16c`
+      - approve `event_id=053410e1-ba0d-47ef-b0b8-0bf4ba02a212` (`approval_id=c9e707db-a58d-49eb-9c46-ace8f68aac61`)
+      - approve + execute: execution audit `event_id=df5ca075-f28e-4b3f-ad0b-d78db70c7599` (`result.status=error`), audit trail endpoint verified
 
