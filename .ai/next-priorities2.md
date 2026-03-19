@@ -215,10 +215,44 @@ This document tracks implementation work for OpenClause “Approver Management +
         - DB totals (24h) matched: `37|10|17|10`
 
 ### (10) API key lifecycle UX
-- [ ] Rotation workflow + last-used + expiry warnings
-  - Scope: UI + backend endpoints if needed
-  - Acceptance criteria: users can rotate and see last-used/expiry info
-  - Commit links: ``
+- [x] Rotation workflow + last-used + expiry warnings
+  - Scope: extend API key schema + tenant-scoped rotate endpoint + UI workflow/metadata display
+  - Files/services:
+    - Backend: `migrations/001_initial.sql`, `pkg/console/store.go`, `pkg/auth/dbkeys.go`, `cmd/console-api/main.go`
+    - Frontend: `web/console/src/pages/TenantDetail.tsx`
+    - Docs: `README.md`, `docs/LOCAL_TESTING.md`
+  - API changes:
+    - `POST /admin/tenants/{tenant_id}/apikeys/rotate`
+    - `POST /admin/tenants/{tenant_id}/apikeys` now accepts optional `expires_at`
+    - `GET /admin/tenants/{tenant_id}/apikeys` now includes `expires_at`, `last_used_at`, `is_primary`
+  - Acceptance criteria:
+    - tenant_admin/platform_admin can rotate key: create new -> mark primary -> revoke old primary
+    - key metadata (`last_used_at`, `expires_at`, `is_primary`) is visible in UI and API
+    - gateway rejects expired DB-backed keys (`expires_at <= NOW()`)
+  - Commit links: `5f00d7c`
+  - Verification notes:
+    - `go test ./... -count=1` (PASS)
+    - policy tests: `docker run --rm -v \"$PWD/policy\":/policy openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v` (PASS; 17/17)
+    - `web/console`: `npm install && npm run build` (PASS)
+    - `sdk/typescript`: `npm install && npm run build` (PASS)
+    - Docker restart: `docker compose -f deploy/docker-compose.yml up --build -d gateway console-api console-ui` (PASS)
+    - Smoke (explicit tenant UUID from `.env` API key mapping):
+      - login: token issued for `admin@openclause.dev`
+      - selected tenant: `338e57f1-0114-45b6-8c7f-34871c04601c`
+      - rotation:
+        - old primary key id: `e3cf65cf-1f6e-492e-89e7-69ef7cf7f664`
+        - new primary key id: `43326f08-8f6b-4afd-8d49-bae7cc386c99`
+        - new key `expires_at=2030-01-01T23:59:59.999999Z`, `is_primary=true`
+        - old key revoked (`status=revoked`, `is_primary=false`)
+      - toolcalls with rotated key:
+        - allow `event_id=796322a3-115f-4823-bfc7-5858d53b4d03`
+        - deny `event_id=ccd1c1ef-f019-4816-bad7-adc7d14bff7e`
+        - approve `event_id=4516ef5b-dd12-43d9-b88f-1694454d7ae5` (`approval_id=dcb61ee5-dd81-40a0-9985-9705f6da9c08`)
+      - approve + execute:
+        - execute response `decision=allow`, `result_status=success`
+        - execution audit event `event_id=4b06ff2c-7c3d-4008-b70f-249988f72870`, `result_status=success`
+      - API key metadata post-use:
+        - rotated key `last_used_at=2026-03-19T20:45:23.735883Z` persisted
 
 ### (11) Policy authoring UX
 - [ ] Rule builder with diffs + rollback UI
