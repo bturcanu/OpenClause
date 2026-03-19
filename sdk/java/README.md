@@ -40,29 +40,26 @@ import java.util.Map;
 public class Example {
     public static void main(String[] args) throws OpenClauseException {
         OpenClauseClient client = new OpenClauseClient(
-            "https://api.openclause.dev",
+            "http://localhost:8080",
             System.getenv("OPENCLAUSE_API_KEY")
         );
 
         ToolCallRequest request = ToolCallRequest.builder(
-                "t_acme",
-                "agent_billing",
-                "stripe",
-                "refund",
+                "<tenant_id>",
+                "<agent_id>",
+                "slack",
+                "msg.post",
                 OpenClauseClient.generateIdempotencyKey()
             )
-            .params(Map.of("charge_id", "ch_abc123", "amount", 5000))
-            .resource("charges/ch_abc123")
-            .riskScore(8)
+            .params(Map.of("channel", "#general", "text", "Hello from OpenClause!"))
+            .riskScore(3)
             .build();
 
         ToolCallResponse response = client.submitToolCall(request);
 
         switch (response.getDecision()) {
             case "allow":
-                System.out.println("Tool call allowed, executing...");
-                ToolCallResponse result = client.execute(response.getEventId());
-                System.out.println("Result: " + result.getResult().getStatus());
+                System.out.println("Tool call allowed. Result status: " + response.getResult().getStatus());
                 break;
 
             case "approve":

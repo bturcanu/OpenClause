@@ -13,15 +13,19 @@ pip install openclause
 ```python
 from openclause import OpenClauseClient, ToolCallRequest
 
+# This example is meant for local development. It assumes you have created a tenant, an agent, and a raw API key.
+# If you're using the provided dev seed (`docs/seed_dev.sql` / `./scripts/seed-dev.sh`), substitute the placeholders below with:
+# tenant_id="tenant1", agent_id="agent-1", api_key="sk-test-key-1".
+
 client = OpenClauseClient(
     base_url="http://localhost:8080",
-    api_key="sk-test-key-1"
+    api_key="<raw_api_key>"
 )
 
 # Submit a tool call for policy evaluation
 response = client.submit_tool_call(ToolCallRequest(
-    tenant_id="tenant1",
-    agent_id="agent-1",
+    tenant_id="<tenant_id>",
+    agent_id="<agent_id>",
     tool="slack",
     action="msg.post",
     idempotency_key=OpenClauseClient.generate_idempotency_key(),

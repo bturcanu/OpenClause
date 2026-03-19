@@ -96,7 +96,11 @@ Save the `token` from the response:
 export TOKEN="<paste token here>"
 ```
 
-Determine your `TENANT_ID` (copy from the `/admin/tenants` response):
+Determine your `TENANT_ID`:
+
+- This guide's later curl examples assume the dev seed data above is present (tenant `tenant1`, agent `agent-1`, API key raw value `sk-test-key-1`).
+- If you used the SQL snippet above, set `TENANT_ID=tenant1`.
+- If you only used the Setup Wizard and did not run the seed SQL, you must create an agent + API key for your actual tenant and update `agent_id` / `X-API-Key` values in the commands below (they currently assume `agent-1` + `sk-test-key-1`).
 ```bash
 curl -s "http://localhost:8090/admin/tenants" \
   -H "Authorization: Bearer $TOKEN"
@@ -104,7 +108,7 @@ curl -s "http://localhost:8090/admin/tenants" \
 
 Set:
 ```bash
-export TENANT_ID="<paste tenant id>"
+export TENANT_ID="tenant1" # if you ran the seed SQL above; otherwise replace with your tenant id
 ```
 
 ## 4. Create a Tenant via Console (optional)
@@ -143,8 +147,9 @@ curl -s http://localhost:8080/v1/toolcalls \
   -d '{
     "tenant_id": "$TENANT_ID",
     "agent_id": "agent-1",
-    "tool": "database",
-    "action": "query.run",
+    "tool": "postgres",
+    "action": "query.readonly",
+    "params": { "sql": "SELECT 1", "params": [] },
     "risk_score": 3,
     "idempotency_key": "test-deny-1"
   }'
@@ -162,8 +167,9 @@ curl -s http://localhost:8080/v1/toolcalls \
     "tenant_id": "$TENANT_ID",
     "agent_id": "agent-1",
     "tool": "jira",
-    "action": "issue.delete",
-    "resource": "project/OPS/issue/123",
+    "action": "issue.create",
+    "params": { "project": "OPS", "summary": "Test issue from local testing" },
+    "resource": "project/OPS",
     "risk_score": 8,
     "idempotency_key": "test-approve-1"
   }'
@@ -338,7 +344,7 @@ curl.exe -s "http://localhost:8080/v1/toolcalls" `
 **Login and capture token:**
 
 ```powershell
-$body = @{ email = "admin@openclause.dev"; password = "admin123" } | ConvertTo-Json
+$body = @{ email = "<platform-admin-email>"; password = "<platform-admin-password>" } | ConvertTo-Json
 $resp = Invoke-RestMethod -Method Post -Uri "http://localhost:8090/auth/login" `
   -ContentType "application/json" -Body $body
 $TOKEN = $resp.token
