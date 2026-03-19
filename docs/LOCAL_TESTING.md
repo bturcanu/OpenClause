@@ -411,6 +411,22 @@ curl -s http://localhost:8090/admin/policy/simulate \
 
 Expected: `policy_result.result.decision` = `"approve"` (destructive action + high risk).
 
+## 14a. Tenant Analytics (Tier 3 item 9)
+
+After generating some allow/deny/approve tool-call events for your tenant, you can verify analytics via the tenant-scoped summary endpoint:
+
+```bash
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/analytics/summary?range=24h&bucket_minutes=60&top_agents=5" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+Expected JSON fields:
+- `totals` (total_events, allow_count, deny_count, approve_count)
+- `trend` (time buckets with allow/deny/approve counts)
+- `risk_heatmap` (risk_score 0..10 with decision counts)
+- `per_agent` (top agents by total event count)
+- `onboarding_checklist` (has_api_key/has_approver lifetime; has_toolcall/has_approval/has_execution within the selected range)
+
 ## 15. Run Unit Tests
 
 ```bash

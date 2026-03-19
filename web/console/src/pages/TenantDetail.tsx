@@ -71,6 +71,55 @@ interface AlertEvent {
   created_at: string
 }
 
+interface TenantAnalyticsTotals {
+  total_events: number
+  allow_count: number
+  deny_count: number
+  approve_count: number
+}
+
+interface TenantAnalyticsTrendBucket {
+  bucket: string
+  total: number
+  allow_count: number
+  deny_count: number
+  approve_count: number
+}
+
+interface TenantRiskHeatmapRow {
+  risk_score: number
+  allow_count: number
+  deny_count: number
+  approve_count: number
+  total: number
+}
+
+interface TenantAgentBreakdownRow {
+  agent_id: string
+  allow_count: number
+  deny_count: number
+  approve_count: number
+  total: number
+}
+
+interface TenantOnboardingChecklist {
+  has_api_key: boolean
+  has_approver: boolean
+  has_toolcall: boolean
+  has_approval: boolean
+  has_execution: boolean
+}
+
+interface TenantAnalyticsSummary {
+  range_start: string
+  range_end: string
+  totals: TenantAnalyticsTotals
+  trend: TenantAnalyticsTrendBucket[]
+  risk_heatmap: TenantRiskHeatmapRow[]
+  per_agent: TenantAgentBreakdownRow[]
+  onboarding_checklist: TenantOnboardingChecklist
+}
+
 export default function TenantDetail() {
   const { id } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
@@ -93,7 +142,7 @@ export default function TenantDetail() {
   const [approverName, setApproverName] = useState('')
 
   const [allowlistSource, setAllowlistSource] = useState<string>('db')
-  const [activeTab, setActiveTab] = useState<'agents' | 'api_keys' | 'approvers' | 'alerts'>('agents')
+  const [activeTab, setActiveTab] = useState<'agents' | 'api_keys' | 'approvers' | 'alerts' | 'analytics'>('agents')
 
   const [notifForm, setNotifForm] = useState({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
   const [savingNotif, setSavingNotif] = useState(false)
@@ -109,9 +158,16 @@ export default function TenantDetail() {
   const [editRuleForm, setEditRuleForm] = useState({ name: '', n: 3, mMinutes: 5, enabled: true })
   const [alertRuleSaving, setAlertRuleSaving] = useState(false)
 
+  const [tenantAnalytics, setTenantAnalytics] = useState<TenantAnalyticsSummary | null>(null)
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
+  const [analyticsError, setAnalyticsError] = useState('')
+  const [analyticsRangeHours, setAnalyticsRangeHours] = useState(24)
+  const [analyticsBucketMinutes] = useState(60)
+  const [analyticsTopAgents] = useState(5)
+
   useEffect(() => {
     const tab = searchParams.get('tab')
-    if (tab === 'agents' || tab === 'api_keys' || tab === 'approvers' || tab === 'alerts') {
+    if (tab === 'agents' || tab === 'api_keys' || tab === 'approvers' || tab === 'alerts' || tab === 'analytics') {
       setActiveTab(tab)
     } else {
       setActiveTab('agents')
@@ -131,6 +187,8 @@ export default function TenantDetail() {
     setAlertRules([])
     setAlertEvents([])
     setAlertsError('')
+    setTenantAnalytics(null)
+    setAnalyticsError('')
     setNotifForm({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
     setAllowlistSource('db')
 
@@ -195,6 +253,29 @@ export default function TenantDetail() {
   useEffect(() => {
     if (activeTab === 'alerts') void fetchAlerts()
   }, [activeTab, id])
+
+  async function fetchTenantAnalytics() {
+    setAnalyticsLoading(true)
+    setAnalyticsError('')
+    try {
+      if (!id) throw new Error('tenant id missing')
+      const rangeHours = analyticsRangeHours
+      const summary = await api.get(
+        `/admin/tenants/${id}/analytics/summary?range=${rangeHours}h&bucket_minutes=${analyticsBucketMinutes}&top_agents=${analyticsTopAgents}`,
+      )
+      setTenantAnalytics(summary as TenantAnalyticsSummary)
+    } catch (err) {
+      if (err instanceof Error) setAnalyticsError(err.message)
+      else setAnalyticsError('Failed to load analytics')
+      setTenantAnalytics(null)
+    } finally {
+      setAnalyticsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'analytics') void fetchTenantAnalytics()
+  }, [activeTab, id, analyticsRangeHours])
 
   async function createAlertRule(e: FormEvent) {
     e.preventDefault()
@@ -458,6 +539,12 @@ export default function TenantDetail() {
           onClick={() => setActiveTab('alerts')}
         >
           Alerts
+        </button>
+        <button
+          className={`btn btn-outline btn-sm ${activeTab === 'analytics' ? 'active' : ''}`}
+          onClick={() => setActiveTab('analytics')}
+        >
+          Analytics
         </button>
       </div>
 
@@ -848,6 +935,209 @@ export default function TenantDetail() {
               </tbody>
             </table>
           </div>
+        </>
+      )}
+
+      {activeTab === 'analytics' && (
+        <>
+          <div className="section-title mt-16">Analytics</div>
+
+          <div className="form-card mt-16">
+            <h3>Tenant analytics</h3>
+            <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div className="form-group" style={{ minWidth: 220 }}>
+                <label>Range</label>
+                <select value={analyticsRangeHours} onChange={(e) => setAnalyticsRangeHours(Number(e.target.value))}>
+                  <option value={6}>Last 6 hours</option>
+                  <option value={24}>Last 24 hours</option>
+                  <option value={168}>Last 7 days</option>
+                </select>
+              </div>
+              <div style={{ fontSize: 13, color: '#64748b', paddingBottom: 6 }}>
+                Bucket: {analyticsBucketMinutes} min · Top agents: {analyticsTopAgents}
+              </div>
+            </div>
+          </div>
+
+          {analyticsError && <div className="error-msg">{analyticsError}</div>}
+          {analyticsLoading && <div className="loading">Loading analytics…</div>}
+
+          {tenantAnalytics && (() => {
+            const totals = tenantAnalytics.totals
+            const trend = tenantAnalytics.trend
+            const riskHeatmap = tenantAnalytics.risk_heatmap
+            const perAgent = tenantAnalytics.per_agent
+            const onboarding = tenantAnalytics.onboarding_checklist
+
+            const maxDecision = Math.max(...trend.flatMap(b => [b.allow_count, b.deny_count, b.approve_count]), 1)
+            const riskMaxTotal = Math.max(...riskHeatmap.map(r => r.total), 1)
+
+            const badgeFor = (ok: boolean) => (ok ? <span className="badge badge-green">Done</span> : <span className="badge badge-gray">Pending</span>)
+            const alphaFor = (count: number) => 0.08 + 0.92 * (riskMaxTotal > 0 ? count / riskMaxTotal : 0)
+
+            return (
+              <>
+                <div className="card-grid mt-16">
+                  <div className="card">
+                    <div className="card-label">Total Events</div>
+                    <div className="card-value">{totals.total_events.toLocaleString()}</div>
+                  </div>
+                  <div className="card">
+                    <div className="card-label">Allow</div>
+                    <div className="card-value green">{totals.allow_count.toLocaleString()}</div>
+                  </div>
+                  <div className="card">
+                    <div className="card-label">Deny</div>
+                    <div className="card-value red">{totals.deny_count.toLocaleString()}</div>
+                  </div>
+                  <div className="card">
+                    <div className="card-label">Approve</div>
+                    <div className="card-value yellow">{totals.approve_count.toLocaleString()}</div>
+                  </div>
+                </div>
+
+                {trend.length > 0 && (
+                  <div className="detail-panel">
+                    <h3>Allow/Deny/Approve Trend</h3>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 120, padding: '12px 0' }}>
+                      {trend.map((b, i) => (
+                        <div key={i} style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 2 }}>
+                          <div
+                            title={`allow: ${b.allow_count}`}
+                            style={{
+                              flex: 1,
+                              background: '#22c55e',
+                              borderRadius: '3px 3px 0 0',
+                              height: `${(b.allow_count / maxDecision) * 100}%`,
+                            }}
+                          />
+                          <div
+                            title={`deny: ${b.deny_count}`}
+                            style={{
+                              flex: 1,
+                              background: '#ef4444',
+                              borderRadius: '3px 3px 0 0',
+                              height: `${(b.deny_count / maxDecision) * 100}%`,
+                            }}
+                          />
+                          <div
+                            title={`approve: ${b.approve_count}`}
+                            style={{
+                              flex: 1,
+                              background: '#eab308',
+                              borderRadius: '3px 3px 0 0',
+                              height: `${(b.approve_count / maxDecision) * 100}%`,
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#64748b', marginTop: 8 }}>
+                      <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#22c55e', borderRadius: 2, marginRight: 6 }} />Allow</span>
+                      <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#ef4444', borderRadius: 2, marginRight: 6 }} />Deny</span>
+                      <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#eab308', borderRadius: 2, marginRight: 6 }} />Approve</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8', marginTop: 12 }}>
+                      <span>{formatDate(trend[0].bucket, 'date')}</span>
+                      <span>{formatDate(trend[trend.length - 1].bucket, 'date')}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="detail-panel mt-16">
+                  <h3>Risk Heatmap</h3>
+                  <div className="table-container" style={{ marginBottom: 0 }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Risk</th>
+                          <th>Allow</th>
+                          <th>Deny</th>
+                          <th>Approve</th>
+                          <th>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {riskHeatmap.map(r => (
+                          <tr key={r.risk_score}>
+                            <td style={{ fontFamily: 'monospace' }}>{r.risk_score}</td>
+                            <td style={{ background: `rgba(34,197,94,${alphaFor(r.allow_count)})` }}>{r.allow_count}</td>
+                            <td style={{ background: `rgba(239,68,68,${alphaFor(r.deny_count)})` }}>{r.deny_count}</td>
+                            <td style={{ background: `rgba(234,179,8,${alphaFor(r.approve_count)})` }}>{r.approve_count}</td>
+                            <td style={{ color: '#334155' }}>{r.total}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="section-title mt-16">Per-Agent Breakdown</div>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Agent</th>
+                        <th>Allow</th>
+                        <th>Deny</th>
+                        <th>Approve</th>
+                        <th>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {perAgent.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
+                            No tool events in this range
+                          </td>
+                        </tr>
+                      ) : (
+                        perAgent.map(a => (
+                          <tr key={a.agent_id}>
+                            <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{a.agent_id.slice(0, 12)}…</td>
+                            <td>{a.allow_count}</td>
+                            <td>{a.deny_count}</td>
+                            <td>{a.approve_count}</td>
+                            <td>{a.total}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="form-card mt-16">
+                  <h3>Onboarding Checklist</h3>
+                  <div style={{ display: 'grid', gap: 12 }}>
+                    <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                      <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>Create API key</div>
+                      <div>{badgeFor(onboarding.has_api_key)}</div>
+                    </div>
+                    <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                      <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>Add approver</div>
+                      <div>{badgeFor(onboarding.has_approver)}</div>
+                    </div>
+                    <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                      <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>First tool-call</div>
+                      <div>{badgeFor(onboarding.has_toolcall)}</div>
+                    </div>
+                    <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                      <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>First approval</div>
+                      <div>{badgeFor(onboarding.has_approval)}</div>
+                    </div>
+                    <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                      <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>First execution</div>
+                      <div>{badgeFor(onboarding.has_execution)}</div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )
+          })()}
+
+          {!analyticsLoading && !tenantAnalytics && !analyticsError && (
+            <div style={{ color: '#64748b', fontSize: 13, marginTop: 16 }}>No analytics data yet</div>
+          )}
         </>
       )}
 

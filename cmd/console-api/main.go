@@ -108,6 +108,7 @@ func main() {
 	api := &ConsoleAPI{
 		log:                     log,
 		store:                   store,
+		analyticsStore:         store,
 		alertsStore:            store,
 		notificationConfigStore: store,
 		exportStore:             store,
@@ -163,6 +164,7 @@ func main() {
 
 		r.Get("/admin/analytics/overview", api.handleAnalyticsOverview)
 		r.Get("/admin/analytics/timeseries", api.handleAnalyticsTimeseries)
+		r.Get("/admin/tenants/{tenant_id}/analytics/summary", api.requireTenantRole("tenant_admin", api.handleTenantAnalyticsSummary))
 
 		// Users + RBAC + invites (admin/tenant_admin only, validated in handler).
 		r.Get("/admin/users", api.handleListUsers)
@@ -258,6 +260,7 @@ func main() {
 type ConsoleAPI struct {
 	log                     *slog.Logger
 	store                   *console.Store
+	analyticsStore         analyticsStore
 	alertsStore            alertsStore
 	notificationConfigStore notificationConfigStore
 	exportStore             exportEventsStore
@@ -287,6 +290,10 @@ type alertsStore interface {
 	DeleteAlertRule(ctx context.Context, tenantID, ruleID string) error
 	GetAlertRule(ctx context.Context, tenantID, ruleID string) (*console.AlertRule, error)
 	ListAlertEventsSince(ctx context.Context, tenantID string, since time.Time, limit int) ([]console.AlertEvent, error)
+}
+
+type analyticsStore interface {
+	GetTenantAnalyticsSummary(ctx context.Context, tenantID string, since time.Time, bucketMinutes int, topAgents int) (*console.TenantAnalyticsSummary, error)
 }
 
 type claimsKey struct{}

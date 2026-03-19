@@ -308,6 +308,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/invites` | `platform_admin` or `tenant_admin` | List pending invites |
 | `GET` | `/admin/analytics/overview` | JWT | Decision counts, pending approvals, active tenants/agents |
 | `GET` | `/admin/analytics/timeseries` | JWT | Time-bucketed decision counts |
+| `GET` | `/admin/tenants/{tenant_id}/analytics/summary` | JWT (`tenant_admin`) | Tenant-scoped analytics summary for dashboards (range, buckets, heatmap, onboarding) |
 | `POST` | `/admin/tenants` | platform_admin | Create tenant |
 | `GET` | `/admin/tenants` | JWT | List tenants (scoped by role) |
 | `GET` | `/admin/tenants/{id}` | JWT | Get tenant detail |
@@ -724,6 +725,17 @@ When a rule fires, OpenClause creates an `alert_events` row and dispatches notif
 
 Tuning:
 - `ALERT_WORKER_INTERVAL_SEC` (default `30`) controls how quickly new denies are evaluated.
+
+### Tenant Analytics Dashboard (Tier 3 item 9)
+OpenClause provides a tenant-scoped analytics summary endpoint used by the Console UI Analytics tab:
+- `GET /admin/tenants/{tenant_id}/analytics/summary?range=24h&bucket_minutes=60&top_agents=5`
+
+The response includes:
+- `totals` (allow/deny/approve counts)
+- `trend` (time buckets with allow/deny/approve counts)
+- `risk_heatmap` (risk_score decision distribution)
+- `per_agent` (top agents by total events)
+- `onboarding_checklist` (setup progress for the tenant)
 
 ### How to configure Per-tenant Notification Routing
 1. Log in as a `tenant_admin` for the target tenant.

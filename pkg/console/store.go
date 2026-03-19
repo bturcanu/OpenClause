@@ -98,6 +98,55 @@ type AnalyticsOverview struct {
 	ActiveAgents     int64 `json:"active_agents"`
 }
 
+type DecisionTotals struct {
+	TotalEvents  int64 `json:"total_events"`
+	AllowCount   int64 `json:"allow_count"`
+	DenyCount    int64 `json:"deny_count"`
+	ApproveCount int64 `json:"approve_count"`
+}
+
+type DecisionTrendBucket struct {
+	Bucket       time.Time `json:"bucket"`
+	Total        int64     `json:"total"`
+	AllowCount   int64     `json:"allow_count"`
+	DenyCount    int64     `json:"deny_count"`
+	ApproveCount int64     `json:"approve_count"`
+}
+
+type RiskHeatmapRow struct {
+	RiskScore    int   `json:"risk_score"`
+	AllowCount   int64 `json:"allow_count"`
+	DenyCount    int64 `json:"deny_count"`
+	ApproveCount int64 `json:"approve_count"`
+	Total        int64 `json:"total"`
+}
+
+type AgentBreakdownRow struct {
+	AgentID      string `json:"agent_id"`
+	AllowCount   int64  `json:"allow_count"`
+	DenyCount    int64  `json:"deny_count"`
+	ApproveCount int64  `json:"approve_count"`
+	Total        int64  `json:"total"`
+}
+
+type OnboardingChecklist struct {
+	HasAPIKey    bool `json:"has_api_key"`
+	HasApprover  bool `json:"has_approver"`
+	HasToolcall  bool `json:"has_toolcall"`
+	HasApproval  bool `json:"has_approval"`
+	HasExecution bool `json:"has_execution"`
+}
+
+type TenantAnalyticsSummary struct {
+	RangeStart           time.Time             `json:"range_start"`
+	RangeEnd             time.Time             `json:"range_end"`
+	Totals               DecisionTotals        `json:"totals"`
+	Trend                []DecisionTrendBucket `json:"trend"`
+	RiskHeatmap          []RiskHeatmapRow      `json:"risk_heatmap"`
+	PerAgent             []AgentBreakdownRow   `json:"per_agent"`
+	OnboardingChecklist  OnboardingChecklist   `json:"onboarding_checklist"`
+}
+
 type EventListItem struct {
 	EventID    string    `json:"event_id"`
 	TenantID   string    `json:"tenant_id"`
@@ -1385,6 +1434,163 @@ func (s *Store) GetDecisionTimeseries(ctx context.Context, tenantID string, sinc
 		return nil, fmt.Errorf("console.GetDecisionTimeseries iteration: %w", err)
 	}
 	return out, nil
+}
+
+func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, since time.Time, bucketMinutes int, topAgents int) (*TenantAnalyticsSummary, error) {
+	if bucketMinutes <= 0 {
+		bucketMinutes = 60
+	}
+	if topAgents <= 0 {
+		topAgents = 5
+	}
+	if topAgents > 50 {
+		topAgents = 50
+	}
+
+	now := time.Now().UTC()
+	bucketSec := int64(bucketMinutes) * 60
+
+	// Trend: allow/deny/approve counts in time buckets.
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			to_timestamp(floor(extract(epoch FROM received_at) / $3) * $3) AS bucket,
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+			COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+			COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2
+		GROUP BY bucket
+		ORDER BY bucket ASC`, tenantID, since, bucketSec,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary trend: %w", err)
+	}
+	defer rows.Close()
+
+	trend := make([]DecisionTrendBucket, 0)
+	var totals DecisionTotals
+	for rows.Next() {
+		var bucket time.Time
+		var total, allow, deny, approve int64
+		if err := rows.Scan(&bucket, &total, &allow, &deny, &approve); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary trend scan: %w", err)
+		}
+		trend = append(trend, DecisionTrendBucket{
+			Bucket:       bucket,
+			Total:        total,
+			AllowCount:   allow,
+			DenyCount:    deny,
+			ApproveCount: approve,
+		})
+		totals.TotalEvents += total
+		totals.AllowCount += allow
+		totals.DenyCount += deny
+		totals.ApproveCount += approve
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary trend iteration: %w", err)
+	}
+
+	// Risk heatmap: per-risk-score decision counts (0..10).
+	riskHeatmap := make([]RiskHeatmapRow, 0, 11)
+	for risk := 0; risk <= 10; risk++ {
+		riskHeatmap = append(riskHeatmap, RiskHeatmapRow{RiskScore: risk})
+	}
+	riskRows, err := s.pool.Query(ctx, `
+		SELECT
+			risk_score,
+			COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+			COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+			COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
+			COUNT(*) AS total
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2
+		GROUP BY risk_score
+		ORDER BY risk_score ASC`, tenantID, since,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary risk heatmap: %w", err)
+	}
+	defer riskRows.Close()
+	for riskRows.Next() {
+		var risk int
+		var allow, deny, approve, total int64
+		if err := riskRows.Scan(&risk, &allow, &deny, &approve, &total); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary risk heatmap scan: %w", err)
+		}
+		if risk >= 0 && risk <= 10 {
+			riskHeatmap[risk] = RiskHeatmapRow{
+				RiskScore:    risk,
+				AllowCount:   allow,
+				DenyCount:    deny,
+				ApproveCount: approve,
+				Total:        total,
+			}
+		}
+	}
+	if err := riskRows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary risk heatmap iteration: %w", err)
+	}
+
+	// Per-agent breakdown: top agents by total events.
+	perAgent := make([]AgentBreakdownRow, 0)
+	agentRows, err := s.pool.Query(ctx, `
+		SELECT
+			agent_id,
+			COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+			COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+			COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
+			COUNT(*) AS total
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2
+		GROUP BY agent_id
+		ORDER BY total DESC
+		LIMIT $3`, tenantID, since, topAgents,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary per-agent: %w", err)
+	}
+	defer agentRows.Close()
+	for agentRows.Next() {
+		var row AgentBreakdownRow
+		if err := agentRows.Scan(&row.AgentID, &row.AllowCount, &row.DenyCount, &row.ApproveCount, &row.Total); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary per-agent scan: %w", err)
+		}
+		perAgent = append(perAgent, row)
+	}
+	if err := agentRows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary per-agent iteration: %w", err)
+	}
+
+	// Onboarding checklist: activity presence for common tenant setup steps.
+	var onboarding OnboardingChecklist
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			EXISTS(SELECT 1 FROM api_keys WHERE tenant_id = $1 AND status = 'active') AS has_api_key,
+			EXISTS(SELECT 1 FROM user_roles WHERE tenant_id = $1 AND role = 'approver') AS has_approver,
+			EXISTS(SELECT 1 FROM tool_events WHERE tenant_id = $1 AND received_at >= $2) AS has_toolcall,
+			EXISTS(SELECT 1 FROM approval_requests WHERE tenant_id = $1 AND created_at >= $2) AS has_approval,
+			EXISTS(
+				SELECT 1
+				FROM tool_executions te
+				JOIN tool_events e ON e.event_id = te.execution_event_id
+				WHERE e.tenant_id = $1 AND e.received_at >= $2
+			) AS has_execution`, tenantID, since,
+	).Scan(&onboarding.HasAPIKey, &onboarding.HasApprover, &onboarding.HasToolcall, &onboarding.HasApproval, &onboarding.HasExecution)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary onboarding: %w", err)
+	}
+
+	return &TenantAnalyticsSummary{
+		RangeStart:          since,
+		RangeEnd:            now,
+		Totals:               totals,
+		Trend:                trend,
+		RiskHeatmap:          riskHeatmap,
+		PerAgent:             perAgent,
+		OnboardingChecklist: onboarding,
+	}, nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
