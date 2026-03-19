@@ -89,7 +89,7 @@ This document tracks implementation work for OpenClause “Approver Management +
   - Acceptance criteria:
     - Current `/auth/login` flow works unchanged (including tenant-scope fail-closed behavior)
     - Codebase has clean seams for adding OIDC later (provider interface + factory wiring; login handler no longer coupled to credential verification/token generation)
-  - Commit links: `TBD`
+  - Commit links: `7c25c8f`
   - Verification notes:
     - `go test ./... -count=1` (PASS)
     - `go test -race ./... -count=1` (PASS)
