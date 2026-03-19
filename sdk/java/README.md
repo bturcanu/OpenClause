@@ -53,7 +53,7 @@ public class Example {
             )
             .params(Map.of("charge_id", "ch_abc123", "amount", 5000))
             .resource("charges/ch_abc123")
-            .riskScore(0.7)
+            .riskScore(8)
             .build();
 
         ToolCallResponse response = client.submitToolCall(request);
@@ -116,7 +116,7 @@ Use the builder pattern to construct requests:
 ToolCallRequest request = ToolCallRequest.builder(tenantId, agentId, tool, action, idempotencyKey)
     .params(params)
     .resource(resource)
-    .riskScore(0.8)
+    .riskScore(8)
     .riskFactors(List.of("destructive"))
     .userId(userId)
     .sessionId(sessionId)

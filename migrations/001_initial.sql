@@ -48,11 +48,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash) WHERE 
 CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
+    password_hash TEXT,
     name          TEXT NOT NULL DEFAULT '',
+    slack_user_id TEXT,
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Slack approvals must map to a single user; enforce uniqueness when set.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_slack_user_id_unique
+    ON users(slack_user_id)
+    WHERE slack_user_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS user_roles (
     id        TEXT PRIMARY KEY,
@@ -66,6 +72,32 @@ CREATE TABLE IF NOT EXISTS user_roles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
+
+-- ── Invites (invite acceptance) ─────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS invites (
+    token       TEXT PRIMARY KEY,
+    email       TEXT NOT NULL,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+    role        TEXT NOT NULL CHECK (role IN ('tenant_admin', 'approver', 'viewer')),
+    name        TEXT DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_invites_tenant_expires ON invites(tenant_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_invites_email_expires ON invites(email, expires_at);
+
+-- ── Password resets (minimum viable) ────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS password_resets (
+    token       TEXT PRIMARY KEY,
+    email       TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_resets_email_expires ON password_resets(email, expires_at);
 
 -- ── Sessions ────────────────────────────────────────────────────────────────
 

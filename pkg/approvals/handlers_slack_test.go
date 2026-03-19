@@ -71,7 +71,12 @@ func TestVerifySlackRequestFixture(t *testing.T) {
 
 func TestSlackInteractionApproveCreatesGrant(t *testing.T) {
 	store := &fakeHandlersStore{}
-	authz := NewApproverAuthorizer("", "tenant1:u123")
+	authz := NewApproverAuthorizer(
+		&fakeApproverLookup{},
+		"",
+		"",
+		"db",
+	)
 	h := NewHandlers(store, authz, "slack-secret")
 
 	actionValue := base64.URLEncoding.EncodeToString([]byte(`{"d":"approve","r":"req-1","e":"evt-1","t":"tenant1"}`))
@@ -97,4 +102,18 @@ func TestSlackInteractionApproveCreatesGrant(t *testing.T) {
 	if !store.granted {
 		t.Fatalf("expected grant to be created")
 	}
+}
+
+type fakeApproverLookup struct{}
+
+func (f *fakeApproverLookup) FindUserByEmail(context.Context, string) (*ConsoleUserIdentity, error) {
+	return nil, nil
+}
+
+func (f *fakeApproverLookup) FindUserBySlackUserID(context.Context, string) (*ConsoleUserIdentity, error) {
+	return &ConsoleUserIdentity{ID: "u1", Email: "alice@openclause.dev"}, nil
+}
+
+func (f *fakeApproverLookup) IsApproverUserForTenant(context.Context, string, string) (bool, error) {
+	return true, nil
 }

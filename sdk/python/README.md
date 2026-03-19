@@ -26,6 +26,7 @@ response = client.submit_tool_call(ToolCallRequest(
     action="msg.post",
     idempotency_key=OpenClauseClient.generate_idempotency_key(),
     params={"channel": "#general", "text": "Hello from OpenClause!"},
+    # risk_score must be an integer in the range 0..10
     risk_score=3
 ))
 

@@ -61,6 +61,68 @@ class TestToolCallRequestSerialization(unittest.TestCase):
         self.assertEqual(d["session_id"], "s1")
         self.assertEqual(d["trace_id"], "trace-abc")
 
+    def test_risk_score_zero_included_when_set(self) -> None:
+        req = ToolCallRequest(
+            tenant_id="t1",
+            agent_id="a1",
+            tool="slack",
+            action="msg.post",
+            idempotency_key="key-0",
+            risk_score=0,
+        )
+        d = req.to_dict()
+        self.assertEqual(d["risk_score"], 0)
+
+
+class TestRiskScoreValidation(unittest.TestCase):
+    def test_rejects_non_int_risk_score(self) -> None:
+        client = OpenClauseClient(base_url="http://localhost:8080", api_key="sk-test")
+        req = ToolCallRequest(  # type: ignore[arg-type]
+            tenant_id="t1",
+            agent_id="a1",
+            tool="slack",
+            action="msg.post",
+            idempotency_key="key-1",
+            risk_score=1.5,
+        )
+        with self.assertRaises(ValidationError):
+            client.submit_tool_call(req)
+
+    def test_rejects_out_of_range_risk_score(self) -> None:
+        client = OpenClauseClient(base_url="http://localhost:8080", api_key="sk-test")
+        req = ToolCallRequest(
+            tenant_id="t1",
+            agent_id="a1",
+            tool="slack",
+            action="msg.post",
+            idempotency_key="key-2",
+            risk_score=11,
+        )
+        with self.assertRaises(ValidationError):
+            client.submit_tool_call(req)
+
+    @patch("openclause.client.requests.Session")
+    def test_includes_zero_risk_score_in_request_body(self, mock_session_cls: MagicMock) -> None:
+        client = OpenClauseClient(base_url="http://localhost:8080", api_key="sk-test")
+        client._post = MagicMock(  # type: ignore[method-assign]
+            return_value={
+                "event_id": "evt-0",
+                "decision": "allow",
+                "reason": "ok",
+            }
+        )
+        req = ToolCallRequest(
+            tenant_id="t1",
+            agent_id="a1",
+            tool="slack",
+            action="msg.post",
+            idempotency_key="key-0",
+            risk_score=0,
+        )
+        _ = client.submit_tool_call(req)
+        _, body = client._post.call_args[0][0:2]  # path, body
+        self.assertEqual(body["risk_score"], 0)
+
 
 class TestToolCallResponseDeserialization(unittest.TestCase):
     """ToolCallResponse.from_dict() parses JSON payloads correctly."""
@@ -168,6 +230,42 @@ class TestHTTPErrorMapping(unittest.TestCase):
         with self.assertRaises(APIError) as ctx:
             client.get_event("evt-x")
         self.assertEqual(ctx.exception.status_code, 500)
+
+
+class TestWaitForApproval(unittest.TestCase):
+    """wait_for_approval() retries execute() on 409 "awaiting approval" conflicts."""
+
+    def test_retries_execute_until_approved(self) -> None:
+        # Polling with poll_interval=0 avoids sleeping during the test.
+        client = OpenClauseClient(base_url="http://localhost:8080", api_key="sk-test")
+
+        approved_resp = ToolCallResponse(
+            event_id="evt-1",
+            decision="allow",
+            reason="approved execution",
+        )
+
+        client.execute = MagicMock(  # type: ignore[method-assign]
+            side_effect=[
+                APIError(409, "awaiting approval"),
+                approved_resp,
+            ]
+        )
+
+        resp = client.wait_for_approval("evt-1", timeout_seconds=1, poll_interval=0)
+        self.assertEqual(resp.event_id, "evt-1")
+        self.assertEqual(resp.decision, "allow")
+        self.assertEqual(client.execute.call_count, 2)
+
+    def test_throws_on_permanent_failure(self) -> None:
+        client = OpenClauseClient(base_url="http://localhost:8080", api_key="sk-test")
+        client.execute = MagicMock(  # type: ignore[method-assign]
+            side_effect=[APIError(403, "forbidden")]
+        )
+
+        with self.assertRaises(APIError) as ctx:
+            client.wait_for_approval("evt-1", timeout_seconds=1, poll_interval=0)
+        self.assertEqual(ctx.exception.status_code, 403)
 
 
 if __name__ == "__main__":
