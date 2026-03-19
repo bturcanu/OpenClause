@@ -968,15 +968,16 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 	if err != nil && err != pgx.ErrNoRows {
 		return nil, fmt.Errorf("console.ConsumeInviteAccept select user: %w", err)
 	}
+	userSelectErr := err
 
 	passToSet := password
 	if passToSet == "" {
 		return nil, fmt.Errorf("console.ConsumeInviteAccept password required")
 	}
 
-	hashed, err := bcrypt.GenerateFromPassword([]byte(passToSet), 10)
-	if err != nil {
-		return nil, fmt.Errorf("console.ConsumeInviteAccept hash password: %w", err)
+	hashed, bcryptErr := bcrypt.GenerateFromPassword([]byte(passToSet), 10)
+	if bcryptErr != nil {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept hash password: %w", bcryptErr)
 	}
 
 	acceptName := strings.TrimSpace(name)
@@ -985,14 +986,15 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 	}
 
 	userID := ""
-	if err == pgx.ErrNoRows {
+	if userSelectErr == pgx.ErrNoRows {
 		userID = uuid.NewString()
-		var createdAt time.Time
-		err = tx.QueryRow(ctx, `
+		// INSERT doesn't return rows; use Exec to ensure the user row exists
+		// before we create user_roles in the same transaction.
+		_, err = tx.Exec(ctx, `
 			INSERT INTO users (id, email, password_hash, name, slack_user_id, status)
 			VALUES ($1, $2, $3, $4, NULL, 'active')`,
 			userID, inv.Email, string(hashed), acceptName,
-		).Scan(&createdAt)
+		)
 		if err != nil {
 			return nil, fmt.Errorf("console.ConsumeInviteAccept insert user: %w", err)
 		}
@@ -1002,7 +1004,7 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 			Name:        acceptName,
 			SlackUserID: nil,
 			Status:      "active",
-			CreatedAt:   createdAt,
+			CreatedAt:   time.Now().UTC(),
 		}
 	} else {
 		userID = u.ID
@@ -1023,7 +1025,7 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 	roleID := uuid.NewString()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO user_roles (id, user_id, tenant_id, role)
-		VALUES ($1, $2, $3, $4)`, roleID, userID, &tenantID, inv.Role)
+		VALUES ($1, $2, $3, $4)`, roleID, userID, tenantID, inv.Role)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if !(errors.As(err, &pgErr) && pgErr.Code == "23505") {
