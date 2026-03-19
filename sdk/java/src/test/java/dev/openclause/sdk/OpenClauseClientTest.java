@@ -95,6 +95,36 @@ class OpenClauseClientTest {
     }
 
     @Test
+    void riskScoreAcceptsZero() {
+        ToolCallRequest request = ToolCallRequest.builder(
+                "t_123", "agent_abc", "db", "op", "key-003"
+        )
+                .riskScore(0)
+                .build();
+
+        String json = gson.toJson(request);
+        assertTrue(json.contains("\"risk_score\":0"));
+    }
+
+    @Test
+    void riskScoreRejectsNonInteger() {
+        assertThrows(IllegalArgumentException.class, () -> ToolCallRequest.builder(
+                "t_123", "agent_abc", "db", "op", "key-004"
+        ).riskScore(8.5).build());
+    }
+
+    @Test
+    void riskScoreRejectsOutOfRange() {
+        assertThrows(IllegalArgumentException.class, () -> ToolCallRequest.builder(
+                "t_123", "agent_abc", "db", "op", "key-005"
+        ).riskScore(-1).build());
+
+        assertThrows(IllegalArgumentException.class, () -> ToolCallRequest.builder(
+                "t_123", "agent_abc", "db", "op", "key-006"
+        ).riskScore(11).build());
+    }
+
+    @Test
     void deserializeAllowResponse() {
         String json = "{\"event_id\":\"evt_001\",\"decision\":\"allow\",\"reason\":\"Policy matched\"}";
         ToolCallResponse response = gson.fromJson(json, ToolCallResponse.class);

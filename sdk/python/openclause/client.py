@@ -54,6 +54,7 @@ class OpenClauseClient:
 
         ``POST /v1/toolcalls``
         """
+        self._validate_risk_score(request.risk_score)
         body = request.to_dict()
         headers = {}
         if request.trace_id:
@@ -130,6 +131,17 @@ class OpenClauseClient:
         return str(uuid.uuid4())
 
     # -- internal helpers -----------------------------------------------------
+
+    @staticmethod
+    def _validate_risk_score(risk_score: int | None) -> None:
+        if risk_score is None:
+            return
+
+        # `bool` is a subclass of `int`, so reject it explicitly.
+        if isinstance(risk_score, bool) or type(risk_score) is not int:
+            raise ValidationError("risk_score must be an integer")
+        if risk_score < 0 or risk_score > 10:
+            raise ValidationError("risk_score must be between 0 and 10")
 
     def _post(
         self,
