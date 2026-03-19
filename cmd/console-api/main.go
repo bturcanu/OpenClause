@@ -32,6 +32,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/time/rate"
 )
 
 const maxBodyBytes = 1 << 20
@@ -75,6 +76,9 @@ func main() {
 	if allowlistSource == "env" || allowlistSource == "both" {
 		log.Warn("ALLOWLIST_SOURCE includes env allowlists; approvals authorization uses dev bootstrap fallback")
 	}
+	rawTokensEnv := os.Getenv("CONSOLE_DEV_LOG_RAW_TOKENS")
+	// Default to enabled to avoid regressing local testing; set to "false" in safer deployments.
+	devLogRawTokens := rawTokensEnv == "" || strings.EqualFold(rawTokensEnv, "true")
 	approverAuth := approvals.NewApproverAuthorizer(
 		approvalsStore,
 		os.Getenv("APPROVER_EMAIL_ALLOWLIST"),
@@ -99,7 +103,12 @@ func main() {
 		approvalsStore:     approvalsStore,
 		approverAuth:       approverAuth,
 		approverAuthSource: allowlistSource,
+		devLogRawTokens:   devLogRawTokens,
 	}
+
+	// Basic throttling for unauthenticated endpoints to reduce abuse and
+	// protect downstream services during bursts.
+	unauthLimiter := newIPRateLimiter(rate.Limit(1), 5) // 1 request/sec/IP, burst 5
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -129,9 +138,12 @@ func main() {
 	r.Post("/setup/initialize", api.handleSetupInitialize)
 
 	r.Post("/auth/login", api.handleLogin)
-	r.Post("/auth/invite/accept", api.handleInviteAccept)
-	r.Post("/auth/reset/request", api.handleResetRequest)
-	r.Post("/auth/reset/confirm", api.handleResetConfirm)
+	r.Group(func(r chi.Router) {
+		r.Use(unauthLimiter.middleware)
+		r.Post("/auth/invite/accept", api.handleInviteAccept)
+		r.Post("/auth/reset/request", api.handleResetRequest)
+		r.Post("/auth/reset/confirm", api.handleResetConfirm)
+	})
 
 	r.Group(func(r chi.Router) {
 		r.Use(api.jwtAuthMiddleware)
@@ -226,6 +238,8 @@ type ConsoleAPI struct {
 	approvalsStore     *approvals.Store
 	approverAuth       *approvals.ApproverAuthorizer
 	approverAuthSource string
+
+	devLogRawTokens bool
 }
 
 type exportEventsStore interface {
@@ -776,8 +790,18 @@ func (api *ConsoleAPI) handleCreateInvite(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Dev bootstrap: log invite accept guidance.
-	api.log.Info("invite created (dev)", "email", email, "tenant_id", in.TenantID, "role", in.Role, "accept_url", "/auth/invite/accept?token="+token)
+	if api.devLogRawTokens {
+		// Dev bootstrap: log invite accept guidance without affecting client contract.
+		api.log.Info(
+			"invite created (dev)",
+			"email", email,
+			"tenant_id", in.TenantID,
+			"role", in.Role,
+			"accept_url", "/auth/invite/accept?token="+token,
+		)
+	} else {
+		api.log.Info("invite created", "email", email, "tenant_id", in.TenantID, "role", in.Role)
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expires_at": expiresAt})
 }
 
@@ -875,7 +899,11 @@ func (api *ConsoleAPI) handleResetRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	api.log.Info("password reset created (dev)", "email", email, "confirm_url", "/reset/confirm?token="+token)
+	if api.devLogRawTokens {
+		api.log.Info("password reset created (dev)", "email", email, "confirm_url", "/reset/confirm?token="+token)
+	} else {
+		api.log.Info("password reset created", "email", email)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
