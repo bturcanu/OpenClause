@@ -95,6 +95,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 | **Connector-Jira** | `:8083` | Executes Jira actions (`issue.create`, `issue.list`). Supports mock mode. |
 | **Built-in Connectors** | — | In-process: GitHub, AWS, ServiceNow, Email, Postgres (read-only), Webhook. |
 | **OPA** | `:8181` | Open Policy Agent evaluating Rego policy bundles. |
+| **Alert Worker** | — | Background worker evaluating tenant alert rules (currently `deny_spike`) and dispatching notifications. |
 | **Archiver** | — | Evidence archival worker (not started by `docker-compose`; run `cmd/archiver` separately or on a schedule). |
 | **Postgres** | `:5432` | Stores events, results, approvals, grants, users, keys, and hash chain. |
 | **MinIO** | `:9000` | S3-compatible object storage (console at `:9001`) for evidence archival. |
@@ -251,10 +252,10 @@ The admin console (http://localhost:3000) provides:
 | **Approvals** | Pending approval queue with approve/deny actions and detail view |
 | **Audit Trail** | Searchable event list with filters (tenant, tool, action, decision) + event detail |
 | **Tenants** | Create/list/disable tenants, view config and usage |
-| **Tenant Detail** | Manage agents, API keys, and tenant-scoped approvers |
+| **Tenant Detail** | Manage agents, API keys, tenant-scoped approvers, analytics, alerts, and notification routing |
 | **Sessions** | Session list with event counts, click into timeline view |
-| **Policies** | Policy versions, create new versions, policy simulator |
-| **Alerts** | Alert rules (deny spike, approve backlog, etc.) and alert events |
+| **Policies** | Tenant rule builder, policy versions, diff/rollback, and policy simulation |
+| **Alerts** | Tenant alert rules (`deny_spike`) and alert events |
 | **Connectors** | Installed connectors with supported actions |
 | **Users** | Invite users, assign/remove roles, and handle invite acceptance + password reset flows |
 
@@ -309,6 +310,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/analytics/overview` | JWT | Decision counts, pending approvals, active tenants/agents |
 | `GET` | `/admin/analytics/timeseries` | JWT | Time-bucketed decision counts |
 | `GET` | `/admin/tenants/{tenant_id}/analytics/summary` | JWT (`tenant_admin`) | Tenant-scoped analytics summary for dashboards (range, buckets, heatmap, onboarding) |
+| `GET/PUT` | `/admin/tenants/{tenant_id}/notification-config` | JWT (`tenant_admin`) | Get/update per-tenant notification routing config |
 | `POST` | `/admin/tenants` | platform_admin | Create tenant |
 | `GET` | `/admin/tenants` | JWT | List tenants (scoped by role) |
 | `GET` | `/admin/tenants/{id}` | JWT | Get tenant detail |
@@ -1071,7 +1073,7 @@ Helm charts are in `deploy/helm/` for each service. Current charts include `gate
 
 Chart capabilities (chart-specific):
 
-- Deployments with liveness (`/healthz`) and readiness (`/readyz`) probes
+- Deployments with health probes (service-specific paths, e.g. console-api `/healthz` + `/readyz`, console-ui `/`)
 - Pod and container security contexts (`runAsNonRoot`, `readOnlyRootFilesystem`, `drop ALL`)
 - ClusterIP services
 - Optional ingresses
