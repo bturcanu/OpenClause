@@ -47,6 +47,31 @@ type TenantNotificationConfig struct {
 	Notify        []types.PolicyNotify `json:"notify,omitempty"`
 }
 
+type TenantPolicyConfig struct {
+	MaxRiskAutoApprove        int      `json:"max_risk_auto_approve"`
+	ReadActions               []string `json:"read_actions,omitempty"`
+	WriteActions              []string `json:"write_actions,omitempty"`
+	DestructiveActions        []string `json:"destructive_actions,omitempty"`
+	RequireDestructiveApproval bool    `json:"require_destructive_approval"`
+}
+
+func (c TenantPolicyConfig) ToPolicyInputMap() map[string]string {
+	out := map[string]string{
+		"max_risk_auto_approve":         strconv.Itoa(c.MaxRiskAutoApprove),
+		"require_destructive_approval":  strconv.FormatBool(c.RequireDestructiveApproval),
+	}
+	if len(c.ReadActions) > 0 {
+		out["read_actions_csv"] = strings.Join(c.ReadActions, ",")
+	}
+	if len(c.WriteActions) > 0 {
+		out["write_actions_csv"] = strings.Join(c.WriteActions, ",")
+	}
+	if len(c.DestructiveActions) > 0 {
+		out["destructive_actions_csv"] = strings.Join(c.DestructiveActions, ",")
+	}
+	return out
+}
+
 type Agent struct {
 	ID        string          `json:"id"`
 	TenantID  string          `json:"tenant_id"`
@@ -392,6 +417,55 @@ func (s *Store) SetTenantNotificationConfig(ctx context.Context, tenantID string
 	}
 	if res.RowsAffected() == 0 {
 		return fmt.Errorf("console.SetTenantNotificationConfig: tenant %s not found", tenantID)
+	}
+	return nil
+}
+
+func (s *Store) GetTenantPolicyConfig(ctx context.Context, tenantID string) (*TenantPolicyConfig, bool, error) {
+	t, err := s.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	if t == nil {
+		return nil, false, nil
+	}
+
+	type tenantConfigWrapper struct {
+		PolicyConfig *TenantPolicyConfig `json:"policy_config,omitempty"`
+	}
+	var w tenantConfigWrapper
+	if len(t.Config) == 0 || string(t.Config) == "{}" {
+		return nil, false, nil
+	}
+	if err := json.Unmarshal(t.Config, &w); err != nil {
+		return nil, false, fmt.Errorf("console.GetTenantPolicyConfig unmarshal: %w", err)
+	}
+	if w.PolicyConfig == nil {
+		return nil, false, nil
+	}
+	return w.PolicyConfig, true, nil
+}
+
+func (s *Store) SetTenantPolicyConfig(ctx context.Context, tenantID string, cfg TenantPolicyConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantPolicyConfig marshal: %w", err)
+	}
+
+	res, err := s.pool.Exec(ctx, `
+		UPDATE tenants
+		SET config = jsonb_set(
+			COALESCE(config, '{}'::jsonb),
+			'{policy_config}',
+			$1::jsonb,
+			true
+		)
+		WHERE id = $2`, b, tenantID)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantPolicyConfig update: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.SetTenantPolicyConfig: tenant %s not found", tenantID)
 	}
 	return nil
 }
@@ -1235,13 +1309,13 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 	userID := ""
 	if userSelectErr == pgx.ErrNoRows {
 		userID = uuid.NewString()
-		// INSERT doesn't return rows; use Exec to ensure the user row exists
-		// before we create user_roles in the same transaction.
-		_, err = tx.Exec(ctx, `
+		var createdAt time.Time
+		err = tx.QueryRow(ctx, `
 			INSERT INTO users (id, email, password_hash, name, slack_user_id, status)
-			VALUES ($1, $2, $3, $4, NULL, 'active')`,
+			VALUES ($1, $2, $3, $4, NULL, 'active')
+			RETURNING created_at`,
 			userID, inv.Email, string(hashed), acceptName,
-		)
+		).Scan(&createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("console.ConsumeInviteAccept insert user: %w", err)
 		}
@@ -1251,7 +1325,7 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 			Name:        acceptName,
 			SlackUserID: nil,
 			Status:      "active",
-			CreatedAt:   time.Now().UTC(),
+			CreatedAt:   createdAt,
 		}
 	} else {
 		userID = u.ID

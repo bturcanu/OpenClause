@@ -332,6 +332,10 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/sessions/{id}/timeline` | JWT | Session event timeline |
 | `GET/POST` | `/admin/policy/versions` | JWT | List/create policy versions |
 | `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
+| `GET/PUT` | `/admin/tenants/{tenant_id}/policy/config` | JWT (`tenant_admin`) | Get/update tenant rule-builder policy config |
+| `GET/POST` | `/admin/tenants/{tenant_id}/policy/versions` | JWT (`tenant_admin`) | List/create tenant policy config snapshots |
+| `POST` | `/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback` | JWT (`tenant_admin`) | Roll back tenant policy config to a previous version |
+| `POST` | `/admin/tenants/{tenant_id}/policy/simulate` | JWT (`tenant_admin`) | Simulate decision using tenant policy builder config |
 | `GET/POST/PUT/DELETE` | `/admin/tenants/{tenant_id}/alerts/rules` | JWT (`tenant_admin`) | CRUD alert rules (currently `deny_spike`) |
 | `GET` | `/admin/tenants/{tenant_id}/alerts/events` | JWT (`tenant_admin`) | List alert events for a tenant |
 | `GET/POST` | `/admin/alerts/rules` | JWT | Legacy global alert rules (preserved for backward compatibility) |
@@ -758,6 +762,25 @@ API keys now support lifecycle metadata and safer rotation:
   - Response includes `raw_key` once (must be copied immediately).
 
 Gateway validation now rejects expired DB-backed API keys (`expires_at <= now`).
+
+### Policy Authoring UX (Tier 3 item 11)
+The Policies page now provides a tenant-scoped rule builder with versioning and rollback:
+- Tenant-scoped config (`/admin/tenants/{tenant_id}/policy/config`)
+  - `max_risk_auto_approve` (0..10)
+  - `read_actions`, `write_actions`, `destructive_actions` allowlists
+  - `require_destructive_approval` toggle
+- Version snapshots (`/admin/tenants/{tenant_id}/policy/versions`)
+- Rollback (`/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback`)
+- Simulator preview (`/admin/tenants/{tenant_id}/policy/simulate`)
+
+The gateway loads tenant policy config at request time, so saving or rolling back policy config changes enforcement behavior for subsequent toolcalls without restarting services.
+
+### How to configure Policy Authoring (Rule Builder)
+1. Select a tenant in `Policies` (platform admins must choose explicit `tenant_id`).
+2. Set rule-builder knobs in the UI, then click **Save Tenant Policy Config**.
+3. Use **Preview Decision** to simulate a request for that tenant.
+4. Create version snapshots before/after major changes.
+5. If needed, select an older version and click **Rollback to Selected Version**.
 
 ### How to configure Per-tenant Notification Routing
 1. Log in as a `tenant_admin` for the target tenant.

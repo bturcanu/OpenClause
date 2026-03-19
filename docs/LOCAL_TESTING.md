@@ -460,6 +460,71 @@ Look for:
 - `expires_at` set when provided
 - `is_primary` flag on the active primary key
 
+## 14c. Policy Authoring UX (Tier 3 item 11)
+
+Use tenant-scoped policy rule-builder APIs to verify preview/save/rollback behavior.
+
+Create a baseline config snapshot:
+
+```bash
+BASE_CFG='{
+  "max_risk_auto_approve": 7,
+  "read_actions": ["jira.issue.list","slack.channel.list"],
+  "write_actions": ["jira.issue.create","slack.msg.post"],
+  "destructive_actions": ["jira.issue.delete"],
+  "require_destructive_approval": true
+}'
+
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/policy/config" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$BASE_CFG" | jq .
+
+BEFORE_VERSION_ID=$(
+  curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/policy/versions" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg v "baseline-$(date -u +%Y%m%d%H%M%S)" --argjson pdata "$BASE_CFG" '{version:$v,notes:"baseline",policy_data:$pdata}')" \
+  | jq -r '.id'
+)
+```
+
+Apply a stricter config and preview:
+
+```bash
+TIGHT_CFG='{
+  "max_risk_auto_approve": 2,
+  "read_actions": ["jira.issue.list","slack.channel.list"],
+  "write_actions": ["jira.issue.create","slack.msg.post"],
+  "destructive_actions": ["jira.issue.delete"],
+  "require_destructive_approval": true
+}'
+
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/policy/config" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$TIGHT_CFG" | jq .
+
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/policy/simulate" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"agent-1","tool":"jira","action":"issue.create","resource":"project/OPS","risk_score":6}' \
+  | jq '.policy_result.result'
+```
+
+Expected under this strict config: simulation and gateway decision should be `deny` for `jira.issue.create` with `risk_score=6`.
+
+Rollback and verify behavior is restored:
+
+```bash
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/policy/versions/$BEFORE_VERSION_ID/rollback" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+```
+
+Expected after rollback: the same toolcall can return `allow` again when it is below the restored threshold and in allowlists.
+
 ## 15. Run Unit Tests
 
 ```bash

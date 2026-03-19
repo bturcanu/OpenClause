@@ -24,16 +24,17 @@ decision := "approve" if {
 	input.toolcall.risk_score >= 7
 } else := "approve" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
-	tool_action in data.allowlist.destructive_actions
+	destructive_requires_approval
+	tool_action in effective_destructive_actions
 } else := "allow" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
-	tool_action in data.allowlist.read_actions
-	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	tool_action in effective_read_actions
+	threshold := effective_max_risk_auto_approve
 	input.toolcall.risk_score < threshold
 } else := "allow" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
-	tool_action in data.allowlist.write_actions
-	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	tool_action in effective_write_actions
+	threshold := effective_max_risk_auto_approve
 	input.toolcall.risk_score < threshold
 }
 
@@ -41,17 +42,74 @@ reason := "high risk score requires approval" if {
 	input.toolcall.risk_score >= 7
 } else := "destructive action requires approval" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
-	tool_action in data.allowlist.destructive_actions
+	destructive_requires_approval
+	tool_action in effective_destructive_actions
 } else := "read action on allowlist within tenant threshold" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
-	tool_action in data.allowlist.read_actions
-	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	tool_action in effective_read_actions
+	threshold := effective_max_risk_auto_approve
 	input.toolcall.risk_score < threshold
 } else := "write action on allowlist within tenant threshold" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
-	tool_action in data.allowlist.write_actions
-	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+	tool_action in effective_write_actions
+	threshold := effective_max_risk_auto_approve
 	input.toolcall.risk_score < threshold
+}
+
+effective_max_risk_auto_approve := threshold if {
+	raw := object.get(object.get(input.environment, "tenant_config", {}), "max_risk_auto_approve", "")
+	raw != ""
+	threshold := to_number(raw)
+} else := threshold if {
+	threshold := object.get(object.get(data.tenants, input.toolcall.tenant_id, {}), "max_risk_auto_approve", 7)
+}
+
+destructive_requires_approval if {
+	raw := lower(object.get(object.get(input.environment, "tenant_config", {}), "require_destructive_approval", ""))
+	raw == "true"
+} else if {
+	raw := lower(object.get(object.get(input.environment, "tenant_config", {}), "require_destructive_approval", ""))
+	raw == ""
+}
+
+effective_read_actions := actions if {
+	raw := object.get(object.get(input.environment, "tenant_config", {}), "read_actions_csv", "")
+	raw != ""
+	parts := split(raw, ",")
+	actions := [trim(p) |
+		p := parts[_]
+		trim(p) != ""
+	]
+} else := actions if {
+	actions := data.allowlist.read_actions
+}
+
+effective_write_actions := actions if {
+	raw := object.get(object.get(input.environment, "tenant_config", {}), "write_actions_csv", "")
+	raw != ""
+	parts := split(raw, ",")
+	actions := [trim(p) |
+		p := parts[_]
+		trim(p) != ""
+	]
+} else := actions if {
+	actions := data.allowlist.write_actions
+}
+
+effective_destructive_actions := actions if {
+	raw := object.get(object.get(input.environment, "tenant_config", {}), "destructive_actions_csv", "")
+	raw != ""
+	parts := split(raw, ",")
+	actions := [trim(p) |
+		p := parts[_]
+		trim(p) != ""
+	]
+} else := actions if {
+	actions := data.allowlist.destructive_actions
+}
+
+trim(s) := out if {
+	out := trim_space(s)
 }
 
 # ──────────────────────────────────────────────────────────────────────────────

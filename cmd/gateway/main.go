@@ -290,6 +290,16 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 			Timestamp: time.Now().UTC(),
 		},
 	}
+	var tenantPolicyCfg *console.TenantPolicyConfig
+	if gw.consoleStore != nil {
+		cfg, found, err := gw.consoleStore.GetTenantPolicyConfig(ctx, req.TenantID)
+		if err != nil {
+			gw.log.ErrorContext(ctx, "load tenant policy config failed", "error", err, "tenant_id", req.TenantID)
+		} else if found && cfg != nil {
+			tenantPolicyCfg = cfg
+			policyInput.Environment.TenantConfig = cfg.ToPolicyInputMap()
+		}
+	}
 
 	policyResult, err := gw.policy.Evaluate(ctx, policyInput)
 	// Fail-closed: treat any policy evaluation anomaly as a deny.
@@ -303,6 +313,15 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 			reason = "policy evaluation returned nil"
 		}
 		policyResult = &types.PolicyResult{Decision: types.DecisionDeny, Reason: reason}
+	}
+	if tenantPolicyCfg != nil {
+		policyResult = policy.EvaluateWithRuleBuilder(req, policy.RuleBuilderConfig{
+			MaxRiskAutoApprove:         tenantPolicyCfg.MaxRiskAutoApprove,
+			ReadActions:                tenantPolicyCfg.ReadActions,
+			WriteActions:               tenantPolicyCfg.WriteActions,
+			DestructiveActions:         tenantPolicyCfg.DestructiveActions,
+			RequireDestructiveApproval: tenantPolicyCfg.RequireDestructiveApproval,
+		})
 	}
 	env.Decision = policyResult.Decision
 	env.PolicyResult = policyResult

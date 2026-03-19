@@ -211,6 +211,12 @@ func main() {
 		r.Get("/admin/policy/versions", api.handleListPolicyVersions)
 		r.Post("/admin/policy/versions", api.requireRole("tenant_admin", api.handleCreatePolicyVersion))
 		r.Post("/admin/policy/simulate", api.handleSimulatePolicy)
+		r.Get("/admin/tenants/{tenant_id}/policy/config", api.requireTenantAccess(api.handleGetTenantPolicyConfig))
+		r.Put("/admin/tenants/{tenant_id}/policy/config", api.requireTenantRole("tenant_admin", api.handleUpsertTenantPolicyConfig))
+		r.Get("/admin/tenants/{tenant_id}/policy/versions", api.requireTenantAccess(api.handleListTenantPolicyVersions))
+		r.Post("/admin/tenants/{tenant_id}/policy/versions", api.requireTenantRole("tenant_admin", api.handleCreateTenantPolicyVersion))
+		r.Post("/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback", api.requireTenantRole("tenant_admin", api.handleRollbackTenantPolicyVersion))
+		r.Post("/admin/tenants/{tenant_id}/policy/simulate", api.requireTenantAccess(api.handleSimulateTenantPolicy))
 
 		// Alerts (Tier 2 item 8)
 		r.Get("/admin/tenants/{tenant_id}/alerts/rules", api.requireTenantRole("tenant_admin", api.handleListTenantAlertRules))
