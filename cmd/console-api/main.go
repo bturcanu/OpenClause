@@ -95,15 +95,29 @@ func main() {
 	// CRIT-01: Parse allowed CORS origins from env.
 	allowedOrigins := parseCORSOrigins(os.Getenv("CONSOLE_CORS_ORIGINS"))
 
+	authProvider, err := authProviderFromEnv(AuthProviderDeps{
+		log:    log,
+		store:  store,
+		jwtCfg: jwtCfg,
+	})
+	if err != nil {
+		log.Error("auth provider init failed", "error", err)
+		os.Exit(1)
+	}
+
 	api := &ConsoleAPI{
-		log:                log,
-		store:              store,
-		exportStore:        store,
-		jwtCfg:             jwtCfg,
-		approvalsStore:     approvalsStore,
-		approverAuth:       approverAuth,
-		approverAuthSource: allowlistSource,
-		devLogRawTokens:   devLogRawTokens,
+		log:                     log,
+		store:                   store,
+		analyticsStore:         store,
+		alertsStore:            store,
+		notificationConfigStore: store,
+		exportStore:             store,
+		jwtCfg:                  jwtCfg,
+		approvalsStore:          approvalsStore,
+		approverAuth:            approverAuth,
+		approverAuthSource:      allowlistSource,
+		authProvider:            authProvider,
+		devLogRawTokens:         devLogRawTokens,
 	}
 
 	// Basic throttling for unauthenticated endpoints to reduce abuse and
@@ -150,6 +164,7 @@ func main() {
 
 		r.Get("/admin/analytics/overview", api.handleAnalyticsOverview)
 		r.Get("/admin/analytics/timeseries", api.handleAnalyticsTimeseries)
+		r.Get("/admin/tenants/{tenant_id}/analytics/summary", api.requireTenantRole("tenant_admin", api.handleTenantAnalyticsSummary))
 
 		// Users + RBAC + invites (admin/tenant_admin only, validated in handler).
 		r.Get("/admin/users", api.handleListUsers)
@@ -171,6 +186,11 @@ func main() {
 		r.Post("/admin/tenants/{tenant_id}/apikeys", api.requireTenantRole("tenant_admin", api.handleCreateAPIKey))
 		r.Get("/admin/tenants/{tenant_id}/apikeys", api.requireTenantAccess(api.handleListAPIKeys))
 		r.Post("/admin/tenants/{tenant_id}/apikeys/{key_id}/revoke", api.requireTenantRole("tenant_admin", api.handleRevokeAPIKey))
+		r.Post("/admin/tenants/{tenant_id}/apikeys/rotate", api.requireTenantRole("tenant_admin", api.handleRotateAPIKey))
+
+		// Per-tenant notification routing configuration (webhook/slack).
+		r.Get("/admin/tenants/{tenant_id}/notification-config", api.requireTenantRole("tenant_admin", api.handleGetTenantNotificationConfig))
+		r.Put("/admin/tenants/{tenant_id}/notification-config", api.requireTenantRole("tenant_admin", api.handleUpdateTenantNotificationConfig))
 
 		// Approver management (DB-backed)
 		r.Get("/admin/tenants/{tenant_id}/approvers", api.requireTenantRole("tenant_admin", api.handleListTenantApprovers))
@@ -191,7 +211,21 @@ func main() {
 		r.Get("/admin/policy/versions", api.handleListPolicyVersions)
 		r.Post("/admin/policy/versions", api.requireRole("tenant_admin", api.handleCreatePolicyVersion))
 		r.Post("/admin/policy/simulate", api.handleSimulatePolicy)
+		r.Get("/admin/tenants/{tenant_id}/policy/config", api.requireTenantAccess(api.handleGetTenantPolicyConfig))
+		r.Put("/admin/tenants/{tenant_id}/policy/config", api.requireTenantRole("tenant_admin", api.handleUpsertTenantPolicyConfig))
+		r.Get("/admin/tenants/{tenant_id}/policy/versions", api.requireTenantAccess(api.handleListTenantPolicyVersions))
+		r.Post("/admin/tenants/{tenant_id}/policy/versions", api.requireTenantRole("tenant_admin", api.handleCreateTenantPolicyVersion))
+		r.Post("/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback", api.requireTenantRole("tenant_admin", api.handleRollbackTenantPolicyVersion))
+		r.Post("/admin/tenants/{tenant_id}/policy/simulate", api.requireTenantAccess(api.handleSimulateTenantPolicy))
 
+		// Alerts (Tier 2 item 8)
+		r.Get("/admin/tenants/{tenant_id}/alerts/rules", api.requireTenantRole("tenant_admin", api.handleListTenantAlertRules))
+		r.Post("/admin/tenants/{tenant_id}/alerts/rules", api.requireTenantRole("tenant_admin", api.handleCreateTenantAlertRule))
+		r.Put("/admin/tenants/{tenant_id}/alerts/rules/{rule_id}", api.requireTenantRole("tenant_admin", api.handleUpdateTenantAlertRule))
+		r.Delete("/admin/tenants/{tenant_id}/alerts/rules/{rule_id}", api.requireTenantRole("tenant_admin", api.handleDeleteTenantAlertRule))
+		r.Get("/admin/tenants/{tenant_id}/alerts/events", api.requireTenantRole("tenant_admin", api.handleListTenantAlertEvents))
+
+		// Legacy (non-tenant-scoped) endpoints kept for compatibility.
 		r.Get("/admin/alerts/rules", api.handleListAlertRules)
 		r.Post("/admin/alerts/rules", api.requireRole("tenant_admin", api.handleCreateAlertRule))
 		r.Get("/admin/alerts/events", api.handleListAlertEvents)
@@ -231,13 +265,17 @@ func main() {
 }
 
 type ConsoleAPI struct {
-	log                *slog.Logger
-	store              *console.Store
-	exportStore        exportEventsStore
-	jwtCfg             console.JWTConfig
-	approvalsStore     *approvals.Store
-	approverAuth       *approvals.ApproverAuthorizer
-	approverAuthSource string
+	log                     *slog.Logger
+	store                   *console.Store
+	analyticsStore         analyticsStore
+	alertsStore            alertsStore
+	notificationConfigStore notificationConfigStore
+	exportStore             exportEventsStore
+	jwtCfg                  console.JWTConfig
+	authProvider            AuthProvider
+	approvalsStore          *approvals.Store
+	approverAuth            *approvals.ApproverAuthorizer
+	approverAuthSource      string
 
 	devLogRawTokens bool
 }
@@ -245,6 +283,24 @@ type ConsoleAPI struct {
 type exportEventsStore interface {
 	ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error
 	ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventListItem, error)
+}
+
+type notificationConfigStore interface {
+	GetTenantNotificationConfig(ctx context.Context, tenantID string) (*console.TenantNotificationConfig, bool, error)
+	SetTenantNotificationConfig(ctx context.Context, tenantID string, cfg console.TenantNotificationConfig) error
+}
+
+type alertsStore interface {
+	ListAlertRules(ctx context.Context, tenantID string) ([]console.AlertRule, error)
+	CreateAlertRule(ctx context.Context, rule console.AlertRule) (*console.AlertRule, error)
+	UpdateAlertRule(ctx context.Context, tenantID, ruleID, name, ruleType string, config json.RawMessage, enabled bool) error
+	DeleteAlertRule(ctx context.Context, tenantID, ruleID string) error
+	GetAlertRule(ctx context.Context, tenantID, ruleID string) (*console.AlertRule, error)
+	ListAlertEventsSince(ctx context.Context, tenantID string, since time.Time, limit int) ([]console.AlertEvent, error)
+}
+
+type analyticsStore interface {
+	GetTenantAnalyticsSummary(ctx context.Context, tenantID string, since time.Time, bucketMinutes int, topAgents int) (*console.TenantAnalyticsSummary, error)
 }
 
 type claimsKey struct{}
@@ -377,49 +433,20 @@ func (api *ConsoleAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, roles, err := api.store.AuthenticateUser(r.Context(), in.Email, in.Password)
+	res, err := api.authProvider.Login(r.Context(), AuthLoginInput{
+		Email:    in.Email,
+		Password: in.Password,
+	})
 	if err != nil {
+		if ae, ok := err.(*AuthProviderError); ok {
+			writeError(w, ae.Status, ae.Message)
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	roleNames := make([]string, len(roles))
-	var scopedTenant string
-	for i, role := range roles {
-		roleNames[i] = role.Role
-		if role.TenantID != nil {
-			scopedTenant = *role.TenantID
-		}
-	}
-
-	// HIGH-02: Reject non-platform_admin users who have no tenant scope.
-	if scopedTenant == "" && !containsRole(roleNames, "platform_admin") {
-		writeError(w, http.StatusForbidden, "user has no tenant assignment")
-		return
-	}
-
-	token, err := console.GenerateToken(api.jwtCfg, console.JWTClaims{
-		Sub:    user.ID,
-		Email:  user.Email,
-		Name:   user.Name,
-		Roles:  roleNames,
-		Tenant: scopedTenant,
-	})
-	if err != nil {
-		api.log.Error("generate token failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to generate token")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token": token,
-		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
-			"name":  user.Name,
-			"roles": roleNames,
-		},
-	})
+	writeJSON(w, http.StatusOK, res)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -851,17 +878,22 @@ func (api *ConsoleAPI) handleInviteAccept(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	user, err := api.store.ConsumeInviteAccept(r.Context(), in.Token, in.Password, in.Name)
+	res, err := api.store.ConsumeInviteAccept(r.Context(), in.Token, in.Password, in.Name)
 	if err != nil {
 		api.log.Error("invite accept failed", "error", err)
 		writeError(w, http.StatusBadRequest, "invalid or expired token")
 		return
 	}
-	if user == nil {
+	if res == nil || res.User == nil {
 		writeError(w, http.StatusBadRequest, "invalid or expired token")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "accepted", "user": user})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":    "accepted",
+		"user":      res.User,
+		"tenant_id": res.TenantID,
+		"role":      res.Role,
+	})
 }
 
 func (api *ConsoleAPI) handleResetRequest(w http.ResponseWriter, r *http.Request) {
@@ -1201,13 +1233,34 @@ func (api *ConsoleAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request
 	tenantID := chi.URLParam(r, "tenant_id")
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var in struct {
-		Name string `json:"name"`
+		Name       string  `json:"name"`
+		ExpiresAt  *string `json:"expires_at,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	result, err := api.store.CreateAPIKey(r.Context(), tenantID, in.Name)
+	if strings.TrimSpace(in.Name) == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+
+	var expiresAt *time.Time
+	if in.ExpiresAt != nil {
+		raw := strings.TrimSpace(*in.ExpiresAt)
+		if raw == "" {
+			expiresAt = nil
+		} else {
+			parsed, err := parseOptionalExpiryAt(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			expiresAt = parsed
+		}
+	}
+
+	result, err := api.store.CreateAPIKey(r.Context(), tenantID, in.Name, expiresAt)
 	if err != nil {
 		api.log.Error("create api key failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create api key")
@@ -1228,13 +1281,93 @@ func (api *ConsoleAPI) handleListAPIKeys(w http.ResponseWriter, r *http.Request)
 }
 
 func (api *ConsoleAPI) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "tenant_id")
 	keyID := chi.URLParam(r, "key_id")
-	if err := api.store.RevokeAPIKey(r.Context(), keyID); err != nil {
+	if err := api.store.RevokeAPIKeyForTenant(r.Context(), tenantID, keyID); err != nil {
 		api.log.Error("revoke api key failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to revoke api key")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+func parseOptionalExpiryAt(raw string) (*time.Time, error) {
+	// Accept ISO date ("YYYY-MM-DD") and RFC3339 timestamps.
+	now := time.Now().UTC()
+
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		t = t.UTC()
+		if t.Before(now) {
+			return nil, fmt.Errorf("expires_at must be in the future")
+		}
+		return &t, nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		t = t.UTC()
+		if t.Before(now) {
+			return nil, fmt.Errorf("expires_at must be in the future")
+		}
+		return &t, nil
+	}
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		// Interpret the date as end-of-day in UTC.
+		t = t.UTC().Add(24*time.Hour - time.Nanosecond)
+		if t.Before(now) {
+			return nil, fmt.Errorf("expires_at must be in the future")
+		}
+		return &t, nil
+	}
+
+	return nil, fmt.Errorf("invalid expires_at format (use YYYY-MM-DD or RFC3339)")
+}
+
+func (api *ConsoleAPI) handleRotateAPIKey(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "tenant_id")
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var in struct {
+		Name             string  `json:"name"`
+		ExpiresAt       *string `json:"expires_at,omitempty"`
+		MakePrimary      *bool   `json:"make_primary,omitempty"`
+		RevokeOldPrimary *bool  `json:"revoke_old_primary,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+
+	makePrimary := true
+	if in.MakePrimary != nil {
+		makePrimary = *in.MakePrimary
+	}
+	revokeOldPrimary := true
+	if in.RevokeOldPrimary != nil {
+		revokeOldPrimary = *in.RevokeOldPrimary
+	}
+
+	var expiresAt *time.Time
+	if in.ExpiresAt != nil {
+		raw := strings.TrimSpace(*in.ExpiresAt)
+		if raw != "" {
+			parsed, err := parseOptionalExpiryAt(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			expiresAt = parsed
+		}
+	}
+
+	result, err := api.store.RotateAPIKeysPrimary(r.Context(), tenantID, in.Name, expiresAt, makePrimary, revokeOldPrimary)
+	if err != nil {
+		api.log.Error("rotate api key failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to rotate api key")
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2024,10 +2157,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 		apiErr = &types.APIError{Code: "VALIDATION_ERROR", Message: msg, HTTPCode: status}
 	default:
 		apiErr = &types.APIError{
-			Code:     "HTTP_ERROR",
-			Message:  msg,
+			Code:      "HTTP_ERROR",
+			Message:   msg,
 			Retryable: status >= 500,
-			HTTPCode: status,
+			HTTPCode:  status,
 		}
 	}
 	apiErr.WriteJSON(w)
@@ -2055,6 +2188,10 @@ func parsePagination(r *http.Request) (limit, offset int) {
 func parseSince(r *http.Request, defaultDuration time.Duration) time.Time {
 	if v := r.URL.Query().Get("since"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+		// RFC3339Nano accepts timestamps with optional fractional seconds.
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
 			return t
 		}
 	}

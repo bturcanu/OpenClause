@@ -20,6 +20,7 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/bturcanu/OpenClause/pkg/connectors/builtins"
+	"github.com/bturcanu/OpenClause/pkg/console"
 	"github.com/bturcanu/OpenClause/pkg/evidence"
 	ocOtel "github.com/bturcanu/OpenClause/pkg/otel"
 	"github.com/bturcanu/OpenClause/pkg/policy"
@@ -72,6 +73,7 @@ func main() {
 	evidenceLogger := evidence.NewLogger(evidenceStore, log)
 	policyClient := policy.NewClient(config.EnvOr("OPA_URL", "http://localhost:8181"))
 	approvalsStore := approvals.NewStore(pool)
+	consoleStore := console.NewStore(pool)
 	envKeyStore := auth.NewKeyStore(os.Getenv("API_KEYS"))
 	dbKeyStore := auth.NewDBKeyStore(pool)
 	keyStore := auth.NewCompositeKeyStore(envKeyStore, dbKeyStore)
@@ -94,6 +96,7 @@ func main() {
 		connectors:     connectorReg,
 		approvals:      approvalsStore,
 		approvalsURL:   publicApprovalsURL,
+		consoleStore:   consoleStore,
 		rateLimiters:   make(map[string]*list.Element),
 		rlList:         list.New(),
 		perTenantLimit: config.EnvOrInt("RATE_LIMIT_PER_TENANT", 100),
@@ -195,6 +198,7 @@ type Gateway struct {
 	connectors     gatewayConnectors
 	approvals      gatewayApprovals
 	approvalsURL   string
+	consoleStore   *console.Store
 	rateLimiters   map[string]*list.Element
 	rlList         *list.List
 	rlMu           sync.Mutex
@@ -286,6 +290,16 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 			Timestamp: time.Now().UTC(),
 		},
 	}
+	var tenantPolicyCfg *console.TenantPolicyConfig
+	if gw.consoleStore != nil {
+		cfg, found, err := gw.consoleStore.GetTenantPolicyConfig(ctx, req.TenantID)
+		if err != nil {
+			gw.log.ErrorContext(ctx, "load tenant policy config failed", "error", err, "tenant_id", req.TenantID)
+		} else if found && cfg != nil {
+			tenantPolicyCfg = cfg
+			policyInput.Environment.TenantConfig = cfg.ToPolicyInputMap()
+		}
+	}
 
 	policyResult, err := gw.policy.Evaluate(ctx, policyInput)
 	// Fail-closed: treat any policy evaluation anomaly as a deny.
@@ -299,6 +313,15 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 			reason = "policy evaluation returned nil"
 		}
 		policyResult = &types.PolicyResult{Decision: types.DecisionDeny, Reason: reason}
+	}
+	if tenantPolicyCfg != nil {
+		policyResult = policy.EvaluateWithRuleBuilder(req, policy.RuleBuilderConfig{
+			MaxRiskAutoApprove:         tenantPolicyCfg.MaxRiskAutoApprove,
+			ReadActions:                tenantPolicyCfg.ReadActions,
+			WriteActions:               tenantPolicyCfg.WriteActions,
+			DestructiveActions:         tenantPolicyCfg.DestructiveActions,
+			RequireDestructiveApproval: tenantPolicyCfg.RequireDestructiveApproval,
+		})
 	}
 	env.Decision = policyResult.Decision
 	env.PolicyResult = policyResult
@@ -322,6 +345,19 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
 		}
+
+		// Override notification routing directives from per-tenant DB config
+		// (when configured) so newly created approval requests use the latest UI updates.
+		if gw.consoleStore != nil {
+			cfg, found, err := gw.consoleStore.GetTenantNotificationConfig(ctx, req.TenantID)
+			if err != nil {
+				gw.log.ErrorContext(ctx, "load tenant notification config failed", "error", err, "tenant_id", req.TenantID)
+			} else if found && cfg != nil {
+				policyResult.ApproverGroup = cfg.ApproverGroup
+				policyResult.Notify = cfg.Notify
+			}
+		}
+
 		approvalReq, err := gw.approvals.CreateRequest(ctx, approvals.CreateApprovalInput{
 			EventID:         eventID,
 			TenantID:        req.TenantID,

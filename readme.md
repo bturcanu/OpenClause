@@ -4,6 +4,8 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 
 **v0.2** adds a web admin console, self-service tenant onboarding, multi-language SDKs, a connector marketplace, policy simulation, compliance exports, and more.
 
+**v0.3** adds DB-backed tenant-scoped approver/user/invite/reset + setup wizard flows, SSO/OIDC auth-provider seams, persistent notification routing, a full deny-spike alert worker and UI, tenant analytics dashboards, API key rotation/primary/expiry metadata UX, tenant policy rule-builder with version diff/rollback + enforcement wiring, Helm charts for console services, and deep usability/correctness fixes from the demo/usability trackers (SDK endpoint + wait semantics, export/error-contract consistency, race/stale UI fixes, invite UX/token visibility, safer execute/tenant-disable handling, and robust date rendering).
+
 ---
 
 ## Table of Contents
@@ -95,6 +97,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 | **Connector-Jira** | `:8083` | Executes Jira actions (`issue.create`, `issue.list`). Supports mock mode. |
 | **Built-in Connectors** | — | In-process: GitHub, AWS, ServiceNow, Email, Postgres (read-only), Webhook. |
 | **OPA** | `:8181` | Open Policy Agent evaluating Rego policy bundles. |
+| **Alert Worker** | — | Background worker evaluating tenant alert rules (currently `deny_spike`) and dispatching notifications. |
 | **Archiver** | — | Evidence archival worker (not started by `docker-compose`; run `cmd/archiver` separately or on a schedule). |
 | **Postgres** | `:5432` | Stores events, results, approvals, grants, users, keys, and hash chain. |
 | **MinIO** | `:9000` | S3-compatible object storage (console at `:9001`) for evidence archival. |
@@ -251,10 +254,10 @@ The admin console (http://localhost:3000) provides:
 | **Approvals** | Pending approval queue with approve/deny actions and detail view |
 | **Audit Trail** | Searchable event list with filters (tenant, tool, action, decision) + event detail |
 | **Tenants** | Create/list/disable tenants, view config and usage |
-| **Tenant Detail** | Manage agents, API keys, and tenant-scoped approvers |
+| **Tenant Detail** | Manage agents, API keys, tenant-scoped approvers, analytics, alerts, and notification routing |
 | **Sessions** | Session list with event counts, click into timeline view |
-| **Policies** | Policy versions, create new versions, policy simulator |
-| **Alerts** | Alert rules (deny spike, approve backlog, etc.) and alert events |
+| **Policies** | Tenant rule builder, policy versions, diff/rollback, and policy simulation |
+| **Alerts** | Tenant alert rules (`deny_spike`) and alert events |
 | **Connectors** | Installed connectors with supported actions |
 | **Users** | Invite users, assign/remove roles, and handle invite acceptance + password reset flows |
 
@@ -308,6 +311,8 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/invites` | `platform_admin` or `tenant_admin` | List pending invites |
 | `GET` | `/admin/analytics/overview` | JWT | Decision counts, pending approvals, active tenants/agents |
 | `GET` | `/admin/analytics/timeseries` | JWT | Time-bucketed decision counts |
+| `GET` | `/admin/tenants/{tenant_id}/analytics/summary` | JWT (`tenant_admin`) | Tenant-scoped analytics summary for dashboards (range, buckets, heatmap, onboarding) |
+| `GET/PUT` | `/admin/tenants/{tenant_id}/notification-config` | JWT (`tenant_admin`) | Get/update per-tenant notification routing config |
 | `POST` | `/admin/tenants` | platform_admin | Create tenant |
 | `GET` | `/admin/tenants` | JWT | List tenants (scoped by role) |
 | `GET` | `/admin/tenants/{id}` | JWT | Get tenant detail |
@@ -316,6 +321,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `POST` | `/admin/tenants/{id}/apikeys` | tenant_admin | Create API key (returns raw key once) |
 | `GET` | `/admin/tenants/{id}/apikeys` | JWT | List API keys (never returns hashes) |
 | `POST` | `/admin/tenants/{id}/apikeys/{key_id}/revoke` | tenant_admin | Revoke API key |
+| `POST` | `/admin/tenants/{id}/apikeys/rotate` | tenant_admin | Rotate key (create new, optional primary switch, optional revoke old primary) |
 | `GET` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | List tenant-scoped approvers |
 | `POST` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | Upsert a tenant-scoped approver |
 | `DELETE` | `/admin/tenants/{tenant_id}/approvers/{user_id}` | tenant_admin | Remove a tenant-scoped approver |
@@ -330,8 +336,14 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/sessions/{id}/timeline` | JWT | Session event timeline |
 | `GET/POST` | `/admin/policy/versions` | JWT | List/create policy versions |
 | `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
-| `GET/POST` | `/admin/alerts/rules` | JWT | List/create alert rules |
-| `GET` | `/admin/alerts/events` | JWT | List alert events |
+| `GET/PUT` | `/admin/tenants/{tenant_id}/policy/config` | JWT (`tenant_admin`) | Get/update tenant rule-builder policy config |
+| `GET/POST` | `/admin/tenants/{tenant_id}/policy/versions` | JWT (`tenant_admin`) | List/create tenant policy config snapshots |
+| `POST` | `/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback` | JWT (`tenant_admin`) | Roll back tenant policy config to a previous version |
+| `POST` | `/admin/tenants/{tenant_id}/policy/simulate` | JWT (`tenant_admin`) | Simulate decision using tenant policy builder config |
+| `GET/POST/PUT/DELETE` | `/admin/tenants/{tenant_id}/alerts/rules` | JWT (`tenant_admin`) | CRUD alert rules (currently `deny_spike`) |
+| `GET` | `/admin/tenants/{tenant_id}/alerts/events` | JWT (`tenant_admin`) | List alert events for a tenant |
+| `GET/POST` | `/admin/alerts/rules` | JWT | Legacy global alert rules (preserved for backward compatibility) |
+| `GET` | `/admin/alerts/events` | JWT | Legacy global alert events (preserved for backward compatibility) |
 
 ### Approvals (`:8081`)
 
@@ -694,6 +706,146 @@ When approval requests are created, notifications are enqueued transactionally a
   - Dev bootstrap fallback (optional): env allowlists via `ALLOWLIST_SOURCE=env|both` using `APPROVER_SLACK_ALLOWLIST` / `APPROVER_EMAIL_ALLOWLIST`.
 - Approvers are managed in the console UI under `Tenants -> (select tenant) -> Approvers`.
 
+## Tier 2/3 Features
+### Per-tenant Notification Routing (Tier 2 item 7)
+OpenClause routes newly created approval notifications based on per-tenant configuration stored in `tenants.config.notification_config`.
+
+### Tenant Alerting (Tier 2 item 8 - deny_spike)
+OpenClause evaluates per-tenant `deny_spike` alert rules in the background (`cmd/alert-worker`).
+
+When a rule fires, OpenClause creates an `alert_events` row and dispatches notifications using the same per-tenant notification sinks as approval notifications (Slack and/or HTTPS webhooks).
+
+### How to configure Tenant Alerting (deny_spike)
+1. Configure alert notification sinks for your tenant (same API as approval notifications):
+   - `PUT /admin/tenants/{tenant_id}/notification-config` (JWT; `tenant_admin`)
+2. Create a `deny_spike` rule:
+   - `POST /admin/tenants/{tenant_id}/alerts/rules` (JWT; `tenant_admin`)
+   - Example payload:
+     ```json
+     {
+       "name": "deny-spike-smoke",
+       "kind": "deny_spike",
+       "enabled": true,
+       "config_json": { "n": 3, "m_minutes": 5 }
+     }
+     ```
+3. Generate deny tool-calls and verify alert events:
+   - `GET /admin/tenants/{tenant_id}/alerts/events?limit=10`
+
+Tuning:
+- `ALERT_WORKER_INTERVAL_SEC` (default `30`) controls how quickly new denies are evaluated.
+
+### Tenant Analytics Dashboard (Tier 3 item 9)
+OpenClause provides a tenant-scoped analytics summary endpoint used by the Console UI Analytics tab:
+- `GET /admin/tenants/{tenant_id}/analytics/summary?range=24h&bucket_minutes=60&top_agents=5`
+
+The response includes:
+- `totals` (allow/deny/approve counts)
+- `trend` (time buckets with allow/deny/approve counts)
+- `risk_heatmap` (risk_score decision distribution)
+- `per_agent` (top agents by total events)
+- `onboarding_checklist` (setup progress for the tenant)
+
+### API Key Lifecycle UX (Tier 3 item 10)
+API keys now support lifecycle metadata and safer rotation:
+- Metadata fields returned by `GET /admin/tenants/{id}/apikeys`:
+  - `last_used_at`
+  - `expires_at` (nullable)
+  - `is_primary`
+- Rotation endpoint:
+  - `POST /admin/tenants/{id}/apikeys/rotate`
+  - Payload:
+    ```json
+    {
+      "name": "rotated-2026-03",
+      "expires_at": "2030-01-01",
+      "make_primary": true,
+      "revoke_old_primary": true
+    }
+    ```
+  - Response includes `raw_key` once (must be copied immediately).
+
+Gateway validation now rejects expired DB-backed API keys (`expires_at <= now`).
+
+### Policy Authoring UX (Tier 3 item 11)
+The Policies page now provides a tenant-scoped rule builder with versioning and rollback:
+- Tenant-scoped config (`/admin/tenants/{tenant_id}/policy/config`)
+  - `max_risk_auto_approve` (0..10)
+  - `read_actions`, `write_actions`, `destructive_actions` allowlists
+  - `require_destructive_approval` toggle
+- Version snapshots (`/admin/tenants/{tenant_id}/policy/versions`)
+- Rollback (`/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback`)
+- Simulator preview (`/admin/tenants/{tenant_id}/policy/simulate`)
+
+The gateway loads tenant policy config at request time, so saving or rolling back policy config changes enforcement behavior for subsequent toolcalls without restarting services.
+
+### How to configure Policy Authoring (Rule Builder)
+1. Select a tenant in `Policies` (platform admins must choose explicit `tenant_id`).
+2. Set rule-builder knobs in the UI, then click **Save Tenant Policy Config**.
+3. Use **Preview Decision** to simulate a request for that tenant.
+4. Create version snapshots before/after major changes.
+5. If needed, select an older version and click **Rollback to Selected Version**.
+
+### Helm Charts for Console Services (Tier 3 item 12)
+New Helm charts are available for console services:
+- `deploy/helm/console-api`
+- `deploy/helm/console-ui`
+
+Each chart includes:
+- `values.yaml` defaults
+- `Deployment` with liveness/readiness probes
+- `Service` (ClusterIP)
+- Optional `Ingress`
+- Environment variable injection and optional `secretRef`
+
+#### How to install via Helm
+```bash
+# Console API
+helm upgrade --install oc-console-api ./deploy/helm/console-api \
+  --namespace openclause --create-namespace \
+  --set image.repository=ghcr.io/<org>/openclause-console-api \
+  --set image.tag=<tag> \
+  --set secretRef=console-api-secrets
+
+# Console UI
+helm upgrade --install oc-console-ui ./deploy/helm/console-ui \
+  --namespace openclause \
+  --set image.repository=ghcr.io/<org>/openclause-console-ui \
+  --set image.tag=<tag>
+```
+
+Render-only validation (without cluster apply):
+```bash
+helm template oc-console-api ./deploy/helm/console-api >/tmp/oc-console-api.yaml
+helm template oc-console-ui ./deploy/helm/console-ui >/tmp/oc-console-ui.yaml
+```
+
+### How to configure Per-tenant Notification Routing
+1. Log in as a `tenant_admin` for the target tenant.
+2. Update routing via the Console API:
+   - `PUT /admin/tenants/{tenant_id}/notification-config`
+   - Payload example (Slack):
+     ```json
+     {
+       "approver_group": "tenant_admin",
+       "notify": [
+         { "kind": "slack", "channel": "#team-alerts" }
+       ]
+     }
+     ```
+   - Payload example (webhook) with SSRF protection:
+     ```json
+     {
+       "approver_group": "tenant_admin",
+       "notify": [
+         { "kind": "webhook", "url": "https://hooks.example.com/...", "secret_ref": "webhook_secret_name" }
+       ]
+     }
+     ```
+3. (Optional) Use the Console UI form: `Tenants -> (select tenant) -> API Keys -> Notification Routing`.
+
+Webhook URLs are validated server-side (`https` only; private/loopback IPs rejected) to prevent SSRF.
+
 ### Evidence Archival
 
 - `cmd/archiver` verifies each tenant hash chain and uploads bundles to MinIO/S3.
@@ -755,6 +907,8 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `APPROVER_SLACK_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
 | `SLACK_SIGNING_SECRET` | — | Slack signing secret for interactions endpoint |
+| `ALERT_WORKER_INTERVAL_SEC` | `30` | Poll interval for evaluating alert rules (`cmd/alert-worker`). |
+| `ALERT_WORKER_BATCH_SIZE` | `100` | Batch size for retrying pending alert events. |
 | `APPROVALS_NOTIFIER_ENABLED` | `true` | Enable transactional outbox dispatcher |
 | `WEBHOOK_SECRET_REFS` | — | Mapping `secret_ref=secret` used for HMAC signatures |
 | `EVIDENCE_S3_ENDPOINT` | `localhost:9000` | MinIO/S3 endpoint for archiver |
@@ -820,7 +974,7 @@ OpenClause/
 │   └── seed-dev.sh
 ├── deploy/
 │   ├── docker-compose.yml          # Local development stack
-│   ├── helm/                       # Helm charts (gateway, approvals, connectors)
+│   ├── helm/                       # Helm charts (gateway, approvals, connectors, console-api, console-ui)
 │   ├── terraform/                  # AWS infrastructure (EKS, RDS, S3, ALB)
 │   └── dashboards/                 # Grafana dashboard JSON
 ├── CONTRIBUTING.md                 # Contribution guide
@@ -917,12 +1071,14 @@ Runs all services including the console UI. See `deploy/docker-compose.yml`.
 
 ### Kubernetes (Helm)
 
-Helm charts are in `deploy/helm/` for each service. All charts include:
+Helm charts are in `deploy/helm/` for each service. Current charts include `gateway`, `approvals`, `connector-jira`, `connector-slack`, `console-api`, and `console-ui`.
 
-- Deployments with liveness (`/healthz`) and readiness (`/readyz`) probes
+Chart capabilities (chart-specific):
+
+- Deployments with health probes (service-specific paths, e.g. console-api `/healthz` + `/readyz`, console-ui `/`)
 - Pod and container security contexts (`runAsNonRoot`, `readOnlyRootFilesystem`, `drop ALL`)
 - ClusterIP services
-- Deny-by-default NetworkPolicies
+- Optional ingresses
 - Optional `secretRef` for loading secrets from Kubernetes Secrets
 
 ### Cloud (Terraform)

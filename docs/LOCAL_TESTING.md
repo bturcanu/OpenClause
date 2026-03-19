@@ -177,11 +177,114 @@ curl -s http://localhost:8080/v1/toolcalls \
 
 Expected: `"decision": "approve"` with an `approval_url`.
 
+## 7a. (Optional) Update Notification Routing (Tier 2 item 7)
+
+To change where approval notifications are delivered for your tenant (Slack + HTTPS webhooks), update the per-tenant routing config as `tenant_admin`:
+
+1. Log in as `tenant_admin` and set:
+```bash
+export TENANT_ADMIN_TOKEN="<paste tenant_admin JWT>"
+```
+
+2. Update routing (example: Slack channel):
+```bash
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/notification-config" \
+  -H "Authorization: Bearer $TENANT_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "approver_group": "tenant_admin",
+    "notify": [
+      { "kind": "slack", "channel": "#team-alerts" }
+    ]
+  }'
+```
+
+3. (Optional) Verify it:
+```bash
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/notification-config" \
+  -H "Authorization: Bearer $TENANT_ADMIN_TOKEN"
+```
+
+Webhook URLs are validated server-side (`https` only; private/loopback IPs rejected) to prevent SSRF.
+
 Save the `event_id`:
 
 ```bash
 export EVENT_ID="<paste event_id>"
 ```
+
+## 7b. Create deny_spike Alert Rule (Tier 2 item 8)
+
+OpenClause evaluates alert rules in the background via `cmd/alert-worker` (poll interval controlled by `ALERT_WORKER_INTERVAL_SEC`, default `30s`).
+
+### 1) Ensure notification routing exists for alert delivery
+
+Alert notifications reuse the same per-tenant notification config as approval notifications (`tenants.config.notification_config`).
+
+Update routing for the target tenant as `tenant_admin` (or `platform_admin`):
+```bash
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/notification-config" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "approver_group": "",
+    "notify": [
+      { "kind": "slack", "channel": "#team-alerts" }
+    ]
+  }'
+```
+
+### 2) Create a deny_spike rule
+
+```bash
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/alerts/rules" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "deny-spike-smoke",
+    "kind": "deny_spike",
+    "enabled": true,
+    "config_json": { "n": 3, "m_minutes": 5 }
+  }' | jq .
+```
+
+### 3) Generate 3 deny tool-calls quickly
+
+Important: for alert firing, the tenant id on the *alert rule* must match the tenant id written to `tool_events`.
+- In the default dev setup, `TENANT_ID` is `tenant1`.
+- If you used the Setup Wizard only, your tenant id may be a UUID; ensure `$TENANT_ID` matches the tenant id for the API key you use (e.g. `sk-test-key-1`).
+
+These tool-call parameters are the default “deny” example used by the local policy tests (slack `msg.update`):
+```bash
+for i in 1 2 3; do
+  curl -s -X POST "http://localhost:8080/v1/toolcalls" \
+    -H "X-API-Key: sk-test-key-1" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "tenant_id": "'"$TENANT_ID"'",
+      "agent_id": "agent-1",
+      "tool": "slack",
+      "action": "msg.update",
+      "risk_score": 1,
+      "idempotency_key": "deny-spike-smoke-'"$i"'"
+    }' | jq -r '.decision + " " + .event_id'
+done
+```
+
+Expected: each call returns `"decision": "deny"` with an `event_id`.
+
+### 4) Verify the worker emitted an alert event
+
+Wait for the worker (default 30s), then list alert events for the tenant:
+```bash
+sleep 45
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/alerts/events?limit=10" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+Expected: at least one alert event with:
+- `status` = `sent` (or `pending` if the sink temporarily fails)
+- message containing `"deny spike: 3 denies"`
 
 ## 8. Approve the Request
 
@@ -307,6 +410,143 @@ curl -s http://localhost:8090/admin/policy/simulate \
 ```
 
 Expected: `policy_result.result.decision` = `"approve"` (destructive action + high risk).
+
+## 14a. Tenant Analytics (Tier 3 item 9)
+
+After generating some allow/deny/approve tool-call events for your tenant, you can verify analytics via the tenant-scoped summary endpoint:
+
+```bash
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/analytics/summary?range=24h&bucket_minutes=60&top_agents=5" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+Expected JSON fields:
+- `totals` (total_events, allow_count, deny_count, approve_count)
+- `trend` (time buckets with allow/deny/approve counts)
+- `risk_heatmap` (risk_score 0..10 with decision counts)
+- `per_agent` (top agents by total event count)
+- `onboarding_checklist` (has_api_key/has_approver lifetime; has_toolcall/has_approval/has_execution within the selected range)
+
+## 14b. API Key Rotation + Metadata (Tier 3 item 10)
+
+Rotate key for a tenant (create new key, make it primary, revoke old primary):
+
+```bash
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/apikeys/rotate" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "rotated-local-test",
+    "expires_at": "2030-01-01",
+    "make_primary": true,
+    "revoke_old_primary": true
+  }'
+```
+
+Expected:
+- response includes `raw_key` exactly once
+- new key has `is_primary=true`
+- old primary key is revoked when `revoke_old_primary=true`
+
+Verify metadata:
+
+```bash
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/apikeys" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+Look for:
+- `last_used_at` updates after requests with that key
+- `expires_at` set when provided
+- `is_primary` flag on the active primary key
+
+## 14c. Policy Authoring UX (Tier 3 item 11)
+
+Use tenant-scoped policy rule-builder APIs to verify preview/save/rollback behavior.
+
+Create a baseline config snapshot:
+
+```bash
+BASE_CFG='{
+  "max_risk_auto_approve": 7,
+  "read_actions": ["jira.issue.list","slack.channel.list"],
+  "write_actions": ["jira.issue.create","slack.msg.post"],
+  "destructive_actions": ["jira.issue.delete"],
+  "require_destructive_approval": true
+}'
+
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/policy/config" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$BASE_CFG" | jq .
+
+BEFORE_VERSION_ID=$(
+  curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/policy/versions" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg v "baseline-$(date -u +%Y%m%d%H%M%S)" --argjson pdata "$BASE_CFG" '{version:$v,notes:"baseline",policy_data:$pdata}')" \
+  | jq -r '.id'
+)
+```
+
+Apply a stricter config and preview:
+
+```bash
+TIGHT_CFG='{
+  "max_risk_auto_approve": 2,
+  "read_actions": ["jira.issue.list","slack.channel.list"],
+  "write_actions": ["jira.issue.create","slack.msg.post"],
+  "destructive_actions": ["jira.issue.delete"],
+  "require_destructive_approval": true
+}'
+
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/policy/config" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$TIGHT_CFG" | jq .
+
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/policy/simulate" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"agent-1","tool":"jira","action":"issue.create","resource":"project/OPS","risk_score":6}' \
+  | jq '.policy_result.result'
+```
+
+Expected under this strict config: simulation and gateway decision should be `deny` for `jira.issue.create` with `risk_score=6`.
+
+Rollback and verify behavior is restored:
+
+```bash
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/policy/versions/$BEFORE_VERSION_ID/rollback" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+```
+
+Expected after rollback: the same toolcall can return `allow` again when it is below the restored threshold and in allowlists.
+
+## 14d. Helm Charts for Console Services (Tier 3 item 12)
+
+Render Helm templates for the new console charts:
+
+```bash
+# If local helm is installed:
+helm template oc-console-api ./deploy/helm/console-api | head
+helm template oc-console-ui ./deploy/helm/console-ui | head
+```
+
+If `helm` is not installed locally, use a containerized Helm binary:
+
+```bash
+docker run --rm -v "$PWD":/work -w /work alpine/helm:3.16.3 template oc-console-api ./deploy/helm/console-api > /tmp/oc-console-api.yaml
+docker run --rm -v "$PWD":/work -w /work alpine/helm:3.16.3 template oc-console-ui ./deploy/helm/console-ui > /tmp/oc-console-ui.yaml
+
+wc -l /tmp/oc-console-api.yaml /tmp/oc-console-ui.yaml
+```
+
+Expected:
+- both `helm template` commands exit successfully
+- rendered YAML includes `Deployment`, `Service`, and optional `Ingress` manifests for each chart
 
 ## 15. Run Unit Tests
 

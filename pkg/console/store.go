@@ -2,8 +2,8 @@ package console
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/csv"
@@ -22,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -34,6 +36,40 @@ type Tenant struct {
 	Status    string          `json:"status"`
 	Config    json.RawMessage `json:"config"`
 	CreatedAt time.Time       `json:"created_at"`
+}
+
+// TenantNotificationConfig is the DB-persisted per-tenant routing config used
+// to build approval notification outbox entries.
+//
+// Stored inside tenants.config under `notification_config`.
+type TenantNotificationConfig struct {
+	ApproverGroup string               `json:"approver_group,omitempty"`
+	Notify        []types.PolicyNotify `json:"notify,omitempty"`
+}
+
+type TenantPolicyConfig struct {
+	MaxRiskAutoApprove        int      `json:"max_risk_auto_approve"`
+	ReadActions               []string `json:"read_actions,omitempty"`
+	WriteActions              []string `json:"write_actions,omitempty"`
+	DestructiveActions        []string `json:"destructive_actions,omitempty"`
+	RequireDestructiveApproval bool    `json:"require_destructive_approval"`
+}
+
+func (c TenantPolicyConfig) ToPolicyInputMap() map[string]string {
+	out := map[string]string{
+		"max_risk_auto_approve":         strconv.Itoa(c.MaxRiskAutoApprove),
+		"require_destructive_approval":  strconv.FormatBool(c.RequireDestructiveApproval),
+	}
+	if len(c.ReadActions) > 0 {
+		out["read_actions_csv"] = strings.Join(c.ReadActions, ",")
+	}
+	if len(c.WriteActions) > 0 {
+		out["write_actions_csv"] = strings.Join(c.WriteActions, ",")
+	}
+	if len(c.DestructiveActions) > 0 {
+		out["destructive_actions_csv"] = strings.Join(c.DestructiveActions, ",")
+	}
+	return out
 }
 
 type Agent struct {
@@ -52,6 +88,8 @@ type APIKey struct {
 	KeyPrefix  string     `json:"key_prefix"`
 	Status     string     `json:"status"`
 	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	IsPrimary  bool       `json:"is_primary"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
@@ -85,6 +123,55 @@ type AnalyticsOverview struct {
 	PendingApprovals int64 `json:"pending_approvals"`
 	ActiveTenants    int64 `json:"active_tenants"`
 	ActiveAgents     int64 `json:"active_agents"`
+}
+
+type DecisionTotals struct {
+	TotalEvents  int64 `json:"total_events"`
+	AllowCount   int64 `json:"allow_count"`
+	DenyCount    int64 `json:"deny_count"`
+	ApproveCount int64 `json:"approve_count"`
+}
+
+type DecisionTrendBucket struct {
+	Bucket       time.Time `json:"bucket"`
+	Total        int64     `json:"total"`
+	AllowCount   int64     `json:"allow_count"`
+	DenyCount    int64     `json:"deny_count"`
+	ApproveCount int64     `json:"approve_count"`
+}
+
+type RiskHeatmapRow struct {
+	RiskScore    int   `json:"risk_score"`
+	AllowCount   int64 `json:"allow_count"`
+	DenyCount    int64 `json:"deny_count"`
+	ApproveCount int64 `json:"approve_count"`
+	Total        int64 `json:"total"`
+}
+
+type AgentBreakdownRow struct {
+	AgentID      string `json:"agent_id"`
+	AllowCount   int64  `json:"allow_count"`
+	DenyCount    int64  `json:"deny_count"`
+	ApproveCount int64  `json:"approve_count"`
+	Total        int64  `json:"total"`
+}
+
+type OnboardingChecklist struct {
+	HasAPIKey    bool `json:"has_api_key"`
+	HasApprover  bool `json:"has_approver"`
+	HasToolcall  bool `json:"has_toolcall"`
+	HasApproval  bool `json:"has_approval"`
+	HasExecution bool `json:"has_execution"`
+}
+
+type TenantAnalyticsSummary struct {
+	RangeStart           time.Time             `json:"range_start"`
+	RangeEnd             time.Time             `json:"range_end"`
+	Totals               DecisionTotals        `json:"totals"`
+	Trend                []DecisionTrendBucket `json:"trend"`
+	RiskHeatmap          []RiskHeatmapRow      `json:"risk_heatmap"`
+	PerAgent             []AgentBreakdownRow   `json:"per_agent"`
+	OnboardingChecklist  OnboardingChecklist   `json:"onboarding_checklist"`
 }
 
 type EventListItem struct {
@@ -138,26 +225,29 @@ type PolicyVersion struct {
 }
 
 type AlertRule struct {
-	ID           string          `json:"id"`
-	TenantID     string          `json:"tenant_id"`
-	Name         string          `json:"name"`
-	RuleType     string          `json:"rule_type"`
-	Config       json.RawMessage `json:"config"`
-	NotifyKind   string          `json:"notify_kind"`
-	NotifyTarget string          `json:"notify_target"`
-	Enabled      bool            `json:"enabled"`
-	CreatedAt    time.Time       `json:"created_at"`
+	ID        string          `json:"id"`
+	TenantID  string          `json:"tenant_id"`
+	Name      string          `json:"name"`
+	RuleType  string          `json:"rule_type"`
+	Config    json.RawMessage `json:"config"`
+	Enabled   bool            `json:"enabled"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 type AlertEvent struct {
-	ID        string          `json:"id"`
-	RuleID    string          `json:"rule_id"`
-	TenantID  string          `json:"tenant_id"`
-	Severity  string          `json:"severity"`
-	Message   string          `json:"message"`
-	Details   json.RawMessage `json:"details,omitempty"`
-	Notified  bool            `json:"notified"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID            string          `json:"id"`
+	RuleID        string          `json:"rule_id"`
+	TenantID      string          `json:"tenant_id"`
+	Severity      string          `json:"severity"`
+	Message       string          `json:"message"`
+	ContextJSON   json.RawMessage `json:"context_json,omitempty"`
+	Status        string          `json:"status"`
+	DeliveredAt   *time.Time      `json:"delivered_at,omitempty"`
+	AttemptCount  int             `json:"attempt_count"`
+	NextAttemptAt time.Time       `json:"next_attempt_at,omitempty"`
+	LastError     string          `json:"last_error,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -165,7 +255,7 @@ type AlertEvent struct {
 // ──────────────────────────────────────────────────────────────────────────────
 
 type Store struct {
-	pool             *pgxpool.Pool
+	pool            *pgxpool.Pool
 	tokenHMACSecret []byte
 }
 
@@ -177,7 +267,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 		secret = os.Getenv("CONSOLE_JWT_SECRET")
 	}
 	return &Store{
-		pool:             pool,
+		pool:            pool,
 		tokenHMACSecret: []byte(secret),
 	}
 }
@@ -280,6 +370,106 @@ func (s *Store) GetTenant(ctx context.Context, id string) (*Tenant, error) {
 	return &t, nil
 }
 
+func (s *Store) GetTenantNotificationConfig(ctx context.Context, tenantID string) (*TenantNotificationConfig, bool, error) {
+	t, err := s.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	if t == nil {
+		return nil, false, nil
+	}
+
+	// tenants.config is a JSON object that may or may not contain the
+	// notification_config payload.
+	type tenantConfigWrapper struct {
+		NotificationConfig *TenantNotificationConfig `json:"notification_config,omitempty"`
+	}
+	var w tenantConfigWrapper
+	if len(t.Config) == 0 || string(t.Config) == "{}" {
+		return nil, false, nil
+	}
+	if err := json.Unmarshal(t.Config, &w); err != nil {
+		return nil, false, fmt.Errorf("console.GetTenantNotificationConfig unmarshal: %w", err)
+	}
+	if w.NotificationConfig == nil {
+		return nil, false, nil
+	}
+	return w.NotificationConfig, true, nil
+}
+
+func (s *Store) SetTenantNotificationConfig(ctx context.Context, tenantID string, cfg TenantNotificationConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantNotificationConfig marshal: %w", err)
+	}
+
+	res, err := s.pool.Exec(ctx, `
+		UPDATE tenants
+		SET config = jsonb_set(
+			COALESCE(config, '{}'::jsonb),
+			'{notification_config}',
+			$1::jsonb,
+			true
+		)
+		WHERE id = $2`, b, tenantID)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantNotificationConfig update: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.SetTenantNotificationConfig: tenant %s not found", tenantID)
+	}
+	return nil
+}
+
+func (s *Store) GetTenantPolicyConfig(ctx context.Context, tenantID string) (*TenantPolicyConfig, bool, error) {
+	t, err := s.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	if t == nil {
+		return nil, false, nil
+	}
+
+	type tenantConfigWrapper struct {
+		PolicyConfig *TenantPolicyConfig `json:"policy_config,omitempty"`
+	}
+	var w tenantConfigWrapper
+	if len(t.Config) == 0 || string(t.Config) == "{}" {
+		return nil, false, nil
+	}
+	if err := json.Unmarshal(t.Config, &w); err != nil {
+		return nil, false, fmt.Errorf("console.GetTenantPolicyConfig unmarshal: %w", err)
+	}
+	if w.PolicyConfig == nil {
+		return nil, false, nil
+	}
+	return w.PolicyConfig, true, nil
+}
+
+func (s *Store) SetTenantPolicyConfig(ctx context.Context, tenantID string, cfg TenantPolicyConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantPolicyConfig marshal: %w", err)
+	}
+
+	res, err := s.pool.Exec(ctx, `
+		UPDATE tenants
+		SET config = jsonb_set(
+			COALESCE(config, '{}'::jsonb),
+			'{policy_config}',
+			$1::jsonb,
+			true
+		)
+		WHERE id = $2`, b, tenantID)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantPolicyConfig update: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.SetTenantPolicyConfig: tenant %s not found", tenantID)
+	}
+	return nil
+}
+
 func (s *Store) UpdateTenantStatus(ctx context.Context, id, status string) error {
 	res, err := s.pool.Exec(ctx, `
 		UPDATE tenants SET status = $2 WHERE id = $1`, id, status)
@@ -379,10 +569,21 @@ func hashAPIKey(raw string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKeyCreateResult, error) {
+func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string, expiresAt *time.Time) (*APIKeyCreateResult, error) {
 	raw, prefix, keyHash, err := generateAPIKey()
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateAPIKey: %w", err)
+	}
+
+	// If the tenant already has an active primary key, new keys default to non-primary.
+	var hasActivePrimary bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM api_keys
+			WHERE tenant_id = $1 AND status = 'active' AND is_primary = true
+		)`, tenantID,
+	).Scan(&hasActivePrimary); err != nil {
+		return nil, fmt.Errorf("console.CreateAPIKey primary check: %w", err)
 	}
 
 	k := APIKey{
@@ -391,13 +592,15 @@ func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKe
 		Name:      name,
 		KeyPrefix: prefix,
 		Status:    "active",
+		ExpiresAt: expiresAt,
+		IsPrimary: !hasActivePrimary,
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status, expires_at, is_primary)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING created_at`,
-		k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status,
+		k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status, k.ExpiresAt, k.IsPrimary,
 	).Scan(&k.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateAPIKey: %w", err)
@@ -408,7 +611,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKe
 
 func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, name, key_prefix, status, created_at, revoked_at, last_used_at
+		SELECT id, tenant_id, name, key_prefix, status, created_at, expires_at, is_primary, revoked_at, last_used_at
 		FROM api_keys
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC`, tenantID)
@@ -421,7 +624,7 @@ func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, err
 	for rows.Next() {
 		var k APIKey
 		if err := rows.Scan(&k.ID, &k.TenantID, &k.Name, &k.KeyPrefix, &k.Status,
-			&k.CreatedAt, &k.RevokedAt, &k.LastUsedAt); err != nil {
+			&k.CreatedAt, &k.ExpiresAt, &k.IsPrimary, &k.RevokedAt, &k.LastUsedAt); err != nil {
 			return nil, fmt.Errorf("console.ListAPIKeys scan: %w", err)
 		}
 		out = append(out, k)
@@ -432,17 +635,103 @@ func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, err
 	return out, nil
 }
 
-func (s *Store) RevokeAPIKey(ctx context.Context, keyID string) error {
+func (s *Store) RevokeAPIKeyForTenant(ctx context.Context, tenantID, keyID string) error {
 	res, err := s.pool.Exec(ctx, `
-		UPDATE api_keys SET status = 'revoked', revoked_at = NOW()
-		WHERE id = $1 AND status = 'active'`, keyID)
+		UPDATE api_keys
+		SET status = 'revoked', revoked_at = NOW(), is_primary = false
+		WHERE id = $1 AND tenant_id = $2 AND status = 'active'`, keyID, tenantID)
 	if err != nil {
-		return fmt.Errorf("console.RevokeAPIKey: %w", err)
+		return fmt.Errorf("console.RevokeAPIKeyForTenant: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("console.RevokeAPIKey: key %s not found or already revoked", keyID)
+		return fmt.Errorf("console.RevokeAPIKeyForTenant: key %s not found or already revoked", keyID)
 	}
 	return nil
+}
+
+// RotateAPIKeysPrimary implements the UX workflow:
+// create new key -> (optionally) mark it as primary -> (optionally) revoke
+// the previous active primary key.
+func (s *Store) RotateAPIKeysPrimary(
+	ctx context.Context,
+	tenantID, name string,
+	expiresAt *time.Time,
+	makePrimary bool,
+	revokeOldPrimary bool,
+) (*APIKeyCreateResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var oldPrimaryID string
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM api_keys
+		WHERE tenant_id = $1 AND status = 'active' AND is_primary = true
+		LIMIT 1`, tenantID,
+	).Scan(&oldPrimaryID)
+	if err != nil {
+		if err != pgx.ErrNoRows {
+			return nil, fmt.Errorf("console.RotateAPIKeysPrimary old primary: %w", err)
+		}
+		oldPrimaryID = ""
+	}
+
+	// If the caller wants the new key to become primary, clear primary flags
+	// for all active keys before inserting (avoids unique-index conflicts).
+	if makePrimary {
+		if _, err := tx.Exec(ctx, `
+			UPDATE api_keys
+			SET is_primary = false
+			WHERE tenant_id = $1 AND status = 'active'`, tenantID,
+		); err != nil {
+			return nil, fmt.Errorf("console.RotateAPIKeysPrimary clear primary: %w", err)
+		}
+	}
+
+	raw, prefix, keyHash, err := generateAPIKey()
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary generate: %w", err)
+	}
+
+	newKeyID := uuid.NewString()
+	k := APIKey{
+		ID:         newKeyID,
+		TenantID:   tenantID,
+		Name:       name,
+		KeyPrefix:  prefix,
+		Status:     "active",
+		ExpiresAt:  expiresAt,
+		IsPrimary:  makePrimary,
+		RevokedAt:  nil,
+		LastUsedAt: nil,
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status, expires_at, is_primary)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING created_at`, k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status, k.ExpiresAt, k.IsPrimary,
+	).Scan(&k.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary insert: %w", err)
+	}
+
+	if revokeOldPrimary && oldPrimaryID != "" && oldPrimaryID != newKeyID {
+		if _, err := tx.Exec(ctx, `
+			UPDATE api_keys
+			SET status = 'revoked', revoked_at = NOW(), is_primary = false
+			WHERE id = $1 AND tenant_id = $2 AND status = 'active'`, oldPrimaryID, tenantID,
+		); err != nil {
+			return nil, fmt.Errorf("console.RotateAPIKeysPrimary revoke old primary: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("console.RotateAPIKeysPrimary commit: %w", err)
+	}
+
+	return &APIKeyCreateResult{APIKey: k, RawKey: raw}, nil
 }
 
 func (s *Store) LookupAPIKey(ctx context.Context, rawKey string) (tenantID string, keyID string, err error) {
@@ -455,7 +744,9 @@ func (s *Store) LookupAPIKey(ctx context.Context, rawKey string) (tenantID strin
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, key_hash
 		FROM api_keys
-		WHERE key_prefix = $1 AND status = 'active'`, prefix)
+		WHERE key_prefix = $1
+		  AND status = 'active'
+		  AND (expires_at IS NULL OR expires_at > NOW())`, prefix)
 	if err != nil {
 		return "", "", fmt.Errorf("console.LookupAPIKey: %w", err)
 	}
@@ -487,7 +778,7 @@ func (s *Store) RotateAPIKeys(ctx context.Context, tenantID string) (*APIKeyCrea
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	_, err = tx.Exec(ctx, `
-		UPDATE api_keys SET status = 'revoked', revoked_at = NOW()
+		UPDATE api_keys SET status = 'revoked', revoked_at = NOW(), is_primary = false
 		WHERE tenant_id = $1 AND status = 'active'`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("console.RotateAPIKeys revoke: %w", err)
@@ -929,6 +1220,14 @@ type Invite struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// InviteAcceptResult is the structured response payload for the invite acceptance flow.
+// It includes the created/updated user plus the assigned tenant-scoped role metadata.
+type InviteAcceptResult struct {
+	User     *User  `json:"user"`
+	TenantID string `json:"tenant_id"`
+	Role     string `json:"role"`
+}
+
 func (s *Store) CreateInvite(ctx context.Context, token, email, tenantID, role, name string, expiresAt time.Time) error {
 	tokenHash := s.hashInviteResetToken(token)
 	_, err := s.pool.Exec(ctx, `
@@ -958,7 +1257,7 @@ func (s *Store) GetInvite(ctx context.Context, token string) (*Invite, error) {
 	return &inv, nil
 }
 
-func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name string) (*User, error) {
+func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name string) (*InviteAcceptResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("console.ConsumeInviteAccept begin tx: %w", err)
@@ -1010,13 +1309,13 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 	userID := ""
 	if userSelectErr == pgx.ErrNoRows {
 		userID = uuid.NewString()
-		// INSERT doesn't return rows; use Exec to ensure the user row exists
-		// before we create user_roles in the same transaction.
-		_, err = tx.Exec(ctx, `
+		var createdAt time.Time
+		err = tx.QueryRow(ctx, `
 			INSERT INTO users (id, email, password_hash, name, slack_user_id, status)
-			VALUES ($1, $2, $3, $4, NULL, 'active')`,
+			VALUES ($1, $2, $3, $4, NULL, 'active')
+			RETURNING created_at`,
 			userID, inv.Email, string(hashed), acceptName,
-		)
+		).Scan(&createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("console.ConsumeInviteAccept insert user: %w", err)
 		}
@@ -1026,7 +1325,7 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 			Name:        acceptName,
 			SlackUserID: nil,
 			Status:      "active",
-			CreatedAt:   time.Now().UTC(),
+			CreatedAt:   createdAt,
 		}
 	} else {
 		userID = u.ID
@@ -1065,7 +1364,11 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 		return nil, fmt.Errorf("console.ConsumeInviteAccept commit: %w", err)
 	}
 
-	return &u, nil
+	return &InviteAcceptResult{
+		User:     &u,
+		TenantID: inv.TenantID,
+		Role:     inv.Role,
+	}, nil
 }
 
 func (s *Store) ListInvites(ctx context.Context, tenantID *string, limit, offset int) ([]Invite, error) {
@@ -1308,6 +1611,163 @@ func (s *Store) GetDecisionTimeseries(ctx context.Context, tenantID string, sinc
 		return nil, fmt.Errorf("console.GetDecisionTimeseries iteration: %w", err)
 	}
 	return out, nil
+}
+
+func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, since time.Time, bucketMinutes int, topAgents int) (*TenantAnalyticsSummary, error) {
+	if bucketMinutes <= 0 {
+		bucketMinutes = 60
+	}
+	if topAgents <= 0 {
+		topAgents = 5
+	}
+	if topAgents > 50 {
+		topAgents = 50
+	}
+
+	now := time.Now().UTC()
+	bucketSec := int64(bucketMinutes) * 60
+
+	// Trend: allow/deny/approve counts in time buckets.
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			to_timestamp(floor(extract(epoch FROM received_at) / $3) * $3) AS bucket,
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+			COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+			COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2
+		GROUP BY bucket
+		ORDER BY bucket ASC`, tenantID, since, bucketSec,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary trend: %w", err)
+	}
+	defer rows.Close()
+
+	trend := make([]DecisionTrendBucket, 0)
+	var totals DecisionTotals
+	for rows.Next() {
+		var bucket time.Time
+		var total, allow, deny, approve int64
+		if err := rows.Scan(&bucket, &total, &allow, &deny, &approve); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary trend scan: %w", err)
+		}
+		trend = append(trend, DecisionTrendBucket{
+			Bucket:       bucket,
+			Total:        total,
+			AllowCount:   allow,
+			DenyCount:    deny,
+			ApproveCount: approve,
+		})
+		totals.TotalEvents += total
+		totals.AllowCount += allow
+		totals.DenyCount += deny
+		totals.ApproveCount += approve
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary trend iteration: %w", err)
+	}
+
+	// Risk heatmap: per-risk-score decision counts (0..10).
+	riskHeatmap := make([]RiskHeatmapRow, 0, 11)
+	for risk := 0; risk <= 10; risk++ {
+		riskHeatmap = append(riskHeatmap, RiskHeatmapRow{RiskScore: risk})
+	}
+	riskRows, err := s.pool.Query(ctx, `
+		SELECT
+			risk_score,
+			COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+			COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+			COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
+			COUNT(*) AS total
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2
+		GROUP BY risk_score
+		ORDER BY risk_score ASC`, tenantID, since,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary risk heatmap: %w", err)
+	}
+	defer riskRows.Close()
+	for riskRows.Next() {
+		var risk int
+		var allow, deny, approve, total int64
+		if err := riskRows.Scan(&risk, &allow, &deny, &approve, &total); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary risk heatmap scan: %w", err)
+		}
+		if risk >= 0 && risk <= 10 {
+			riskHeatmap[risk] = RiskHeatmapRow{
+				RiskScore:    risk,
+				AllowCount:   allow,
+				DenyCount:    deny,
+				ApproveCount: approve,
+				Total:        total,
+			}
+		}
+	}
+	if err := riskRows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary risk heatmap iteration: %w", err)
+	}
+
+	// Per-agent breakdown: top agents by total events.
+	perAgent := make([]AgentBreakdownRow, 0)
+	agentRows, err := s.pool.Query(ctx, `
+		SELECT
+			agent_id,
+			COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+			COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+			COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
+			COUNT(*) AS total
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2
+		GROUP BY agent_id
+		ORDER BY total DESC
+		LIMIT $3`, tenantID, since, topAgents,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary per-agent: %w", err)
+	}
+	defer agentRows.Close()
+	for agentRows.Next() {
+		var row AgentBreakdownRow
+		if err := agentRows.Scan(&row.AgentID, &row.AllowCount, &row.DenyCount, &row.ApproveCount, &row.Total); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary per-agent scan: %w", err)
+		}
+		perAgent = append(perAgent, row)
+	}
+	if err := agentRows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary per-agent iteration: %w", err)
+	}
+
+	// Onboarding checklist: activity presence for common tenant setup steps.
+	var onboarding OnboardingChecklist
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			EXISTS(SELECT 1 FROM api_keys WHERE tenant_id = $1 AND status = 'active') AS has_api_key,
+			EXISTS(SELECT 1 FROM user_roles WHERE tenant_id = $1 AND role = 'approver') AS has_approver,
+			EXISTS(SELECT 1 FROM tool_events WHERE tenant_id = $1 AND received_at >= $2) AS has_toolcall,
+			EXISTS(SELECT 1 FROM approval_requests WHERE tenant_id = $1 AND created_at >= $2) AS has_approval,
+			EXISTS(
+				SELECT 1
+				FROM tool_executions te
+				JOIN tool_events e ON e.event_id = te.execution_event_id
+				WHERE e.tenant_id = $1 AND e.received_at >= $2
+			) AS has_execution`, tenantID, since,
+	).Scan(&onboarding.HasAPIKey, &onboarding.HasApprover, &onboarding.HasToolcall, &onboarding.HasApproval, &onboarding.HasExecution)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary onboarding: %w", err)
+	}
+
+	return &TenantAnalyticsSummary{
+		RangeStart:          since,
+		RangeEnd:            now,
+		Totals:               totals,
+		Trend:                trend,
+		RiskHeatmap:          riskHeatmap,
+		PerAgent:             perAgent,
+		OnboardingChecklist: onboarding,
+	}, nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1701,12 +2161,11 @@ func (s *Store) CreateAlertRule(ctx context.Context, rule AlertRule) (*AlertRule
 	}
 
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO alert_rules (id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING created_at`,
-		rule.ID, rule.TenantID, rule.Name, rule.RuleType,
-		rule.Config, rule.NotifyKind, rule.NotifyTarget, rule.Enabled,
-	).Scan(&rule.CreatedAt)
+		INSERT INTO alert_rules (id, tenant_id, name, rule_type, config, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING created_at, updated_at`,
+		rule.ID, rule.TenantID, rule.Name, rule.RuleType, rule.Config, rule.Enabled,
+	).Scan(&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateAlertRule: %w", err)
 	}
@@ -1717,11 +2176,11 @@ func (s *Store) ListAlertRules(ctx context.Context, tenantID string) ([]AlertRul
 	var query string
 	var args []any
 	if tenantID != "" {
-		query = `SELECT id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled, created_at
+		query = `SELECT id, tenant_id, name, rule_type, config, enabled, created_at, updated_at
 			FROM alert_rules WHERE tenant_id = $1 ORDER BY created_at DESC`
 		args = []any{tenantID}
 	} else {
-		query = `SELECT id, tenant_id, name, rule_type, config, notify_kind, notify_target, enabled, created_at
+		query = `SELECT id, tenant_id, name, rule_type, config, enabled, created_at, updated_at
 			FROM alert_rules ORDER BY created_at DESC LIMIT 200`
 	}
 	rows, err := s.pool.Query(ctx, query, args...)
@@ -1734,7 +2193,7 @@ func (s *Store) ListAlertRules(ctx context.Context, tenantID string) ([]AlertRul
 	for rows.Next() {
 		var r AlertRule
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.RuleType,
-			&r.Config, &r.NotifyKind, &r.NotifyTarget, &r.Enabled, &r.CreatedAt); err != nil {
+			&r.Config, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("console.ListAlertRules scan: %w", err)
 		}
 		out = append(out, r)
@@ -1745,37 +2204,50 @@ func (s *Store) ListAlertRules(ctx context.Context, tenantID string) ([]AlertRul
 	return out, nil
 }
 
-func (s *Store) UpdateAlertRule(ctx context.Context, id string, enabled bool) error {
+func (s *Store) UpdateAlertRule(ctx context.Context, tenantID, id string, name string, ruleType string, config json.RawMessage, enabled bool) error {
+	if len(config) == 0 {
+		config = json.RawMessage(`{}`)
+	}
+
 	res, err := s.pool.Exec(ctx, `
-		UPDATE alert_rules SET enabled = $2 WHERE id = $1`, id, enabled)
+		UPDATE alert_rules
+		SET name = $2,
+		    rule_type = $3,
+		    config = $4,
+		    enabled = $5,
+		    updated_at = NOW()
+		WHERE tenant_id = $1 AND id = $6`, tenantID, name, ruleType, config, enabled, id)
 	if err != nil {
 		return fmt.Errorf("console.UpdateAlertRule: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("console.UpdateAlertRule: rule %s not found", id)
+		return fmt.Errorf("console.UpdateAlertRule: rule %s not found for tenant", id)
 	}
 	return nil
 }
 
-func (s *Store) CreateAlertEvent(ctx context.Context, ruleID, tenantID, severity, message string, details json.RawMessage) (*AlertEvent, error) {
+func (s *Store) CreateAlertEvent(ctx context.Context, ruleID, tenantID, severity, message string, contextJSON json.RawMessage) (*AlertEvent, error) {
 	ae := &AlertEvent{
-		ID:       uuid.NewString(),
-		RuleID:   ruleID,
-		TenantID: tenantID,
-		Severity: severity,
-		Message:  message,
-		Details:  details,
+		ID:           uuid.NewString(),
+		RuleID:       ruleID,
+		TenantID:     tenantID,
+		Severity:     severity,
+		Message:      message,
+		ContextJSON:  contextJSON,
+		Status:       "pending",
+		AttemptCount: 0,
+		LastError:    "",
 	}
-	if len(ae.Details) == 0 {
-		ae.Details = json.RawMessage(`{}`)
+	if len(ae.ContextJSON) == 0 {
+		ae.ContextJSON = json.RawMessage(`{}`)
 	}
 
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO alert_events (id, rule_id, tenant_id, severity, message, details)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING notified, created_at`,
-		ae.ID, ae.RuleID, ae.TenantID, ae.Severity, ae.Message, ae.Details,
-	).Scan(&ae.Notified, &ae.CreatedAt)
+		RETURNING status, delivered_at, attempt_count, next_attempt_at, last_error, created_at`,
+		ae.ID, ae.RuleID, ae.TenantID, ae.Severity, ae.Message, ae.ContextJSON,
+	).Scan(&ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.NextAttemptAt, &ae.LastError, &ae.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateAlertEvent: %w", err)
 	}
@@ -1789,11 +2261,11 @@ func (s *Store) ListAlertEvents(ctx context.Context, tenantID string, limit, off
 	var query string
 	var args []any
 	if tenantID != "" {
-		query = `SELECT id, rule_id, tenant_id, severity, message, details, notified, created_at
+		query = `SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, created_at
 			FROM alert_events WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 		args = []any{tenantID, limit, offset}
 	} else {
-		query = `SELECT id, rule_id, tenant_id, severity, message, details, notified, created_at
+		query = `SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, created_at
 			FROM alert_events ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 		args = []any{limit, offset}
 	}
@@ -1807,7 +2279,7 @@ func (s *Store) ListAlertEvents(ctx context.Context, tenantID string, limit, off
 	for rows.Next() {
 		var ae AlertEvent
 		if err := rows.Scan(&ae.ID, &ae.RuleID, &ae.TenantID, &ae.Severity,
-			&ae.Message, &ae.Details, &ae.Notified, &ae.CreatedAt); err != nil {
+			&ae.Message, &ae.ContextJSON, &ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.LastError, &ae.CreatedAt); err != nil {
 			return nil, fmt.Errorf("console.ListAlertEvents scan: %w", err)
 		}
 		out = append(out, ae)
@@ -1816,6 +2288,204 @@ func (s *Store) ListAlertEvents(ctx context.Context, tenantID string, limit, off
 		return nil, fmt.Errorf("console.ListAlertEvents iteration: %w", err)
 	}
 	return out, nil
+}
+
+func (s *Store) GetAlertRule(ctx context.Context, tenantID, ruleID string) (*AlertRule, error) {
+	var r AlertRule
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, rule_type, config, enabled, created_at, updated_at
+		FROM alert_rules
+		WHERE tenant_id = $1 AND id = $2`, tenantID, ruleID,
+	).Scan(&r.ID, &r.TenantID, &r.Name, &r.RuleType, &r.Config, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetAlertRule: %w", err)
+	}
+	return &r, nil
+}
+
+func (s *Store) DeleteAlertRule(ctx context.Context, tenantID, ruleID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("console.DeleteAlertRule begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // commit path is a no-op rollback
+
+	// Delete events first to avoid FK issues (alert_events.rule_id -> alert_rules.id).
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM alert_events
+		WHERE tenant_id = $1 AND rule_id = $2`, tenantID, ruleID); err != nil {
+		return fmt.Errorf("console.DeleteAlertRule delete events: %w", err)
+	}
+
+	res, err := tx.Exec(ctx, `
+		DELETE FROM alert_rules
+		WHERE tenant_id = $1 AND id = $2`, tenantID, ruleID)
+	if err != nil {
+		return fmt.Errorf("console.DeleteAlertRule delete rule: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.DeleteAlertRule: rule %s not found", ruleID)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("console.DeleteAlertRule commit: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListEnabledDenySpikeRules(ctx context.Context) ([]AlertRule, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, rule_type, config, enabled, created_at, updated_at
+		FROM alert_rules
+		WHERE enabled = true AND rule_type = 'deny_spike'
+		ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListEnabledDenySpikeRules: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]AlertRule, 0)
+	for rows.Next() {
+		var r AlertRule
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.RuleType, &r.Config, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListEnabledDenySpikeRules scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListEnabledDenySpikeRules iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) CountDenyToolEventsInWindow(ctx context.Context, tenantID string, since time.Time) (int, error) {
+	var count int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)::int
+		FROM tool_events
+		WHERE tenant_id = $1
+		  AND decision = 'deny'
+		  AND received_at >= $2`, tenantID, since,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("console.CountDenyToolEventsInWindow: %w", err)
+	}
+	return count, nil
+}
+
+func (s *Store) AlertEventExistsInWindow(ctx context.Context, tenantID, ruleID string, since time.Time) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM alert_events
+			WHERE tenant_id = $1
+			  AND rule_id = $2
+			  AND created_at >= $3
+			LIMIT 1
+		)`, tenantID, ruleID, since,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("console.AlertEventExistsInWindow: %w", err)
+	}
+	return exists, nil
+}
+
+func (s *Store) ListAlertEventsSince(ctx context.Context, tenantID string, since time.Time, limit int) ([]AlertEvent, error) {
+	limit = clampLimit(limit)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, created_at
+		FROM alert_events
+		WHERE tenant_id = $1
+		  AND created_at >= $2
+		ORDER BY created_at DESC
+		LIMIT $3`, tenantID, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListAlertEventsSince: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]AlertEvent, 0)
+	for rows.Next() {
+		var ae AlertEvent
+		if err := rows.Scan(&ae.ID, &ae.RuleID, &ae.TenantID, &ae.Severity,
+			&ae.Message, &ae.ContextJSON, &ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.LastError, &ae.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListAlertEventsSince scan: %w", err)
+		}
+		out = append(out, ae)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListAlertEventsSince iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) ClaimPendingAlertEventsDue(ctx context.Context, limit int) ([]AlertEvent, error) {
+	limit = clampLimit(limit)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, next_attempt_at, created_at
+		FROM alert_events
+		WHERE status = 'pending'
+		  AND next_attempt_at <= NOW()
+		ORDER BY created_at ASC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("console.ClaimPendingAlertEventsDue: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]AlertEvent, 0)
+	for rows.Next() {
+		var ae AlertEvent
+		var nextAttemptAt time.Time
+		if err := rows.Scan(&ae.ID, &ae.RuleID, &ae.TenantID, &ae.Severity,
+			&ae.Message, &ae.ContextJSON, &ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.LastError, &nextAttemptAt, &ae.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ClaimPendingAlertEventsDue scan: %w", err)
+		}
+		ae.NextAttemptAt = nextAttemptAt
+		out = append(out, ae)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ClaimPendingAlertEventsDue iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) MarkAlertEventSent(ctx context.Context, eventID string) error {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE alert_events
+		SET status = 'sent',
+		    delivered_at = NOW(),
+		    notified = true,
+		    last_error = ''
+		WHERE id = $1`, eventID)
+	if err != nil {
+		return fmt.Errorf("console.MarkAlertEventSent: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.MarkAlertEventSent: no rows updated for id %s", eventID)
+	}
+	return nil
+}
+
+func (s *Store) MarkAlertEventPendingRetry(ctx context.Context, eventID string, attempts int, next time.Time, lastErr string) error {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE alert_events
+		SET status = 'pending',
+		    attempt_count = $2,
+		    next_attempt_at = $3,
+		    last_error = $4,
+		    notified = false
+		WHERE id = $1`, eventID, attempts, next, lastErr)
+	if err != nil {
+		return fmt.Errorf("console.MarkAlertEventPendingRetry: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.MarkAlertEventPendingRetry: no rows updated for id %s", eventID)
+	}
+	return nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

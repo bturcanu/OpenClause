@@ -38,7 +38,9 @@ func (db *DBKeyStore) Lookup(apiKey string) (tenantID string, ok bool) {
 		`SELECT ak.id, ak.tenant_id, ak.key_hash
 		 FROM api_keys ak
 		 JOIN tenants t ON t.id = ak.tenant_id AND t.status = 'active'
-		 WHERE ak.key_prefix = $1 AND ak.status = 'active'`,
+		 WHERE ak.key_prefix = $1
+		   AND ak.status = 'active'
+		   AND (ak.expires_at IS NULL OR ak.expires_at > NOW())`,
 		prefix,
 	)
 	if err != nil {
