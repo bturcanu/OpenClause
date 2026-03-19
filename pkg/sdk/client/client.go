@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
@@ -70,17 +71,21 @@ func (c *Client) Execute(ctx context.Context, parentEventID string) (*types.Tool
 }
 
 func (c *Client) WaitForApprovalThenExecute(ctx context.Context, eventID string, pollEvery time.Duration) (*types.ToolCallResponse, error) {
-	t := time.NewTicker(pollEvery)
-	defer t.Stop()
+	const maxBackoff = 30 * time.Second
+	backoff := pollEvery
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-t.C:
+		case <-time.After(backoff):
 			resp, err := c.Execute(ctx, eventID)
 			if err != nil {
 				if isRetryable(err) {
+					backoff *= 2
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
 					continue
 				}
 				return nil, err
@@ -94,6 +99,12 @@ func isRetryable(err error) bool {
 	var apiErr *types.APIError
 	if errors.As(err, &apiErr) {
 		return apiErr.Retryable || apiErr.HTTPCode == http.StatusConflict
+	}
+	msg := err.Error()
+	for _, code := range []string{"409", "502", "503", "504"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
 	}
 	return false
 }

@@ -23,6 +23,19 @@ async function apiFetch(path: string, options?: RequestInit) {
   return res;
 }
 
+async function unauthFetch(path: string, body: unknown) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({} as any));
+    throw new Error(err?.message || err?.error || res.statusText);
+  }
+  return res.json();
+}
+
 export const api = {
   get: (path: string) => apiFetch(path).then(r => r.json()),
   post: (path: string, body?: unknown) =>
@@ -30,8 +43,9 @@ export const api = {
   put: (path: string, body?: unknown) =>
     apiFetch(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
   delete: (path: string) =>
-    apiFetch(path, { method: 'DELETE' }).then(r => r.json()),
+    apiFetch(path, { method: 'DELETE' }).then(r => r.status === 204 ? {} : r.json()),
   getBlob: (path: string) => apiFetch(path).then(r => r.blob()),
+  unauthPost: unauthFetch,
 };
 
 export function formatDate(value: string | undefined | null, style: 'full' | 'date' = 'full'): string {

@@ -13,6 +13,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -99,5 +100,5 @@ class OpenClauseTool:
         return json.dumps(result)
 
     async def _arun(self, params: dict[str, Any] | str | None = None) -> str:
-        """Async variant — delegates to the sync implementation."""
-        return self._run(params)
+        """Async variant — runs the sync implementation in a thread to avoid blocking the event loop."""
+        return await asyncio.to_thread(self._run, params)

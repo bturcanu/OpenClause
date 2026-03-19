@@ -798,11 +798,12 @@ func (s *Store) RotateAPIKeys(ctx context.Context, tenantID string) (*APIKeyCrea
 	}
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status, is_primary)
+		VALUES ($1, $2, $3, $4, $5, $6, true)
 		RETURNING created_at`,
 		k.ID, k.TenantID, k.Name, k.KeyPrefix, keyHash, k.Status,
 	).Scan(&k.CreatedAt)
+	k.IsPrimary = true
 	if err != nil {
 		return nil, fmt.Errorf("console.RotateAPIKeys insert: %w", err)
 	}
@@ -2261,11 +2262,11 @@ func (s *Store) ListAlertEvents(ctx context.Context, tenantID string, limit, off
 	var query string
 	var args []any
 	if tenantID != "" {
-		query = `SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, created_at
+		query = `SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, next_attempt_at, created_at
 			FROM alert_events WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 		args = []any{tenantID, limit, offset}
 	} else {
-		query = `SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, created_at
+		query = `SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, next_attempt_at, created_at
 			FROM alert_events ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 		args = []any{limit, offset}
 	}
@@ -2279,7 +2280,7 @@ func (s *Store) ListAlertEvents(ctx context.Context, tenantID string, limit, off
 	for rows.Next() {
 		var ae AlertEvent
 		if err := rows.Scan(&ae.ID, &ae.RuleID, &ae.TenantID, &ae.Severity,
-			&ae.Message, &ae.ContextJSON, &ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.LastError, &ae.CreatedAt); err != nil {
+			&ae.Message, &ae.ContextJSON, &ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.LastError, &ae.NextAttemptAt, &ae.CreatedAt); err != nil {
 			return nil, fmt.Errorf("console.ListAlertEvents scan: %w", err)
 		}
 		out = append(out, ae)

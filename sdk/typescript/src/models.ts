@@ -29,6 +29,20 @@ export interface ToolCallResponse {
   result?: ExecutionResult;
 }
 
+export interface ToolCallEvent {
+  event_id: string;
+  tenant_id: string;
+  agent_id: string;
+  tool: string;
+  action: string;
+  resource: string;
+  risk_score: number;
+  decision: string;
+  reason: string;
+  result?: ExecutionResult;
+  received_at: string;
+}
+
 export interface ClientOptions {
   baseUrl: string;
   apiKey: string;

@@ -18,6 +18,7 @@ env:
   POSTGRES_PORT: "5432"
   OPA_URL: http://opa:8181
   APPROVALS_URL: http://approvals:8081
+  PUBLIC_APPROVALS_URL: http://approvals:8081
   CONNECTOR_SLACK_URL: http://connector-slack:8082
   CONNECTOR_JIRA_URL: http://connector-jira:8083
 

@@ -83,7 +83,7 @@ class ToolCallResponse:
     @classmethod
     def from_dict(cls, data: dict) -> ToolCallResponse:
         result = None
-        if data.get("result"):
+        if data.get("result") is not None:
             result = ExecutionResult.from_dict(data["result"])
         return cls(
             event_id=data.get("event_id", ""),
@@ -111,7 +111,7 @@ class ToolCallEvent:
     @classmethod
     def from_dict(cls, data: dict) -> ToolCallEvent:
         result = None
-        if data.get("result"):
+        if data.get("result") is not None:
             result = ExecutionResult.from_dict(data["result"])
         return cls(
             event_id=data.get("event_id", ""),

@@ -25,7 +25,7 @@ export default function Alerts() {
   const [error, setError] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', condition: '', channel: 'webhook' })
+  const [form, setForm] = useState({ name: '', n: 3, mMinutes: 5, enabled: true })
   const [creating, setCreating] = useState(false)
 
   async function fetchAll() {
@@ -50,8 +50,13 @@ export default function Alerts() {
     setCreating(true)
     setError('')
     try {
-      await api.post('/admin/alerts/rules', form)
-      setForm({ name: '', condition: '', channel: 'webhook' })
+      await api.post('/admin/alerts/rules', {
+        name: form.name,
+        kind: 'deny_spike',
+        enabled: form.enabled,
+        config_json: { n: form.n, m_minutes: form.mMinutes },
+      })
+      setForm({ name: '', n: 3, mMinutes: 5, enabled: true })
       setShowCreate(false)
       await fetchAll()
     } catch (err: any) {
@@ -88,22 +93,37 @@ export default function Alerts() {
                 required
               />
             </div>
-            <div className="form-group">
-              <label>Condition (CEL expression)</label>
-              <textarea
-                value={form.condition}
-                onChange={e => setForm(f => ({ ...f, condition: e.target.value }))}
-                placeholder='e.g., event.decision == "deny" && event.risk_score > 80'
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Channel</label>
-              <select value={form.channel} onChange={e => setForm(f => ({ ...f, channel: e.target.value }))}>
-                <option value="webhook">Webhook</option>
-                <option value="email">Email</option>
-                <option value="slack">Slack</option>
-              </select>
+            <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
+              <div className="form-group" style={{ minWidth: 180 }}>
+                <label>N (deny count threshold)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={form.n}
+                  onChange={e => setForm(f => ({ ...f, n: parseInt(e.target.value || '0', 10) || 1 }))}
+                  required
+                />
+              </div>
+              <div className="form-group" style={{ minWidth: 220 }}>
+                <label>M (window minutes)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={form.mMinutes}
+                  onChange={e => setForm(f => ({ ...f, mMinutes: parseInt(e.target.value || '0', 10) || 1 }))}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Enabled</label>
+                <div style={{ marginTop: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={form.enabled}
+                    onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
+                  />
+                </div>
+              </div>
             </div>
             <button className="btn btn-primary" disabled={creating}>
               {creating ? 'Creating…' : 'Create Rule'}

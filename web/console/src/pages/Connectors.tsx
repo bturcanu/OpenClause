@@ -13,14 +13,13 @@ export default function Connectors() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.get('/v1/connectors')
+    api.get('/admin/connectors')
       .then(data => setConnectors(Array.isArray(data) ? data : data?.connectors || []))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
 
   if (loading) return <div className="loading">Loading connectors…</div>
-  if (error) return <div className="error-msg">{error}</div>
 
   return (
     <div>
@@ -28,6 +27,8 @@ export default function Connectors() {
         <h2>Connectors</h2>
         <p>Available tool connectors registered with OpenClause</p>
       </div>
+
+      {error && <div className="error-msg">{error}</div>}
 
       {connectors.length === 0 ? (
         <div className="empty-state">

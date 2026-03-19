@@ -22,7 +22,7 @@ public class ToolCallRequest {
     private String resource;
 
     @SerializedName("risk_score")
-    private Double riskScore;
+    private Integer riskScore;
 
     @SerializedName("risk_factors")
     private List<String> riskFactors;
@@ -48,7 +48,7 @@ public class ToolCallRequest {
     public String getIdempotencyKey() { return idempotencyKey; }
     public Map<String, Object> getParams() { return params; }
     public String getResource() { return resource; }
-    public Double getRiskScore() { return riskScore; }
+    public Integer getRiskScore() { return riskScore; }
     public List<String> getRiskFactors() { return riskFactors; }
     public String getUserId() { return userId; }
     public String getSessionId() { return sessionId; }
@@ -81,19 +81,10 @@ public class ToolCallRequest {
             return this;
         }
 
-        public Builder riskScore(double riskScore) {
-            if (Double.isNaN(riskScore) || Double.isInfinite(riskScore)) {
-                throw new IllegalArgumentException("riskScore must be a finite number");
-            }
-            if (riskScore < 0.0 || riskScore > 10.0) {
+        public Builder riskScore(int riskScore) {
+            if (riskScore < 0 || riskScore > 10) {
                 throw new IllegalArgumentException("riskScore must be an integer in range 0..10");
             }
-            // Require integer-like values (e.g. 8.0 allowed, 8.5 rejected).
-            double rounded = Math.rint(riskScore);
-            if (Math.abs(riskScore - rounded) > 1e-9) {
-                throw new IllegalArgumentException("riskScore must be an integer in range 0..10");
-            }
-
             request.riskScore = riskScore;
             return this;
         }

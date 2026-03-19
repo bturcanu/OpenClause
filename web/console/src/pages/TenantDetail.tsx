@@ -526,8 +526,18 @@ export default function TenantDetail() {
   }
 
   if (loading) return <div className="loading">Loading tenant…</div>
-  if (error) return <div className="error-msg">{error}</div>
-  if (!tenant) return <div className="error-msg">Tenant not found</div>
+  if (error && !tenant) return (
+    <div>
+      <div className="error-msg">{error}</div>
+      <Link to="/tenants" className="btn btn-outline" style={{ marginTop: 16 }}>← Back to Tenants</Link>
+    </div>
+  )
+  if (!tenant) return (
+    <div>
+      <div className="error-msg">Tenant not found</div>
+      <Link to="/tenants" className="btn btn-outline" style={{ marginTop: 16 }}>← Back to Tenants</Link>
+    </div>
+  )
 
   return (
     <div>
@@ -789,7 +799,7 @@ export default function TenantDetail() {
               </thead>
               <tbody>
                 {apiKeys.length === 0 ? (
-                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No API keys</td></tr>
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No API keys</td></tr>
                 ) : (
                   apiKeys.map(k => (
                     <tr key={k.id}>

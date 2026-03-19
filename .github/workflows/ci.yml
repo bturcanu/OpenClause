@@ -147,6 +147,40 @@ jobs:
           build-args: |
             SERVICE_NAME=connector-jira
 
+      - name: Build and push console-api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/console-api:latest
+            ${{ env.IMAGE_BASE }}/console-api:${{ github.sha }}
+          build-args: |
+            SERVICE_NAME=console-api
+
+      - name: Build and push console-ui
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web/console
+          file: ./web/console/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/console-ui:latest
+            ${{ env.IMAGE_BASE }}/console-ui:${{ github.sha }}
+
+      - name: Build and push alert-worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/alert-worker:latest
+            ${{ env.IMAGE_BASE }}/alert-worker:${{ github.sha }}
+          build-args: |
+            SERVICE_NAME=alert-worker
+
   deploy:
     name: Deploy
     runs-on: ubuntu-latest

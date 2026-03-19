@@ -74,10 +74,15 @@ export default function Policies() {
   const selectedVersion = versions.find(v => v.id === selectedVersionID) ?? null
 
   async function fetchTenants() {
-    const data = await api.get('/admin/tenants')
-    const items = Array.isArray(data) ? (data as Tenant[]) : []
-    setTenants(items)
-    if (!selectedTenantID && items.length > 0) setSelectedTenantID(items[0].id)
+    try {
+      const data = await api.get('/admin/tenants')
+      const items = Array.isArray(data) ? (data as Tenant[]) : []
+      setTenants(items)
+      if (!selectedTenantID && items.length > 0) setSelectedTenantID(items[0].id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load tenants')
+      setLoading(false)
+    }
   }
 
   async function fetchPolicyState(tenantID: string) {

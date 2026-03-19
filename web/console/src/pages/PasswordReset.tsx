@@ -8,20 +8,25 @@ export default function PasswordReset() {
 
   const [requestEmail, setRequestEmail] = useState('')
   const [requestStatus, setRequestStatus] = useState('')
+  const [requestLoading, setRequestLoading] = useState(false)
   const [confirmToken, setConfirmToken] = useState(presetToken)
   const [confirmPassword, setConfirmPassword] = useState('')
   const [confirmStatus, setConfirmStatus] = useState('')
+  const [confirmLoading, setConfirmLoading] = useState(false)
   const [error, setError] = useState('')
 
   async function handleResetRequest(e: FormEvent) {
     e.preventDefault()
     setError('')
     setRequestStatus('')
+    setRequestLoading(true)
     try {
-      await api.post('/auth/reset/request', { email: requestEmail })
+      await api.unauthPost('/auth/reset/request', { email: requestEmail })
       setRequestStatus('Reset request created. Check console logs for the token (dev mode).')
     } catch (err: any) {
       setError(err.message || 'Failed to request reset')
+    } finally {
+      setRequestLoading(false)
     }
   }
 
@@ -29,13 +34,16 @@ export default function PasswordReset() {
     e.preventDefault()
     setError('')
     setConfirmStatus('')
+    setConfirmLoading(true)
     try {
       if (!confirmToken) throw new Error('token is required')
-      await api.post('/auth/reset/confirm', { token: confirmToken, password: confirmPassword })
+      await api.unauthPost('/auth/reset/confirm', { token: confirmToken, password: confirmPassword })
       setConfirmStatus('Password updated. You can now log in.')
       setConfirmPassword('')
     } catch (err: any) {
       setError(err.message || 'Failed to confirm reset')
+    } finally {
+      setConfirmLoading(false)
     }
   }
 
@@ -56,8 +64,8 @@ export default function PasswordReset() {
               <label>Email</label>
               <input value={requestEmail} onChange={e => setRequestEmail(e.target.value)} required />
             </div>
-            <button className="btn btn-primary mt-8" type="submit">
-              Request
+            <button className="btn btn-primary mt-8" type="submit" disabled={requestLoading}>
+              {requestLoading ? 'Requesting…' : 'Request'}
             </button>
           </form>
           {requestStatus && <div className="success-msg mt-8">{requestStatus}</div>}
@@ -74,8 +82,8 @@ export default function PasswordReset() {
               <label>New Password</label>
               <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
             </div>
-            <button className="btn btn-primary mt-8" type="submit">
-              Update password
+            <button className="btn btn-primary mt-8" type="submit" disabled={confirmLoading}>
+              {confirmLoading ? 'Updating…' : 'Update password'}
             </button>
           </form>
           {confirmStatus && <div className="success-msg mt-8">{confirmStatus}</div>}

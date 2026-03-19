@@ -185,15 +185,15 @@ export RAW_KEY="<raw_key from response>"
 curl -s -X POST http://localhost:8080/v1/toolcalls \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $RAW_KEY" \
-  -d '{
-    "tenant_id": "$TENANT_ID",
-    "agent_id": "$AGENT_ID",
-    "tool": "slack",
-    "action": "msg.post",
-    "params": {"channel": "#general", "text": "Hello from agent"},
-    "risk_score": 3,
-    "idempotency_key": "demo-001"
-  }' | jq
+  -d "{
+    \"tenant_id\": \"$TENANT_ID\",
+    \"agent_id\": \"$AGENT_ID\",
+    \"tool\": \"slack\",
+    \"action\": \"msg.post\",
+    \"params\": {\"channel\": \"#general\", \"text\": \"Hello from agent\"},
+    \"risk_score\": 3,
+    \"idempotency_key\": \"demo-001\"
+  }" | jq
 ```
 
 Expected response (mock mode):
@@ -216,15 +216,15 @@ Expected response (mock mode):
 curl -s -X POST http://localhost:8080/v1/toolcalls \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $RAW_KEY" \
-  -d '{
-    "tenant_id": "$TENANT_ID",
-    "agent_id": "$AGENT_ID",
-    "tool": "github",
-    "action": "issue.create",
-    "params": {"title": "Test issue"},
-    "risk_score": 8,
-    "idempotency_key": "demo-002"
-  }' | jq
+  -d "{
+    \"tenant_id\": \"$TENANT_ID\",
+    \"agent_id\": \"$AGENT_ID\",
+    \"tool\": \"github\",
+    \"action\": \"issue.create\",
+    \"params\": {\"title\": \"Test issue\"},
+    \"risk_score\": 8,
+    \"idempotency_key\": \"demo-002\"
+  }" | jq
 ```
 
 Approve from the console UI at http://localhost:3000/approvals, then execute:
@@ -514,12 +514,12 @@ Test policy decisions without executing actions:
 curl -s -X POST http://localhost:8090/admin/policy/simulate \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "$TENANT_ID",
-    "tool": "slack",
-    "action": "msg.post",
-    "risk_score": 3
-  }' | jq
+  -d "{
+    \"tenant_id\": \"$TENANT_ID\",
+    \"tool\": \"slack\",
+    \"action\": \"msg.post\",
+    \"risk_score\": 3
+  }" | jq
 ```
 
 ### Policy Versioning

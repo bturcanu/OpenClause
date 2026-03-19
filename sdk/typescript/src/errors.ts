@@ -19,9 +19,18 @@ export class APIError extends OpenClauseError {
 }
 
 export class AuthenticationError extends OpenClauseError {
-  constructor(message = "Authentication failed: invalid or missing API key") {
+  public readonly statusCode: number;
+  public readonly responseBody?: string;
+
+  constructor(
+    statusCode: number,
+    responseBody?: string,
+    message = "Authentication failed: invalid or missing API key",
+  ) {
     super(message);
     this.name = "AuthenticationError";
+    this.statusCode = statusCode;
+    this.responseBody = responseBody;
   }
 }
 

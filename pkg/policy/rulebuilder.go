@@ -29,7 +29,7 @@ func EvaluateWithRuleBuilder(tc types.ToolCallRequest, cfg RuleBuilderConfig) *t
 	isWrite := containsAction(cfg.WriteActions, toolAction)
 	isDestructive := containsAction(cfg.DestructiveActions, toolAction)
 
-	if tc.RiskScore >= cfg.MaxRiskAutoApprove {
+	if tc.RiskScore > cfg.MaxRiskAutoApprove {
 		return &types.PolicyResult{
 			Decision:     types.DecisionApprove,
 			Reason:       "high risk score requires approval",
@@ -43,7 +43,7 @@ func EvaluateWithRuleBuilder(tc types.ToolCallRequest, cfg RuleBuilderConfig) *t
 			Requirements: map[string]string{"approval_scope": "single_use"},
 		}
 	}
-	if (isRead || isWrite || isDestructive) && tc.RiskScore < cfg.MaxRiskAutoApprove {
+	if (isRead || isWrite || isDestructive) && tc.RiskScore <= cfg.MaxRiskAutoApprove {
 		reason := "action on allowlist within tenant threshold"
 		if isRead {
 			reason = "read action on allowlist within tenant threshold"

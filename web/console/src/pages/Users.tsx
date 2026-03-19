@@ -65,9 +65,12 @@ export default function Users() {
     void fetchUsers()
   }, [])
 
+  const [submitting, setSubmitting] = useState(false)
+
   async function handleCreateUser(e: FormEvent) {
     e.preventDefault()
     setError('')
+    setSubmitting(true)
     try {
       const payload: any = {
         email: createUserForm.email,
@@ -80,6 +83,8 @@ export default function Users() {
       await fetchUsers()
     } catch (err: any) {
       setError(err.message || 'Failed to create user')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -175,8 +180,8 @@ export default function Users() {
                 onChange={e => setCreateUserForm({ ...createUserForm, slack_user_id: e.target.value })}
               />
             </div>
-            <button className="btn btn-primary mt-8" type="submit">
-              Create
+            <button className="btn btn-primary mt-8" type="submit" disabled={submitting}>
+              {submitting ? 'Creating…' : 'Create'}
             </button>
           </form>
         </div>

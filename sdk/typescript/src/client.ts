@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import {
   ClientOptions,
+  ToolCallEvent,
   ToolCallRequest,
   ToolCallResponse,
   WaitForApprovalOptions,
@@ -44,8 +45,8 @@ export class OpenClauseClient {
     return this.post<ToolCallResponse>("/v1/toolcalls", request);
   }
 
-  async getEvent(eventId: string): Promise<ToolCallResponse> {
-    return this.get<ToolCallResponse>(`/v1/toolcalls/${encodeURIComponent(eventId)}`);
+  async getEvent(eventId: string): Promise<ToolCallEvent> {
+    return this.get<ToolCallEvent>(`/v1/toolcalls/${encodeURIComponent(eventId)}`);
   }
 
   async execute(eventId: string): Promise<ToolCallResponse> {
@@ -158,7 +159,8 @@ export class OpenClauseClient {
       });
 
       if (response.status === 401 || response.status === 403) {
-        throw new AuthenticationError();
+        const body = await response.text();
+        throw new AuthenticationError(response.status, body);
       }
 
       const contentLength = response.headers.get("content-length");
@@ -169,6 +171,13 @@ export class OpenClauseClient {
       }
 
       const text = await response.text();
+
+      const actualBytes = new TextEncoder().encode(text).byteLength;
+      if (actualBytes > MAX_RESPONSE_BODY_BYTES) {
+        throw new OpenClauseError(
+          `Response body exceeds ${MAX_RESPONSE_BODY_BYTES} byte limit`,
+        );
+      }
 
       if (!response.ok) {
         throw new APIError(

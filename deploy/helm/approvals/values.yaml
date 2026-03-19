@@ -16,6 +16,7 @@ env:
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
   APPROVALS_ADDR: ":8081"
+  CONNECTOR_SLACK_URL: http://connector-slack:8082
 
 resources:
   limits:

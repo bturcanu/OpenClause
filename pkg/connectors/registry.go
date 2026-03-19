@@ -27,10 +27,15 @@ type builtinEntry struct {
 	handler func(context.Context, ExecRequest) ExecResponse
 }
 
+type remoteEntry struct {
+	baseURL string
+	actions []string
+}
+
 // Registry maps tool names to connector base URLs. Thread-safe.
 type Registry struct {
 	mu            sync.RWMutex
-	routes        map[string]string // tool → base URL
+	routes        map[string]remoteEntry // tool → remote connector
 	builtins      map[string]builtinEntry
 	httpClient    *http.Client
 	internalToken string
@@ -39,7 +44,7 @@ type Registry struct {
 // NewRegistry creates a connector registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		routes:   make(map[string]string),
+		routes:   make(map[string]remoteEntry),
 		builtins: make(map[string]builtinEntry),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -47,11 +52,11 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register maps a tool name to a remote connector URL.
-func (r *Registry) Register(tool, baseURL string) {
+// Register maps a tool name to a remote connector URL with known actions.
+func (r *Registry) Register(tool, baseURL string, actions ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.routes[tool] = baseURL
+	r.routes[tool] = remoteEntry{baseURL: baseURL, actions: actions}
 }
 
 // RegisterBuiltin registers an in-process connector that is invoked
@@ -73,11 +78,12 @@ func (r *Registry) ListAll() []ConnectorInfo {
 	seen := make(map[string]bool, len(r.routes)+len(r.builtins))
 	out := make([]ConnectorInfo, 0, len(r.routes)+len(r.builtins))
 
-	for tool := range r.routes {
+	for tool, entry := range r.routes {
 		seen[tool] = true
 		out = append(out, ConnectorInfo{
-			Name: tool,
-			Type: "remote",
+			Name:    tool,
+			Actions: entry.actions,
+			Type:    "remote",
 		})
 	}
 	for name, entry := range r.builtins {
@@ -97,10 +103,11 @@ func (r *Registry) ListAll() []ConnectorInfo {
 // Remote connectors (HTTP) take precedence; built-in connectors are used as fallback.
 func (r *Registry) Exec(ctx context.Context, req ExecRequest) (*ExecResponse, error) {
 	r.mu.RLock()
-	baseURL, hasRemote := r.routes[req.Tool]
+	remote, hasRemote := r.routes[req.Tool]
 	builtin, hasBuiltin := r.builtins[req.Tool]
 	token := r.internalToken
 	client := r.httpClient
+	baseURL := remote.baseURL
 	r.mu.RUnlock()
 
 	if !hasRemote && hasBuiltin {

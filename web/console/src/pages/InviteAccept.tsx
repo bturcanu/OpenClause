@@ -29,7 +29,7 @@ export default function InviteAccept() {
     setLoading(true)
     try {
       if (!token) throw new Error('Missing token')
-      const data = await api.post('/auth/invite/accept', { token, password, name })
+      const data = await api.unauthPost('/auth/invite/accept', { token, password, name })
       const tenantId = data?.tenant_id || ''
       const role = data?.role || ''
       setAcceptedTenantId(tenantId)
@@ -65,7 +65,7 @@ export default function InviteAccept() {
       <form onSubmit={submit} className="form-card" style={{ maxWidth: 520 }}>
         <div className="form-group">
           <label>Token</label>
-          <input value={token} disabled />
+          <input value={token} onChange={e => setToken(e.target.value)} required />
         </div>
         <div className="form-group">
           <label>Password</label>

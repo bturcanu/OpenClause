@@ -23,8 +23,8 @@ services:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${EVIDENCE_S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${EVIDENCE_S3_SECRET_KEY:-minioadmin}
     env_file: ../.env
     command: server /data --console-address :9001
     volumes:
@@ -113,7 +113,7 @@ services:
       PUBLIC_APPROVALS_URL: http://localhost:8081
       CONNECTOR_SLACK_URL: http://connector-slack:8082
       CONNECTOR_JIRA_URL: http://connector-jira:8083
-      S3_ENDPOINT: http://minio:9000
+      EVIDENCE_S3_ENDPOINT: http://minio:9000
     depends_on:
       postgres:
         condition: service_healthy

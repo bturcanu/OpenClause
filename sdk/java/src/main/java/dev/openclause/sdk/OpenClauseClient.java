@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import dev.openclause.sdk.exceptions.APIException;
 import dev.openclause.sdk.exceptions.OpenClauseException;
+import dev.openclause.sdk.models.ToolCallEvent;
 import dev.openclause.sdk.models.ToolCallRequest;
 import dev.openclause.sdk.models.ToolCallResponse;
 
@@ -54,9 +55,9 @@ public class OpenClauseClient {
         return post("/v1/toolcalls", json, ToolCallResponse.class);
     }
 
-    public ToolCallResponse getEvent(String eventId) throws OpenClauseException {
+    public ToolCallEvent getEvent(String eventId) throws OpenClauseException {
         String encoded = URLEncoder.encode(eventId, StandardCharsets.UTF_8);
-        return get("/v1/toolcalls/" + encoded, ToolCallResponse.class);
+        return get("/v1/toolcalls/" + encoded, ToolCallEvent.class);
     }
 
     public ToolCallResponse execute(String eventId) throws OpenClauseException {

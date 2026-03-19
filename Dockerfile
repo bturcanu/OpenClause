@@ -30,6 +30,7 @@ COPY --from=builder /service /app/service
 
 USER appuser
 
-EXPOSE 8080
+ARG SERVICE_PORT=8080
+EXPOSE ${SERVICE_PORT}
 
 ENTRYPOINT ["/app/service"]

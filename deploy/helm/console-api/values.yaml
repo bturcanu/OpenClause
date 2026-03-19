@@ -20,6 +20,9 @@ env:
   POSTGRES_PORT: "5432"
   POSTGRES_SSLMODE: disable
   OPA_URL: http://opa:8181
+  # Required — must be ≥32 bytes. Provide via secretRef or set explicitly.
+  CONSOLE_JWT_SECRET: ""
+  CONSOLE_CORS_ORIGINS: ""
 
 probes:
   liveness:

@@ -48,6 +48,7 @@ type opaResult struct {
 	Decision      string               `json:"decision"`
 	Reason        string               `json:"reason"`
 	Requirements  map[string]string    `json:"requirements,omitempty"`
+	RiskOverrides map[string]int       `json:"risk_overrides,omitempty"`
 	Notify        []types.PolicyNotify `json:"notify,omitempty"`
 	ApproverGroup string               `json:"approver_group,omitempty"`
 }
@@ -93,6 +94,7 @@ func (c *Client) Evaluate(ctx context.Context, input types.PolicyInput) (*types.
 		Decision:      decision,
 		Reason:        opaResp.Result.Reason,
 		Requirements:  opaResp.Result.Requirements,
+		RiskOverrides: opaResp.Result.RiskOverrides,
 		Notify:        opaResp.Result.Notify,
 		ApproverGroup: opaResp.Result.ApproverGroup,
 	}, nil

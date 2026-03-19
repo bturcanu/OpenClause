@@ -31,6 +31,7 @@ export default function Overview() {
   const [timeseries, setTimeseries] = useState<TimeseriesBucket[]>([])
   const [events, setEvents] = useState<Event[]>([])
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     Promise.all([
@@ -39,13 +40,15 @@ export default function Overview() {
       api.get('/admin/events?limit=10').catch(() => []),
     ]).then(([ov, ts, ev]) => {
       if (ov) setOverview(ov)
+      else setOverview({ total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0, pending_approvals: 0, active_tenants: 0 })
       setTimeseries(Array.isArray(ts) ? ts : ts?.buckets || [])
       setEvents(Array.isArray(ev) ? ev : ev?.events || [])
     }).catch(err => setError(err.message))
+    .finally(() => setLoading(false))
   }, [])
 
   if (error) return <div className="error-msg">{error}</div>
-  if (!overview) return <div className="loading">Loading dashboard…</div>
+  if (loading || !overview) return <div className="loading">Loading dashboard…</div>
 
   const maxCount = Math.max(...timeseries.map(b => b.count), 1)
 

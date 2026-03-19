@@ -2,6 +2,7 @@ export { OpenClauseClient } from "./client";
 export {
   ToolCallRequest,
   ToolCallResponse,
+  ToolCallEvent,
   ExecutionResult,
   ClientOptions,
   WaitForApprovalOptions,

@@ -1,0 +1,28 @@
+fullnameOverride: "alert-worker"
+
+image:
+  repository: oc/alert-worker
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+# Optional: name of a Kubernetes Secret to load as env vars
+# secretRef: alert-worker-secrets
+secretRef: ""
+
+env:
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_SSLMODE: disable
+  INTERNAL_AUTH_TOKEN: ""
+  CONNECTOR_SLACK_URL: http://connector-slack:8082
+  ALERT_WORKER_INTERVAL_SEC: "30"
+
+resources:
+  limits:
+    cpu: 300m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi

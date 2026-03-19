@@ -1668,10 +1668,11 @@ func (api *ConsoleAPI) handleApproveRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// HIGH-01: Enforce approver allowlist
-	if api.approverAuth != nil && !api.approverAuth.AllowEmail(r.Context(), req.TenantID, approver) {
-		writeError(w, http.StatusForbidden, "approver is not allowed for tenant")
-		return
+	if !hasRole(claims, "platform_admin") {
+		if api.approverAuth != nil && !api.approverAuth.AllowEmail(r.Context(), req.TenantID, approver) {
+			writeError(w, http.StatusForbidden, "approver is not allowed for tenant")
+			return
+		}
 	}
 
 	grant, err := api.approvalsStore.GrantRequest(r.Context(), id, approvals.GrantInput{
@@ -1722,10 +1723,11 @@ func (api *ConsoleAPI) handleDenyRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// HIGH-01: Enforce approver allowlist (same logic as approvals service).
-	if api.approverAuth != nil && !api.approverAuth.AllowEmail(r.Context(), req.TenantID, claims.Email) {
-		writeError(w, http.StatusForbidden, "approver is not allowed for tenant")
-		return
+	if !hasRole(claims, "platform_admin") {
+		if api.approverAuth != nil && !api.approverAuth.AllowEmail(r.Context(), req.TenantID, claims.Email) {
+			writeError(w, http.StatusForbidden, "approver is not allowed for tenant")
+			return
+		}
 	}
 
 	if err := api.approvalsStore.DenyRequest(r.Context(), id, approvals.DenyInput{

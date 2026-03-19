@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -64,6 +64,9 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+        <div style={{ textAlign: 'center', marginTop: 16 }}>
+          <Link to="/reset" style={{ fontSize: 13, color: '#64748b' }}>Forgot password?</Link>
+        </div>
       </div>
     </div>
   )

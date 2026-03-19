@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
 
@@ -30,7 +30,7 @@ export default function Events() {
   const limit = 25
 
   const selectedTenant = filters.tenant_id.trim()
-  const isPlatformAdmin = (() => {
+  const isPlatformAdmin = useMemo(() => {
     const token = localStorage.getItem('oc_token')
     if (!token) return false
     try {
@@ -43,7 +43,7 @@ export default function Events() {
     } catch {
       return false
     }
-  })()
+  }, [])
 
   const fetchEvents = useCallback(async () => {
     const seq = ++fetchSeq.current
