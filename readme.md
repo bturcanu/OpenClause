@@ -654,7 +654,10 @@ When approval requests are created, notifications are enqueued transactionally a
 
 - Endpoint: `POST /v1/integrations/slack/interactions`
 - Security: Slack signature verification (`X-Slack-Signature`, `X-Slack-Request-Timestamp`) against `SLACK_SIGNING_SECRET`.
-- RBAC is enforced via tenant allowlists (`APPROVER_SLACK_ALLOWLIST`, `APPROVER_EMAIL_ALLOWLIST`). Default-deny: tenants without an explicit allowlist entry reject all approvers.
+- RBAC is enforced via DB-backed approvers (`users` + `user_roles` with `role='approver'`) scoped to the tenant.
+  - Default: DB-only (`ALLOWLIST_SOURCE=db`).
+  - Dev bootstrap fallback (optional): env allowlists via `ALLOWLIST_SOURCE=env|both` using `APPROVER_SLACK_ALLOWLIST` / `APPROVER_EMAIL_ALLOWLIST`.
+- Approvers are managed in the console UI under `Tenants -> (select tenant) -> Approvers`.
 
 ### Evidence Archival
 
@@ -712,8 +715,9 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
 | `API_KEYS` | — | Comma-separated `tenant:key` pairs (env-var auth) |
 | `INTERNAL_AUTH_TOKEN` | — | **Required.** Shared secret for service-to-service auth |
-| `APPROVER_EMAIL_ALLOWLIST` | — | Per-tenant email approver allowlist (`tenant:email1\|email2`) |
-| `APPROVER_SLACK_ALLOWLIST` | — | Per-tenant Slack user allowlist (`tenant:u123\|u999`) |
+| `ALLOWLIST_SOURCE` | `db` | Approver authorization source (`db`, `env`, `both`). Default is DB-backed approvers. |
+| `APPROVER_EMAIL_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
+| `APPROVER_SLACK_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
 | `SLACK_SIGNING_SECRET` | — | Slack signing secret for interactions endpoint |
 | `APPROVALS_NOTIFIER_ENABLED` | `true` | Enable transactional outbox dispatcher |
@@ -801,6 +805,32 @@ OpenClause/
 | `make docker-build` | Build Docker images locally |
 | `make clean` | Remove build artifacts and containers |
 
+### Windows + macOS/Linux Quickstart
+
+For first-run developer setup (macOS/Linux):
+
+```bash
+./scripts/dev.sh
+```
+
+For Windows (PowerShell):
+
+```powershell
+.\scripts\dev.ps1
+```
+
+If you need migrations only:
+
+```bash
+./scripts/migrate.sh
+```
+
+```powershell
+.\scripts\migrate.ps1
+```
+
+On console-ui startup, the app will call `GET /api/setup/status` and show a first-run setup wizard when the DB is not initialized yet.
+
 ### Running tests
 
 ```bash
@@ -831,7 +861,7 @@ make build
 ### Local (Docker Compose)
 
 ```bash
-make dev
+./scripts/dev.sh
 ```
 
 Runs all services including the console UI. See `deploy/docker-compose.yml`.

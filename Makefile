@@ -12,8 +12,8 @@ ENV_FILE ?= .env
 ## Start all services locally via Docker Compose
 dev:
 	@echo ">>> Starting OpenClause stack..."
-	@cp -n .env.example .env 2>/dev/null || true
-	docker compose -f deploy/docker-compose.yml up --build -d
+	@test -f .env || cp .env.example .env 2>/dev/null || true
+	docker compose --env-file $(ENV_FILE) -f deploy/docker-compose.yml up --build -d
 	@$(MAKE) wait-pg
 	@$(MAKE) migrate
 	@echo ""
@@ -27,10 +27,11 @@ dev:
 ## Wait for postgres to be ready (retry loop)
 wait-pg:
 	@echo ">>> Waiting for postgres..."
-	@for i in $$(seq 1 30); do \
-		docker compose -f deploy/docker-compose.yml exec -T postgres pg_isready -U openclause -d openclause > /dev/null 2>&1 && break; \
+	@i=1; while [ $$i -le 30 ]; do \
+		docker compose --env-file $(ENV_FILE) -f deploy/docker-compose.yml exec -T postgres pg_isready -U openclause -d openclause > /dev/null 2>&1 && break; \
 		echo "  postgres not ready, retrying ($$i/30)..."; \
 		sleep 2; \
+		i=$$((i+1)); \
 	done
 
 ## Stop all services

@@ -23,17 +23,6 @@ INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status) VALUES
    '1e65193bdb95bdb11459530aacbb10e034c09c302fe378abe229774ea3ddc6f1', 'active')
 ON CONFLICT (id) DO NOTHING;
 
--- Admin user (email: admin@openclause.dev, password: admin123)
-INSERT INTO users (id, email, password_hash, name, status) VALUES
-  ('user-admin', 'admin@openclause.dev',
-   '$2a$10$3Kf3g5CCnYM1OaSq3GifI.PRWNyRu6KWEBRXwBRPeX1/ypbzLfxDu',
-   'Admin', 'active')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO user_roles (id, user_id, tenant_id, role) VALUES
-  ('role-admin', 'user-admin', NULL, 'platform_admin')
-ON CONFLICT (id) DO NOTHING;
-
 -- Sessions (for timeline testing)
 INSERT INTO sessions (id, tenant_id, agent_id) VALUES
   ('session-1', 'tenant1', 'agent-1'),

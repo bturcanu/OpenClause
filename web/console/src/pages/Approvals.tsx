@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, formatDate } from '../api'
 
 interface Approval {
@@ -19,26 +19,40 @@ export default function Approvals() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const fetchSeq = useRef(0)
 
-  const fetchApprovals = useCallback(async () => {
+  const fetchApprovals = useCallback(async (silent = false) => {
+    const seq = ++fetchSeq.current
     try {
-      setLoading(true)
+      if (!silent) {
+        setLoading(true)
+        setError('')
+      }
       const data = await api.get('/admin/approvals/pending')
+      if (seq !== fetchSeq.current) return
       setApprovals(Array.isArray(data) ? data : data?.approvals || [])
     } catch (err: any) {
-      setError(err.message)
+      if (!silent) setError(err.message)
     } finally {
-      setLoading(false)
+      if (!silent) {
+        if (seq === fetchSeq.current) setLoading(false)
+      }
     }
   }, [])
 
-  useEffect(() => { fetchApprovals() }, [fetchApprovals])
+  useEffect(() => {
+    void fetchApprovals(false)
+    const timer = window.setInterval(() => {
+      void fetchApprovals(true)
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [fetchApprovals])
 
   async function handleAction(id: string, action: 'approve' | 'deny') {
     setActionLoading(id)
     try {
       await api.post(`/admin/approvals/${id}/${action}`)
-      await fetchApprovals()
+      await fetchApprovals(true)
       if (selected?.id === id) setSelected(null)
     } catch (err: any) {
       setError(err.message)
@@ -52,6 +66,12 @@ export default function Approvals() {
       <div className="page-header">
         <h2>Approvals Queue</h2>
         <p>Review and action pending human-in-the-loop requests</p>
+      </div>
+
+      <div className="btn-group mb-16">
+        <button className="btn btn-outline" disabled={loading} onClick={() => void fetchApprovals(false)}>
+          Refresh
+        </button>
       </div>
 
       {error && <div className="error-msg">{error}</div>}

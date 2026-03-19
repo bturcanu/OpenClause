@@ -29,6 +29,22 @@ export default function Events() {
   const [page, setPage] = useState(0)
   const limit = 25
 
+  const selectedTenant = filters.tenant_id.trim()
+  const isPlatformAdmin = (() => {
+    const token = localStorage.getItem('oc_token')
+    if (!token) return false
+    try {
+      const payload = token.split('.')[1]
+      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+      const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=')
+      const decoded = JSON.parse(atob(padded))
+      const roles: string[] = Array.isArray(decoded?.roles) ? decoded.roles : []
+      return roles.includes('platform_admin')
+    } catch {
+      return false
+    }
+  })()
+
   const fetchEvents = useCallback(async () => {
     const seq = ++fetchSeq.current
     setLoading(true)
@@ -61,13 +77,20 @@ export default function Events() {
 
   async function exportCSV() {
     try {
-      const blob = await api.getBlob('/admin/events/export/csv')
-      const url = URL.createObjectURL(blob)
+      if (isPlatformAdmin && !selectedTenant) {
+        setError('Select a tenant to export')
+        return
+      }
+      const exportUrl = selectedTenant
+        ? `/admin/events/export/csv?tenant_id=${encodeURIComponent(selectedTenant)}`
+        : '/admin/events/export/csv'
+      const blob = await api.getBlob(exportUrl)
+      const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
+      a.href = objectUrl
       a.download = 'events.csv'
       a.click()
-      URL.revokeObjectURL(url)
+      URL.revokeObjectURL(objectUrl)
     } catch (err: any) {
       setError(err.message)
     }
@@ -75,13 +98,20 @@ export default function Events() {
 
   async function exportBundle() {
     try {
-      const blob = await api.getBlob('/admin/reports/export/bundle')
-      const url = URL.createObjectURL(blob)
+      if (isPlatformAdmin && !selectedTenant) {
+        setError('Select a tenant to export')
+        return
+      }
+      const exportUrl = selectedTenant
+        ? `/admin/reports/export/bundle?tenant_id=${encodeURIComponent(selectedTenant)}`
+        : '/admin/reports/export/bundle'
+      const blob = await api.getBlob(exportUrl)
+      const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
+      a.href = objectUrl
       a.download = 'audit-bundle.zip'
       a.click()
-      URL.revokeObjectURL(url)
+      URL.revokeObjectURL(objectUrl)
     } catch (err: any) {
       setError(err.message)
     }

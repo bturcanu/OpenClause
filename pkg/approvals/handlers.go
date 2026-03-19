@@ -130,7 +130,7 @@ func (h *Handlers) ApproveRequest(w http.ResponseWriter, r *http.Request) {
 		types.ErrNotFound("approval request not found").WriteJSON(w)
 		return
 	}
-	if h.authorizer != nil && !h.authorizer.AllowEmail(req.TenantID, in.Approver) {
+	if h.authorizer != nil && !h.authorizer.AllowEmail(r.Context(), req.TenantID, in.Approver) {
 		types.ErrForbidden("approver is not allowed for tenant").WriteJSON(w)
 		return
 	}
@@ -174,7 +174,7 @@ func (h *Handlers) DenyRequest(w http.ResponseWriter, r *http.Request) {
 		types.ErrNotFound("approval request not found").WriteJSON(w)
 		return
 	}
-	if h.authorizer != nil && !h.authorizer.AllowEmail(req.TenantID, in.Approver) {
+	if h.authorizer != nil && !h.authorizer.AllowEmail(r.Context(), req.TenantID, in.Approver) {
 		types.ErrForbidden("approver is not allowed for tenant").WriteJSON(w)
 		return
 	}
@@ -265,12 +265,19 @@ func (h *Handlers) SlackInteractions(w http.ResponseWriter, r *http.Request) {
 		types.ErrBadRequest("interaction event mismatch").WriteJSON(w)
 		return
 	}
-	if h.authorizer != nil && !h.authorizer.AllowSlack(req.TenantID, in.User.ID) {
-		types.ErrForbidden("slack user is not allowed for tenant").WriteJSON(w)
-		return
+	var approver string
+	if h.authorizer != nil {
+		// Resolve Slack identity to a console user (and enforce approver role).
+		email, ok := h.authorizer.ResolveSlackApprover(r.Context(), req.TenantID, in.User.ID)
+		if !ok {
+			types.ErrForbidden("slack user is not allowed for tenant").WriteJSON(w)
+			return
+		}
+		approver = email
+	} else {
+		// Testing / fallback: keep previous behavior.
+		approver = "slack:" + in.User.ID
 	}
-
-	approver := "slack:" + in.User.ID
 	switch decision {
 	case "approve":
 		_, err = h.store.GrantRequest(r.Context(), requestID, GrantInput{Approver: approver, MaxUses: 1})

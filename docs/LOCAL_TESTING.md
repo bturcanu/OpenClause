@@ -11,14 +11,11 @@ End-to-end walkthrough: boot the stack, seed data, and exercise every major flow
 ## 1. Start the Stack
 
 ```bash
-# From repo root (Linux/macOS)
-make dev
+# From repo root (macOS/Linux)
+./scripts/dev.sh
 
-# On Windows (PowerShell) — run commands manually:
-docker compose -f deploy/docker-compose.yml up --build -d
-# Wait for postgres, then run migrations:
-Get-Content migrations/001_initial.sql | docker compose -f deploy/docker-compose.yml exec -T postgres `
-  psql -U openclause -d openclause -v ON_ERROR_STOP=1
+# On Windows (PowerShell)
+./scripts/dev.ps1
 ```
 
 Verify health:
@@ -32,7 +29,9 @@ curl http://localhost:8181/health    # OPA
 
 ## 2. Seed Test Data
 
-Since there is no seed migration, insert a tenant, agent, API key, and admin user manually.
+First-run setup (recommended) creates the initial platform admin + first tenant.
+
+After that, you can seed optional dev data (agents, API keys, sessions) as needed.
 
 ```bash
 docker compose -f deploy/docker-compose.yml exec -T postgres psql -U openclause -d openclause << 'SQL'
@@ -55,21 +54,10 @@ INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, status) VALUES
    'active')
 ON CONFLICT (id) DO NOTHING;
 
--- Admin user (password: admin123)
-INSERT INTO users (id, email, password_hash, name, status) VALUES
-  ('user-admin', 'admin@openclause.dev',
-   '$2a$10$3Kf3g5CCnYM1OaSq3GifI.PRWNyRu6KWEBRXwBRPeX1/ypbzLfxDu',
-   'Admin', 'active')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO user_roles (id, user_id, tenant_id, role) VALUES
-  ('role-admin', 'user-admin', NULL, 'platform_admin')
-ON CONFLICT (id) DO NOTHING;
-
 SQL
 ```
 
-> **Hashes above**: API key hash is `SHA-256("sk-test-key-1")`. Password hash is `bcrypt("admin123")`.
+> **Hashes above**: API key hash is `SHA-256("sk-test-key-1")`.
 > Your `.env` already has `API_KEYS=tenant1:sk-test-key-1` so the in-memory keystore also works.
 
 On Windows PowerShell, pipe the SQL through docker directly:
@@ -83,11 +71,11 @@ Get-Content docs\seed_dev.sql | docker compose -f deploy/docker-compose.yml exec
 ```bash
 curl -s http://localhost:8090/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@openclause.dev","password":"admin123"}'
+  -d '{"email":"<platform-admin-email>","password":"<platform-admin-password>"}'
 ```
 
 ```powershell
-$body = @{ email = "admin@openclause.dev"; password = "admin123" } | ConvertTo-Json
+$body = @{ email = "<platform-admin-email>"; password = "<platform-admin-password>" } | ConvertTo-Json
 $token = (Invoke-RestMethod -Method Post -Uri "http://localhost:8090/auth/login" -ContentType "application/json" -Body $body).token
 ```
 
@@ -182,18 +170,16 @@ Save the `id` of the pending request:
 export APPROVAL_ID="<paste id>"
 ```
 
-Approve it (you need the approver in the allowlist, or clear the allowlist):
+Approve it (you need the approver assigned as `role='approver'` for `tenant1` in the Console UI):
 
 ```bash
 curl -s "http://localhost:8081/v1/approvals/requests/$APPROVAL_ID/approve" \
   -H "X-Internal-Token: dev-internal-token-change-me" \
   -H "Content-Type: application/json" \
-  -d '{"approver":"admin@openclause.dev","max_uses":1}'
+  -d '{"approver":"<platform-admin-email>","max_uses":1}'
 ```
 
-> If you get `403 approver is not allowed for tenant`, add the approver to your `.env`:
-> `APPROVER_EMAIL_ALLOWLIST=tenant1:admin@openclause.dev`
-> then restart the approvals service.
+> If you get `403 approver is not allowed for tenant`, confirm the approver user exists in the Console and has the `approver` role assigned for `tenant1`.
 
 ## 9. Execute the Approved Tool-Call
 

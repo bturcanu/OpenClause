@@ -55,9 +55,16 @@ func main() {
 		log.Error("INTERNAL_AUTH_TOKEN is required")
 		os.Exit(1)
 	}
+
+	allowlistSource := config.EnvOr("ALLOWLIST_SOURCE", "db")
+	if allowlistSource == "env" || allowlistSource == "both" {
+		log.Warn("ALLOWLIST_SOURCE includes env allowlists; approvals authorization uses dev bootstrap fallback")
+	}
 	authorizer := approvals.NewApproverAuthorizer(
+		store,
 		os.Getenv("APPROVER_EMAIL_ALLOWLIST"),
 		os.Getenv("APPROVER_SLACK_ALLOWLIST"),
+		allowlistSource,
 	)
 	handlers := approvals.NewHandlers(store, authorizer, os.Getenv("SLACK_SIGNING_SECRET"))
 	dispatcher := approvals.NewDispatcher(
@@ -140,15 +147,15 @@ func main() {
 				select {
 				case <-ctx.Done():
 					return
-			case <-t.C:
-				if err := dispatcher.DispatchOnce(ctx); err != nil {
-					log.Error("notification dispatch failed", "error", err)
-				}
-				if n, err := store.ExpirePendingRequests(ctx); err != nil {
-					log.Error("expire pending requests failed", "error", err)
-				} else if n > 0 {
-					log.Info("expired stale approval requests", "count", n)
-				}
+				case <-t.C:
+					if err := dispatcher.DispatchOnce(ctx); err != nil {
+						log.Error("notification dispatch failed", "error", err)
+					}
+					if n, err := store.ExpirePendingRequests(ctx); err != nil {
+						log.Error("expire pending requests failed", "error", err)
+					} else if n > 0 {
+						log.Info("expired stale approval requests", "count", n)
+					}
 				}
 			}
 		}()
@@ -226,4 +233,3 @@ var pendingTmpl = template.Must(template.New("pending").Parse(`<!DOCTYPE html>
   {{end}}
 </body>
 </html>`))
-

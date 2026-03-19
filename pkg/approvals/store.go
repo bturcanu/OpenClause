@@ -23,6 +23,62 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// ConsoleUserIdentity is a minimal identity mapping from console tables used for approver authorization.
+type ConsoleUserIdentity struct {
+	ID    string
+	Email string
+}
+
+// FindUserByEmail returns a console user identity by email (case-insensitive).
+func (s *Store) FindUserByEmail(ctx context.Context, email string) (*ConsoleUserIdentity, error) {
+	var u ConsoleUserIdentity
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, email
+		FROM users
+		WHERE lower(email) = lower($1)`, email,
+	).Scan(&u.ID, &u.Email)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("approvals.FindUserByEmail: %w", err)
+	}
+	return &u, nil
+}
+
+// FindUserBySlackUserID returns a console user identity by slack user id.
+func (s *Store) FindUserBySlackUserID(ctx context.Context, slackUserID string) (*ConsoleUserIdentity, error) {
+	var u ConsoleUserIdentity
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, email
+		FROM users
+		WHERE slack_user_id = $1`, slackUserID,
+	).Scan(&u.ID, &u.Email)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("approvals.FindUserBySlackUserID: %w", err)
+	}
+	return &u, nil
+}
+
+// IsApproverUserForTenant returns true if the given user has role='approver' for the given tenant.
+func (s *Store) IsApproverUserForTenant(ctx context.Context, tenantID, userID string) (bool, error) {
+	var allowed bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM user_roles
+			WHERE tenant_id = $1 AND user_id = $2 AND role = 'approver'
+		)`, tenantID, userID,
+	).Scan(&allowed)
+	if err != nil {
+		return false, fmt.Errorf("approvals.IsApproverUserForTenant: %w", err)
+	}
+	return allowed, nil
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Approval Requests
 // ──────────────────────────────────────────────────────────────────────────────
