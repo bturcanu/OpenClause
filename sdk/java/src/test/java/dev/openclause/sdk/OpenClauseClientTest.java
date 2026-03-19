@@ -77,7 +77,7 @@ class OpenClauseClientTest {
                 )
                 .params(Map.of("table", "users", "id", 42))
                 .resource("users/42")
-                .riskScore(0.95)
+                .riskScore(8)
                 .riskFactors(List.of("destructive", "production"))
                 .userId("user_xyz")
                 .sessionId("sess_456")
@@ -87,7 +87,7 @@ class OpenClauseClientTest {
 
         String json = gson.toJson(request);
         assertTrue(json.contains("\"resource\":\"users/42\""));
-        assertTrue(json.contains("\"risk_score\":0.95"));
+        assertTrue(json.contains("\"risk_score\":8"));
         assertTrue(json.contains("\"user_id\":\"user_xyz\""));
         assertTrue(json.contains("\"session_id\":\"sess_456\""));
         assertTrue(json.contains("\"trace_id\":\"trace_789\""));

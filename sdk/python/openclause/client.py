@@ -84,34 +84,45 @@ class OpenClauseClient:
         timeout_seconds: float = 300,
         poll_interval: float = 2.0,
     ) -> ToolCallResponse:
-        """Poll until the event leaves the ``approve`` state, then execute.
+        """Poll until the tool-call can be executed.
+
+        The gateway returns HTTP 409 with an "awaiting approval" conflict until
+        the human approval grant exists; then ``execute`` succeeds (HTTP 200).
 
         Uses exponential back-off starting from *poll_interval* up to a
         maximum of 30 s between polls.
 
         Raises:
-            TimeoutError: If *timeout_seconds* elapses before a decision.
+            TimeoutError: If *timeout_seconds* elapses before the approval grant exists.
+            APIError: For permanent failures (400/403/404) or non-awaiting-approval 409s.
         """
         deadline = time.monotonic() + timeout_seconds
         interval = poll_interval
+        attempt = 0
 
         while True:
-            event = self.get_event(event_id)
-            if event.decision != "approve":
-                return ToolCallResponse(
-                    event_id=event.event_id,
-                    decision=event.decision,
-                    reason=event.reason,
-                    result=event.result,
-                )
-
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"Approval not received within {timeout_seconds}s for event {event_id}"
                 )
 
-            time.sleep(min(interval, max(0, deadline - time.monotonic())))
-            interval = min(interval * 2, _MAX_POLL_INTERVAL)
+            try:
+                return self.execute(event_id)
+            except APIError as exc:
+                is_awaiting_approval = (
+                    exc.status_code == 409
+                    and isinstance(exc.message, str)
+                    and "awaiting approval" in exc.message.lower()
+                )
+
+                # Permanent failure: do not retry.
+                if exc.status_code in (400, 403, 404) or not is_awaiting_approval:
+                    raise
+
+                # Retry with back-off while approval is pending.
+                attempt += 1
+                time.sleep(min(interval, max(0, deadline - time.monotonic())))
+                interval = min(interval * 2, _MAX_POLL_INTERVAL)
 
     @staticmethod
     def generate_idempotency_key() -> str:

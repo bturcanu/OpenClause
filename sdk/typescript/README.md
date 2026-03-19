@@ -30,7 +30,7 @@ const request: ToolCallRequest = {
   idempotency_key: OpenClauseClient.generateIdempotencyKey(),
   params: { charge_id: "ch_abc123", amount: 5000 },
   resource: "charges/ch_abc123",
-  risk_score: 0.7,
+  risk_score: 8,
 };
 
 const response = await client.submitToolCall(request);
@@ -83,7 +83,7 @@ try {
 | `submitToolCall(request)` | Submit a tool call for policy evaluation |
 | `getEvent(eventId)` | Retrieve the status of a tool call event |
 | `execute(eventId)` | Execute a previously approved tool call |
-| `waitForApproval(eventId, options?)` | Poll until approval is granted or denied |
+| `waitForApproval(eventId, options?)` | Retry `execute()` until it succeeds (409 "awaiting approval" -> retry) |
 | `generateIdempotencyKey()` | Generate a UUID v4 idempotency key (static) |
 
 ### Configuration
