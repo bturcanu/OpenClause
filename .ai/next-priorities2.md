@@ -255,10 +255,49 @@ This document tracks implementation work for OpenClause “Approver Management +
         - rotated key `last_used_at=2026-03-19T20:45:23.735883Z` persisted
 
 ### (11) Policy authoring UX
-- [ ] Rule builder with diffs + rollback UI
-  - Scope: simulator and policy version management UI updates
-  - Acceptance criteria: create/edit/rollback works end-to-end
-  - Commit links: ``
+- [x] Rule builder with diffs + rollback UI
+  - Scope: tenant-scoped policy authoring UX and enforcement wiring:
+    - Rule builder knobs (`max_risk_auto_approve`, read/write/destructive allowlists, `require_destructive_approval`)
+    - Policy simulator preview using builder config
+    - Policy versions list + diff preview + rollback endpoint
+    - Gateway enforcement uses saved tenant policy config for subsequent toolcalls
+  - Files/services:
+    - Backend/API: `cmd/console-api/policy_authoring_handlers.go`, `cmd/console-api/main.go`, `pkg/console/store.go`, `pkg/policy/rulebuilder.go`, `cmd/gateway/main.go`
+    - Policy bundle: `policy/bundles/v0/main.rego`
+    - Frontend: `web/console/src/pages/Policies.tsx`
+    - Docs: `README.md`, `docs/LOCAL_TESTING.md`
+  - API changes:
+    - `GET/PUT /admin/tenants/{tenant_id}/policy/config`
+    - `GET/POST /admin/tenants/{tenant_id}/policy/versions`
+    - `POST /admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback`
+    - `POST /admin/tenants/{tenant_id}/policy/simulate`
+  - UI changes:
+    - Policies page now requires explicit tenant selection (platform_admin safe flow)
+    - Rule builder form + simulator preview + versions table + JSON diff + rollback action
+  - Acceptance criteria:
+    - edit -> preview -> save affects subsequent gateway decisions for the selected tenant
+    - rollback restores previous behavior and creates a rollback version record
+  - Commit links: `6991445`
+  - Verification notes:
+    - `go test ./... -count=1` (PASS)
+    - `docker run --rm -v "$PWD/policy":/policy openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v` (PASS; 17/17)
+    - `web/console`: `npm install && npm run build` (PASS)
+    - `sdk/typescript`: `npm install && npm run build` (PASS)
+    - Docker restart: `docker compose -f deploy/docker-compose.yml up --build -d opa gateway console-api console-ui` (PASS)
+    - Smoke (explicit tenant UUID from `.env` API key mapping):
+      - login token issued for `admin@openclause.dev`
+      - selected tenant: `338e57f1-0114-45b6-8c7f-34871c04601c`
+      - policy behavior change:
+        - tighter config (`max_risk_auto_approve=2`) simulate -> `decision=deny`
+        - gateway toolcall under tight config: `event_id=04168e89-5cbb-401a-ad79-e3a2f1587c78` `decision=deny`
+        - rollback to baseline version, same request: `event_id=4b9d8db3-787e-4bd4-9563-620b8705a7f6` `decision=allow`
+      - happy-path toolcalls:
+        - allow `event_id=d48e253d-d6c4-49c4-8aa6-9a94a9eec842`
+        - deny `event_id=9b19ebba-33cc-4d59-b712-19bfc492cf25`
+        - approve `event_id=a11d9e3a-763d-4206-836b-e58650a7c0b5` (`approval_id=e32cb93a-bddf-4494-b66e-84907a43305a`)
+      - approve + execute:
+        - execution audit event `event_id=58c44b22-d9d7-4d23-842e-f93a35ab8f98`
+        - audit trail verified via `GET /admin/events/{execution_event_id}`
 
 ### (12) Helm charts for console services
 - [ ] Add helm charts for console-api and console-ui
