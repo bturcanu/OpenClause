@@ -3,19 +3,23 @@ package console
 import (
 	"context"
 	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -58,11 +62,12 @@ type APIKeyCreateResult struct {
 }
 
 type User struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	Email       string    `json:"email"`
+	Name        string    `json:"name"`
+	SlackUserID *string   `json:"slack_user_id,omitempty"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type UserRole struct {
@@ -160,11 +165,27 @@ type AlertEvent struct {
 // ──────────────────────────────────────────────────────────────────────────────
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	tokenHMACSecret []byte
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+	// Keyed hash secret for invite + password reset tokens.
+	// Fallbacks keep local dev functional without requiring extra env vars.
+	secret := os.Getenv("INVITE_RESET_TOKEN_HMAC_SECRET")
+	if secret == "" {
+		secret = os.Getenv("CONSOLE_JWT_SECRET")
+	}
+	return &Store{
+		pool:             pool,
+		tokenHMACSecret: []byte(secret),
+	}
+}
+
+func (s *Store) hashInviteResetToken(rawToken string) string {
+	mac := hmac.New(sha256.New, s.tokenHMACSecret)
+	_, _ = mac.Write([]byte(rawToken))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // Pool exposes the underlying connection pool for ad-hoc queries
@@ -506,7 +527,7 @@ func (s *Store) RotateAPIKeys(ctx context.Context, tenantID string) (*APIKeyCrea
 // Users
 // ──────────────────────────────────────────────────────────────────────────────
 
-func (s *Store) CreateUser(ctx context.Context, email, password, name, role string, tenantID *string) (*User, error) {
+func (s *Store) CreateUser(ctx context.Context, email, password, name, role string, tenantID *string, slackUserID *string) (*User, error) {
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 10)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateUser hash password: %w", err)
@@ -519,16 +540,17 @@ func (s *Store) CreateUser(ctx context.Context, email, password, name, role stri
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	u := &User{
-		ID:    uuid.NewString(),
-		Email: email,
-		Name:  name,
+		ID:          uuid.NewString(),
+		Email:       email,
+		Name:        name,
+		SlackUserID: slackUserID,
 	}
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO users (id, email, password_hash, name)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO users (id, email, password_hash, name, slack_user_id)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING status, created_at`,
-		u.ID, u.Email, string(hashed), u.Name,
+		u.ID, u.Email, string(hashed), u.Name, u.SlackUserID,
 	).Scan(&u.Status, &u.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateUser insert user: %w", err)
@@ -551,7 +573,7 @@ func (s *Store) CreateUser(ctx context.Context, email, password, name, role stri
 
 func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (*User, []UserRole, error) {
 	var u User
-	var passwordHash string
+	var passwordHash *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, email, password_hash, name, status, created_at
 		FROM users WHERE email = $1`, email,
@@ -567,7 +589,11 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (*
 		return nil, nil, fmt.Errorf("console.AuthenticateUser: user account disabled")
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+	if passwordHash == nil || *passwordHash == "" {
+		return nil, nil, fmt.Errorf("console.AuthenticateUser: invalid credentials")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(*passwordHash), []byte(password)); err != nil {
 		return nil, nil, fmt.Errorf("console.AuthenticateUser: invalid credentials")
 	}
 
@@ -601,12 +627,29 @@ func (s *Store) GetUserRoles(ctx context.Context, userID string) ([]UserRole, er
 	return out, nil
 }
 
+// GetUserRoleByID fetches a specific user_roles row by its assignment id.
+func (s *Store) GetUserRoleByID(ctx context.Context, userID, roleAssignmentID string) (*UserRole, error) {
+	var r UserRole
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, user_id, tenant_id, role
+		FROM user_roles
+		WHERE id = $1 AND user_id = $2`, roleAssignmentID, userID,
+	).Scan(&r.ID, &r.UserID, &r.TenantID, &r.Role)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetUserRoleByID: %w", err)
+	}
+	return &r, nil
+}
+
 func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {
 	var u User
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, email, name, status, created_at
+		SELECT id, email, name, slack_user_id, status, created_at
 		FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Email, &u.Name, &u.Status, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.Name, &u.SlackUserID, &u.Status, &u.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -614,6 +657,515 @@ func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {
 		return nil, fmt.Errorf("console.GetUser: %w", err)
 	}
 	return &u, nil
+}
+
+// GetUserByEmail returns the user for an email (case-insensitive).
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, email, name, slack_user_id, status, created_at
+		FROM users
+		WHERE lower(email) = lower($1)`, email,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.SlackUserID, &u.Status, &u.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetUserByEmail: %w", err)
+	}
+	return &u, nil
+}
+
+// GetUserBySlackUserID returns the user linked to a Slack user id.
+func (s *Store) GetUserBySlackUserID(ctx context.Context, slackUserID string) (*User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, email, name, slack_user_id, status, created_at
+		FROM users
+		WHERE slack_user_id = $1`, slackUserID,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.SlackUserID, &u.Status, &u.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetUserBySlackUserID: %w", err)
+	}
+	return &u, nil
+}
+
+// SetUserSlackUserIDIfEmpty links a user to a Slack user id only if slack_user_id is currently NULL.
+func (s *Store) SetUserSlackUserIDIfEmpty(ctx context.Context, userID string, slackUserID string) (bool, error) {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE users
+		SET slack_user_id = $2
+		WHERE id = $1 AND slack_user_id IS NULL`, userID, slackUserID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("console.SetUserSlackUserIDIfEmpty: %w", err)
+	}
+	return res.RowsAffected() > 0, nil
+}
+
+// ListTenantApprovers lists all users with role='approver' scoped to a tenant.
+func (s *Store) ListTenantApprovers(ctx context.Context, tenantID string) ([]User, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT u.id, u.email, u.name, u.slack_user_id, u.status, u.created_at
+		FROM user_roles ur
+		JOIN users u ON u.id = ur.user_id
+		WHERE ur.tenant_id = $1 AND ur.role = 'approver'
+		ORDER BY u.created_at DESC`, tenantID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListTenantApprovers: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]User, 0)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.SlackUserID, &u.Status, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListTenantApprovers scan: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListTenantApprovers iteration: %w", err)
+	}
+	return out, nil
+}
+
+// AssignTenantRole inserts a role assignment into user_roles.
+func (s *Store) AssignTenantRole(ctx context.Context, userID, tenantID, role string) error {
+	roleID := uuid.NewString()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO user_roles (id, user_id, tenant_id, role)
+		VALUES ($1, $2, $3, $4)`, roleID, userID, tenantID, role)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// Caller can treat unique violations as conflict/duplicate.
+			return err
+		}
+		return fmt.Errorf("console.AssignTenantRole: %w", err)
+	}
+	return nil
+}
+
+// RemoveTenantRole removes a role assignment from user_roles.
+func (s *Store) RemoveTenantRole(ctx context.Context, userID, tenantID, role string) (bool, error) {
+	res, err := s.pool.Exec(ctx, `
+		DELETE FROM user_roles
+		WHERE user_id = $1 AND tenant_id = $2 AND role = $3`, userID, tenantID, role)
+	if err != nil {
+		return false, fmt.Errorf("console.RemoveTenantRole: %w", err)
+	}
+	return res.RowsAffected() > 0, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Users: management primitives for user CRUD + invites/resets
+// ──────────────────────────────────────────────────────────────────────────────
+
+// CreateUserBare creates a user record without assigning any roles.
+// password may be nil to create a user without credentials (invite/reset flow).
+func (s *Store) CreateUserBare(ctx context.Context, email string, password *string, name string, slackUserID *string) (*User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateUserBare begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	u := &User{
+		ID:          uuid.NewString(),
+		Email:       email,
+		Name:        name,
+		SlackUserID: slackUserID,
+	}
+
+	var passwordHash any
+	if password != nil && strings.TrimSpace(*password) != "" {
+		hashed, err := bcrypt.GenerateFromPassword([]byte(*password), 10)
+		if err != nil {
+			return nil, fmt.Errorf("console.CreateUserBare hash password: %w", err)
+		}
+		passwordHash = string(hashed)
+	} else {
+		passwordHash = nil
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (id, email, password_hash, name, slack_user_id)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING status, created_at`,
+		u.ID, u.Email, passwordHash, u.Name, u.SlackUserID,
+	).Scan(&u.Status, &u.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.CreateUserBare insert user: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("console.CreateUserBare commit: %w", err)
+	}
+	return u, nil
+}
+
+// SetUserPassword updates the user's password (hashed) and ensures status is active.
+func (s *Store) SetUserPassword(ctx context.Context, userID string, password string) error {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+	if err != nil {
+		return fmt.Errorf("console.SetUserPassword hash password: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $2, status = 'active'
+		WHERE id = $1`, userID, string(hashed),
+	)
+	if err != nil {
+		return fmt.Errorf("console.SetUserPassword update: %w", err)
+	}
+	return nil
+}
+
+// AssignUserRole assigns a user role for a tenant.
+// For role='platform_admin', tenantID must be nil.
+func (s *Store) AssignUserRole(ctx context.Context, userID string, tenantID *string, role string) error {
+	roleID := uuid.NewString()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO user_roles (id, user_id, tenant_id, role)
+		VALUES ($1, $2, $3, $4)`, roleID, userID, tenantID, role)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return err
+		}
+		return fmt.Errorf("console.AssignUserRole: %w", err)
+	}
+	return nil
+}
+
+// RemoveUserRoleByID removes a user role assignment by its role assignment id.
+func (s *Store) RemoveUserRoleByID(ctx context.Context, userID, roleAssignmentID string) (bool, error) {
+	res, err := s.pool.Exec(ctx, `
+		DELETE FROM user_roles
+		WHERE user_id = $1 AND id = $2`, userID, roleAssignmentID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("console.RemoveUserRoleByID: %w", err)
+	}
+	return res.RowsAffected() > 0, nil
+}
+
+func (s *Store) ListUsers(ctx context.Context, tenantID *string, emailQuery string, limit, offset int) ([]User, error) {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+
+	emailQuery = strings.TrimSpace(emailQuery)
+	var rows pgx.Rows
+	var err error
+	if tenantID != nil && *tenantID != "" {
+		if emailQuery == "" {
+			rows, err = s.pool.Query(ctx, `
+				SELECT DISTINCT u.id, u.email, u.name, u.slack_user_id, u.status, u.created_at
+				FROM users u
+				JOIN user_roles ur ON ur.user_id = u.id
+				WHERE ur.tenant_id = $1
+				ORDER BY u.created_at DESC
+				LIMIT $2 OFFSET $3`, *tenantID, limit, offset)
+		} else {
+			rows, err = s.pool.Query(ctx, `
+				SELECT DISTINCT u.id, u.email, u.name, u.slack_user_id, u.status, u.created_at
+				FROM users u
+				JOIN user_roles ur ON ur.user_id = u.id
+				WHERE ur.tenant_id = $1 AND lower(u.email) LIKE lower($2) || '%'
+				ORDER BY u.created_at DESC
+				LIMIT $3 OFFSET $4`, *tenantID, emailQuery, limit, offset)
+		}
+	} else {
+		if emailQuery == "" {
+			rows, err = s.pool.Query(ctx, `
+				SELECT u.id, u.email, u.name, u.slack_user_id, u.status, u.created_at
+				FROM users u
+				ORDER BY u.created_at DESC
+				LIMIT $1 OFFSET $2`, limit, offset)
+		} else {
+			rows, err = s.pool.Query(ctx, `
+				SELECT u.id, u.email, u.name, u.slack_user_id, u.status, u.created_at
+				FROM users u
+				WHERE lower(u.email) LIKE lower($1) || '%'
+				ORDER BY u.created_at DESC
+				LIMIT $2 OFFSET $3`, emailQuery, limit, offset)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.ListUsers: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]User, 0)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.SlackUserID, &u.Status, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("console.ListUsers scan: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListUsers iteration: %w", err)
+	}
+	return out, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Invites & password resets (minimum viable)
+// ──────────────────────────────────────────────────────────────────────────────
+
+type Invite struct {
+	Token     string    `json:"token"`
+	Email     string    `json:"email"`
+	TenantID  string    `json:"tenant_id"`
+	Role      string    `json:"role"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (s *Store) CreateInvite(ctx context.Context, token, email, tenantID, role, name string, expiresAt time.Time) error {
+	tokenHash := s.hashInviteResetToken(token)
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO invites (token, email, tenant_id, role, name, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)`, tokenHash, email, tenantID, role, name, expiresAt,
+	)
+	if err != nil {
+		return fmt.Errorf("console.CreateInvite: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetInvite(ctx context.Context, token string) (*Invite, error) {
+	var inv Invite
+	tokenHash := s.hashInviteResetToken(token)
+	err := s.pool.QueryRow(ctx, `
+		SELECT token, email, tenant_id, role, name, created_at, expires_at
+		FROM invites
+		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
+	).Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.CreatedAt, &inv.ExpiresAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.GetInvite: %w", err)
+	}
+	return &inv, nil
+}
+
+func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name string) (*User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	tokenHash := s.hashInviteResetToken(token)
+
+	var inv Invite
+	err = tx.QueryRow(ctx, `
+		SELECT token, email, tenant_id, role, name, expires_at
+		FROM invites
+		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
+	).Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.ExpiresAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept select invite: %w", err)
+	}
+
+	// Find existing user.
+	var u User
+	err = tx.QueryRow(ctx, `
+		SELECT id, email, name, slack_user_id, status, created_at
+		FROM users
+		WHERE lower(email) = lower($1)`, inv.Email,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.SlackUserID, &u.Status, &u.CreatedAt)
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept select user: %w", err)
+	}
+	userSelectErr := err
+
+	passToSet := password
+	if passToSet == "" {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept password required")
+	}
+
+	hashed, bcryptErr := bcrypt.GenerateFromPassword([]byte(passToSet), 10)
+	if bcryptErr != nil {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept hash password: %w", bcryptErr)
+	}
+
+	acceptName := strings.TrimSpace(name)
+	if acceptName == "" {
+		acceptName = strings.TrimSpace(inv.Name)
+	}
+
+	userID := ""
+	if userSelectErr == pgx.ErrNoRows {
+		userID = uuid.NewString()
+		// INSERT doesn't return rows; use Exec to ensure the user row exists
+		// before we create user_roles in the same transaction.
+		_, err = tx.Exec(ctx, `
+			INSERT INTO users (id, email, password_hash, name, slack_user_id, status)
+			VALUES ($1, $2, $3, $4, NULL, 'active')`,
+			userID, inv.Email, string(hashed), acceptName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("console.ConsumeInviteAccept insert user: %w", err)
+		}
+		u = User{
+			ID:          userID,
+			Email:       inv.Email,
+			Name:        acceptName,
+			SlackUserID: nil,
+			Status:      "active",
+			CreatedAt:   time.Now().UTC(),
+		}
+	} else {
+		userID = u.ID
+		_, err = tx.Exec(ctx, `
+			UPDATE users
+			SET password_hash = $2, name = $3, status = 'active'
+			WHERE id = $1`, userID, string(hashed), acceptName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("console.ConsumeInviteAccept update user: %w", err)
+		}
+		u.Name = acceptName
+		u.Status = "active"
+	}
+
+	tenantID := inv.TenantID
+	// Assign role; tolerate unique violations (role already assigned).
+	roleID := uuid.NewString()
+	// IMPORTANT: In Postgres, even if we "tolerate" a unique violation,
+	// the failed statement aborts the entire transaction. Use ON CONFLICT
+	// to avoid transaction aborts so subsequent DELETE/COMMIT succeed.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_roles (id, user_id, tenant_id, role)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (user_id, tenant_id, role) DO NOTHING`, roleID, userID, tenantID, inv.Role)
+	if err != nil {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept assign role: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `DELETE FROM invites WHERE token = $1`, tokenHash)
+	if err != nil {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept delete invite: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("console.ConsumeInviteAccept commit: %w", err)
+	}
+
+	return &u, nil
+}
+
+func (s *Store) ListInvites(ctx context.Context, tenantID *string, limit, offset int) ([]Invite, error) {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+
+	var rows pgx.Rows
+	var err error
+	if tenantID != nil && *tenantID != "" {
+		rows, err = s.pool.Query(ctx, `
+			SELECT token, email, tenant_id, role, name, created_at, expires_at
+			FROM invites
+			WHERE tenant_id = $1 AND expires_at > NOW()
+			ORDER BY created_at DESC
+			LIMIT $2 OFFSET $3`, *tenantID, limit, offset)
+	} else {
+		rows, err = s.pool.Query(ctx, `
+			SELECT token, email, tenant_id, role, name, created_at, expires_at
+			FROM invites
+			WHERE expires_at > NOW()
+			ORDER BY created_at DESC
+			LIMIT $1 OFFSET $2`, limit, offset)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("console.ListInvites: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Invite, 0)
+	for rows.Next() {
+		var inv Invite
+		if err := rows.Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.CreatedAt, &inv.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("console.ListInvites scan: %w", err)
+		}
+		out = append(out, inv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListInvites iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) CreatePasswordReset(ctx context.Context, token, email string, expiresAt time.Time) error {
+	tokenHash := s.hashInviteResetToken(token)
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO password_resets (token, email, expires_at)
+		VALUES ($1, $2, $3)`, tokenHash, email, expiresAt)
+	if err != nil {
+		return fmt.Errorf("console.CreatePasswordReset: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ConsumePasswordReset(ctx context.Context, token, password string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("console.ConsumePasswordReset begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	tokenHash := s.hashInviteResetToken(token)
+
+	var email string
+	err = tx.QueryRow(ctx, `
+		SELECT email
+		FROM password_resets
+		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
+	).Scan(&email)
+	if err == pgx.ErrNoRows {
+		return fmt.Errorf("invalid or expired password reset token")
+	}
+	if err != nil {
+		return fmt.Errorf("console.ConsumePasswordReset select reset token: %w", err)
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+	if err != nil {
+		return fmt.Errorf("console.ConsumePasswordReset hash password: %w", err)
+	}
+
+	res, err := tx.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $2, status = 'active'
+		WHERE lower(email) = lower($1)`, email, string(hashed))
+	if err != nil {
+		return fmt.Errorf("console.ConsumePasswordReset update user: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("password reset token email does not map to a user")
+	}
+
+	_, err = tx.Exec(ctx, `DELETE FROM password_resets WHERE token = $1`, tokenHash)
+	if err != nil {
+		return fmt.Errorf("console.ConsumePasswordReset delete token: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("console.ConsumePasswordReset commit: %w", err)
+	}
+	return nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

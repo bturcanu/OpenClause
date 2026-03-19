@@ -82,6 +82,18 @@ public class ToolCallRequest {
         }
 
         public Builder riskScore(double riskScore) {
+            if (Double.isNaN(riskScore) || Double.isInfinite(riskScore)) {
+                throw new IllegalArgumentException("riskScore must be a finite number");
+            }
+            if (riskScore < 0.0 || riskScore > 10.0) {
+                throw new IllegalArgumentException("riskScore must be an integer in range 0..10");
+            }
+            // Require integer-like values (e.g. 8.0 allowed, 8.5 rejected).
+            double rounded = Math.rint(riskScore);
+            if (Math.abs(riskScore - rounded) > 1e-9) {
+                throw new IllegalArgumentException("riskScore must be an integer in range 0..10");
+            }
+
             request.riskScore = riskScore;
             return this;
         }

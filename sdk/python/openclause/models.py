@@ -16,7 +16,9 @@ class ToolCallRequest:
     idempotency_key: str
     params: dict | None = None
     resource: str = ""
-    risk_score: int = 0
+    # Optional so that callers can explicitly send `risk_score=0` while still
+    # allowing omission for a minimal payload (server default is 0).
+    risk_score: int | None = None
     risk_factors: list[str] | None = None
     user_id: str = ""
     session_id: str = ""
@@ -36,7 +38,7 @@ class ToolCallRequest:
             payload["params"] = self.params
         if self.resource:
             payload["resource"] = self.resource
-        if self.risk_score:
+        if self.risk_score is not None:
             payload["risk_score"] = self.risk_score
         if self.risk_factors:
             payload["risk_factors"] = self.risk_factors

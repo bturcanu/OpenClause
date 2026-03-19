@@ -153,7 +153,7 @@ func (s *Store) CheckIdempotency(ctx context.Context, tenantID, idempotencyKey s
 // GetEvent retrieves a single event by ID.
 func (s *Store) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEnvelope, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT event_id, tenant_id, agent_id, tool, action,
+		SELECT e.event_id, e.tenant_id, e.agent_id, e.tool, e.action,
 		       payload_json, payload_canon, risk_score,
 		       decision, policy_result,
 		       idempotency_key, session_id, user_id, source_ip, trace_id,

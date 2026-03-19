@@ -20,7 +20,7 @@ export default function Login() {
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: 'Login failed' }))
-        throw new Error(data.error || 'Login failed')
+        throw new Error(data.message || data.error || 'Login failed')
       }
       const data = await res.json()
       localStorage.setItem('oc_token', data.token)

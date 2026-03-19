@@ -62,7 +62,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
              ▼
         ┌──────────┐      ┌──────────┐
         │ Postgres │      │  MinIO   │
-        │ :5432    │      │  :9000   │
+        │ :5432    │      │  :9000/:9001 │
         └──────────┘      └──────────┘
 
 ┌──────────────┐      ┌──────────────┐
@@ -91,13 +91,13 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 | **Console API** | `:8090` | Admin console backend. JWT auth, RBAC, tenant/agent/key management, analytics, policy simulation. |
 | **Console UI** | `:3000` | React single-page app for the admin console. |
 | **Approvals** | `:8081` | Manages approval requests and grants. Includes Slack interactive approvals. |
-| **Connector-Slack** | `:8082` | Executes Slack actions (`msg.post`). Supports mock mode. |
-| **Connector-Jira** | `:8083` | Executes Jira actions (`issue.create`). Supports mock mode. |
+| **Connector-Slack** | `:8082` | Executes Slack actions (`msg.post`, `channel.list`, `approval.request`). Supports mock mode. |
+| **Connector-Jira** | `:8083` | Executes Jira actions (`issue.create`, `issue.list`). Supports mock mode. |
 | **Built-in Connectors** | — | In-process: GitHub, AWS, ServiceNow, Email, Postgres (read-only), Webhook. |
 | **OPA** | `:8181` | Open Policy Agent evaluating Rego policy bundles. |
-| **Archiver** | — | Periodically verifies chains and uploads evidence bundles to MinIO/S3. |
+| **Archiver** | — | Evidence archival worker (not started by `docker-compose`; run `cmd/archiver` separately or on a schedule). |
 | **Postgres** | `:5432` | Stores events, results, approvals, grants, users, keys, and hash chain. |
-| **MinIO** | `:9000` | S3-compatible object storage for evidence archival. |
+| **MinIO** | `:9000` | S3-compatible object storage (console at `:9001`) for evidence archival. |
 
 ---
 
@@ -132,6 +132,8 @@ curl http://localhost:8080/healthz   # Gateway
 curl http://localhost:8090/healthz   # Console API
 ```
 
+If this is your first run, start by opening the console UI at `http://localhost:3000` and completing the First-run Setup Wizard (it creates the initial platform admin and first tenant). Use the email/password you set there to log in below.
+
 ### 4. Log into the console
 
 Open http://localhost:3000 in your browser, or use the API:
@@ -139,7 +141,7 @@ Open http://localhost:3000 in your browser, or use the API:
 ```bash
 curl -s -X POST http://localhost:8090/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@openclause.dev","password":"admin123"}' | jq
+  -d '{"email":"<platform-admin-email>","password":"<platform-admin-password>"}' | jq
 ```
 
 ### 5. Create a tenant, agent, and API key
@@ -153,18 +155,25 @@ curl -s -X POST http://localhost:8090/admin/tenants \
   -H "Content-Type: application/json" \
   -d '{"name":"Demo Corp"}' | jq
 
+# Save the created tenant_id as TENANT_ID (JSON field: `id`)
+export TENANT_ID="<tenant.id from response>"
+
 # Create agent (use tenant_id from response)
-curl -s -X POST http://localhost:8090/admin/tenants/<tenant_id>/agents \
+curl -s -X POST http://localhost:8090/admin/tenants/$TENANT_ID/agents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Demo Agent"}' | jq
 
+# Save the created agent id as AGENT_ID (JSON field: `id`)
+export AGENT_ID="<agent.id from response>"
+
 # Create API key
-curl -s -X POST http://localhost:8090/admin/tenants/<tenant_id>/apikeys \
+curl -s -X POST http://localhost:8090/admin/tenants/$TENANT_ID/apikeys \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Demo Key"}' | jq
 # Save the raw_key from the response — it is shown only once!
+export RAW_KEY="<raw_key from response>"
 ```
 
 ### 6. Send a test tool call
@@ -172,10 +181,10 @@ curl -s -X POST http://localhost:8090/admin/tenants/<tenant_id>/apikeys \
 ```bash
 curl -s -X POST http://localhost:8080/v1/toolcalls \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: sk-test-key-1" \
+  -H "X-API-Key: $RAW_KEY" \
   -d '{
-    "tenant_id": "tenant1",
-    "agent_id": "agent-1",
+    "tenant_id": "$TENANT_ID",
+    "agent_id": "$AGENT_ID",
     "tool": "slack",
     "action": "msg.post",
     "params": {"channel": "#general", "text": "Hello from agent"},
@@ -203,10 +212,10 @@ Expected response (mock mode):
 ```bash
 curl -s -X POST http://localhost:8080/v1/toolcalls \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: sk-test-key-1" \
+  -H "X-API-Key: $RAW_KEY" \
   -d '{
-    "tenant_id": "tenant1",
-    "agent_id": "agent-1",
+    "tenant_id": "$TENANT_ID",
+    "agent_id": "$AGENT_ID",
     "tool": "github",
     "action": "issue.create",
     "params": {"title": "Test issue"},
@@ -219,8 +228,10 @@ Approve from the console UI at http://localhost:3000/approvals, then execute:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/toolcalls/<event_id>/execute \
-  -H "X-API-Key: sk-test-key-1" | jq
+  -H "X-API-Key: $RAW_KEY" | jq
 ```
+
+Tip: in the Approvals UI modal, you can use the **Copy execute command** helper to copy the correct `.../<event_id>/execute` curl request, then paste your tenant-scoped API key.
 
 ### 8. Stop
 
@@ -240,18 +251,25 @@ The admin console (http://localhost:3000) provides:
 | **Approvals** | Pending approval queue with approve/deny actions and detail view |
 | **Audit Trail** | Searchable event list with filters (tenant, tool, action, decision) + event detail |
 | **Tenants** | Create/list/disable tenants, view config and usage |
-| **Tenant Detail** | Manage agents and API keys per tenant, create/revoke keys |
+| **Tenant Detail** | Manage agents, API keys, and tenant-scoped approvers |
 | **Sessions** | Session list with event counts, click into timeline view |
 | **Policies** | Policy versions, create new versions, policy simulator |
 | **Alerts** | Alert rules (deny spike, approve backlog, etc.) and alert events |
 | **Connectors** | Installed connectors with supported actions |
+| **Users** | Invite users, assign/remove roles, and handle invite acceptance + password reset flows |
 
 ### Console Auth
 
 - **Login**: email + password (bcrypt hashed)
 - **JWT**: HS256 tokens with configurable expiry
 - **RBAC roles**: `platform_admin`, `tenant_admin`, `approver`, `viewer`
-- Default admin: `admin@openclause.dev` / `admin123`
+- Setup Wizard default email: `admin@openclause.dev` (password is chosen during initialization)
+
+### User, Invite, and Password Reset Flows
+
+The console UI includes token-based pages for invite acceptance and password reset (`/invite/accept` and `/reset`).
+
+Admin-side, users/invites/password resets are created via the console API (`POST /admin/invites`, `POST /auth/reset/request`), and the token is consumed by `POST /auth/invite/accept` / `POST /auth/reset/confirm`.
 
 ---
 
@@ -276,7 +294,18 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
+| `GET` | `/setup/status` | — | First-run setup status (used by console UI wizard) |
+| `POST` | `/setup/initialize` | — | Initialize console bootstrap (creates initial platform admin + first tenant; only works when DB has zero users) |
 | `POST` | `/auth/login` | — | Authenticate with email/password, receive JWT |
+| `POST` | `/auth/invite/accept` | — (token-based) | Accept an invite token (creates user + assigns role/tenant scope) |
+| `POST` | `/auth/reset/request` | — (token-based) | Request a password reset token |
+| `POST` | `/auth/reset/confirm` | — (token-based) | Confirm password reset token and set a new password |
+| `GET` | `/admin/users` | `platform_admin` or `tenant_admin` | List users (scoped by caller's tenant scope) |
+| `POST` | `/admin/users` | `platform_admin` or `tenant_admin` | Create a user |
+| `POST` | `/admin/users/{id}/roles` | `platform_admin` or `tenant_admin` | Assign a role to a user |
+| `DELETE` | `/admin/users/{id}/roles/{role_id}` | `platform_admin` or `tenant_admin` | Remove a role assignment from a user |
+| `POST` | `/admin/invites` | `platform_admin` or `tenant_admin` | Create an invite token (email + tenant + role) |
+| `GET` | `/admin/invites` | `platform_admin` or `tenant_admin` | List pending invites |
 | `GET` | `/admin/analytics/overview` | JWT | Decision counts, pending approvals, active tenants/agents |
 | `GET` | `/admin/analytics/timeseries` | JWT | Time-bucketed decision counts |
 | `POST` | `/admin/tenants` | platform_admin | Create tenant |
@@ -287,6 +316,9 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `POST` | `/admin/tenants/{id}/apikeys` | tenant_admin | Create API key (returns raw key once) |
 | `GET` | `/admin/tenants/{id}/apikeys` | JWT | List API keys (never returns hashes) |
 | `POST` | `/admin/tenants/{id}/apikeys/{key_id}/revoke` | tenant_admin | Revoke API key |
+| `GET` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | List tenant-scoped approvers |
+| `POST` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | Upsert a tenant-scoped approver |
+| `DELETE` | `/admin/tenants/{tenant_id}/approvers/{user_id}` | tenant_admin | Remove a tenant-scoped approver |
 | `GET` | `/admin/approvals/pending` | JWT | List pending approvals |
 | `POST` | `/admin/approvals/{id}/approve` | approver | Approve request (transactional with grant) |
 | `POST` | `/admin/approvals/{id}/deny` | approver | Deny request |
@@ -340,7 +372,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 - `tenant_id`, `agent_id`, `tool`, `action`, `idempotency_key` are required.
 - `params` must be <= 64 KB, `resource` <= 2 KB (byte length), `labels` <= 50 entries.
 - `idempotency_key` must be <= 256 bytes.
-- `risk_score` must be 0–10. Omitting it will result in a policy deny (OPA comparisons against undefined produce false).
+- `risk_score` must be 0–10. If omitted, it defaults to `0` (server-side `int` zero value).
 - `schema_version` must be `"1.0"` or omitted (defaults to `"1.0"`). Unknown versions are rejected.
 - `tool` and `action` are normalized to lowercase and must match `^[a-z0-9][a-z0-9._-]{0,63}$`.
 
@@ -349,6 +381,8 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 ## SDKs
 
 Multi-language SDKs are available in the `sdk/` directory.
+
+Note: the SDK examples below are written for the local dev seed data (`tenant_id="tenant1"`, `agent_id="agent-1"`, `api_key="sk-test-key-1"`). If you initialized via the Setup Wizard, replace these with your real `tenant_id`, `agent_id`, and raw API key.
 
 ### Python
 
@@ -359,10 +393,10 @@ cd sdk/python && pip install -e .
 ```python
 from openclause import OpenClauseClient, ToolCallRequest
 
-client = OpenClauseClient(base_url="http://localhost:8080", api_key="sk-test-key-1")
+client = OpenClauseClient(base_url="http://localhost:8080", api_key="<raw_api_key>")
 
 response = client.submit_tool_call(ToolCallRequest(
-    tenant_id="tenant1", agent_id="agent-1",
+    tenant_id="<tenant_id>", agent_id="<agent_id>",
     tool="slack", action="msg.post",
     idempotency_key=OpenClauseClient.generate_idempotency_key(),
     params={"channel": "#general", "text": "Hello!"},
@@ -386,11 +420,11 @@ import { OpenClauseClient } from 'openclause';
 
 const client = new OpenClauseClient({
   baseUrl: 'http://localhost:8080',
-  apiKey: 'sk-test-key-1'
+  apiKey: '<raw_api_key>'
 });
 
 const response = await client.submitToolCall({
-  tenant_id: 'tenant1', agent_id: 'agent-1',
+  tenant_id: '<tenant_id>', agent_id: '<agent_id>',
   tool: 'slack', action: 'msg.post',
   idempotency_key: OpenClauseClient.generateIdempotencyKey(),
   params: { channel: '#general', text: 'Hello!' },
@@ -403,10 +437,10 @@ MCP server stub: `import { createMCPToolDefinitions } from 'openclause';`
 ### Java
 
 ```java
-OpenClauseClient client = new OpenClauseClient("http://localhost:8080", "sk-test-key-1");
+OpenClauseClient client = new OpenClauseClient("http://localhost:8080", "<raw_api_key>");
 
 ToolCallRequest req = new ToolCallRequest.Builder()
-    .tenantId("tenant1").agentId("agent-1")
+    .tenantId("<tenant_id>").agentId("<agent_id>")
     .tool("slack").action("msg.post")
     .idempotencyKey(OpenClauseClient.generateIdempotencyKey())
     .riskScore(3)
@@ -420,7 +454,7 @@ ToolCallResponse response = client.submitToolCall(req);
 ```go
 import "github.com/bturcanu/OpenClause/pkg/sdk/client"
 
-c := client.New("http://localhost:8080", "sk-test-key-1")
+c := client.New("http://localhost:8080", "<raw_api_key>")
 resp, err := c.Submit(ctx, req)
 ```
 
@@ -469,7 +503,7 @@ curl -s -X POST http://localhost:8090/admin/policy/simulate \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant1",
+    "tenant_id": "$TENANT_ID",
     "tool": "slack",
     "action": "msg.post",
     "risk_score": 3
@@ -568,6 +602,7 @@ evidence.VerifyChain(events) // returns error if chain is broken
 API keys are validated via **two stores** in sequence:
 
 1. **Environment keys**: `API_KEYS=tenant1:sk-test-key-1,tenant2:sk-test-key-2`
+   - Update `tenant_id` values to match tenant IDs present in your database. The example assumes the dev seed (`docs/seed_dev.sql`) was applied.
 2. **Database keys**: Created through the Console API, stored as SHA-256 hashes with an 8-character prefix for indexed lookup.
 
 Pass keys via `X-API-Key` header or `Authorization: Bearer <key>`.
@@ -654,14 +689,17 @@ When approval requests are created, notifications are enqueued transactionally a
 
 - Endpoint: `POST /v1/integrations/slack/interactions`
 - Security: Slack signature verification (`X-Slack-Signature`, `X-Slack-Request-Timestamp`) against `SLACK_SIGNING_SECRET`.
-- RBAC is enforced via tenant allowlists (`APPROVER_SLACK_ALLOWLIST`, `APPROVER_EMAIL_ALLOWLIST`). Default-deny: tenants without an explicit allowlist entry reject all approvers.
+- RBAC is enforced via DB-backed approvers (`users` + `user_roles` with `role='approver'`) scoped to the tenant.
+  - Default: DB-only (`ALLOWLIST_SOURCE=db`).
+  - Dev bootstrap fallback (optional): env allowlists via `ALLOWLIST_SOURCE=env|both` using `APPROVER_SLACK_ALLOWLIST` / `APPROVER_EMAIL_ALLOWLIST`.
+- Approvers are managed in the console UI under `Tenants -> (select tenant) -> Approvers`.
 
 ### Evidence Archival
 
 - `cmd/archiver` verifies each tenant hash chain and uploads bundles to MinIO/S3.
 - Incremental progress is tracked in `evidence_archive_checkpoints`.
 - One-shot local run:
-  `ARCHIVER_RUN_ONCE=true ARCHIVER_TENANT_ID=tenant1 go run ./cmd/archiver`
+  `ARCHIVER_RUN_ONCE=true ARCHIVER_TENANT_ID=$TENANT_ID go run ./cmd/archiver`
 
 ---
 
@@ -712,8 +750,9 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
 | `API_KEYS` | — | Comma-separated `tenant:key` pairs (env-var auth) |
 | `INTERNAL_AUTH_TOKEN` | — | **Required.** Shared secret for service-to-service auth |
-| `APPROVER_EMAIL_ALLOWLIST` | — | Per-tenant email approver allowlist (`tenant:email1\|email2`) |
-| `APPROVER_SLACK_ALLOWLIST` | — | Per-tenant Slack user allowlist (`tenant:u123\|u999`) |
+| `ALLOWLIST_SOURCE` | `db` | Approver authorization source (`db`, `env`, `both`). Default is DB-backed approvers. |
+| `APPROVER_EMAIL_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
+| `APPROVER_SLACK_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
 | `SLACK_SIGNING_SECRET` | — | Slack signing secret for interactions endpoint |
 | `APPROVALS_NOTIFIER_ENABLED` | `true` | Enable transactional outbox dispatcher |
@@ -766,16 +805,28 @@ OpenClause/
 │   └── tests/                      # OPA policy tests
 ├── migrations/
 │   ├── 001_initial.sql             # Postgres schema
-│   └── 002_seed.sql                # Development seed data
+├── docs/
+│   ├── CONNECTORS.md              # Connector development guide
+│   ├── LOCAL_TESTING.md          # Local testing guide + curl recipes
+│   └── seed_dev.sql              # Optional development seed SQL (tenant/agent/api-key)
+├── scripts/
+│   ├── dev.ps1
+│   ├── dev.sh
+│   ├── migrate.ps1
+│   ├── migrate.sh
+│   ├── gen-secret.ps1
+│   ├── gen-secret.sh
+│   ├── seed-dev.ps1
+│   └── seed-dev.sh
 ├── deploy/
 │   ├── docker-compose.yml          # Local development stack
 │   ├── helm/                       # Helm charts (gateway, approvals, connectors)
 │   ├── terraform/                  # AWS infrastructure (EKS, RDS, S3, ALB)
 │   └── dashboards/                 # Grafana dashboard JSON
-├── docs/CONNECTORS.md              # Connector development guide
 ├── CONTRIBUTING.md                 # Contribution guide
 ├── .github/workflows/ci.yml        # CI: test, lint, policy-test, build, deploy
 ├── Dockerfile                      # Multi-stage build (one binary per image, non-root)
+├── LICENSE                         # License text (Apache-2.0 + Commons Clause)
 ├── Makefile                        # dev, test, build, deploy targets
 ├── .env.example                    # Environment variable reference
 └── readme.md                       # This file
@@ -800,6 +851,34 @@ OpenClause/
 | `make build` | Build all Go binaries to `bin/` |
 | `make docker-build` | Build Docker images locally |
 | `make clean` | Remove build artifacts and containers |
+
+### Windows + macOS/Linux Quickstart
+
+For first-run developer setup (macOS/Linux):
+
+```bash
+./scripts/dev.sh
+```
+
+For Windows (PowerShell):
+
+```powershell
+.\scripts\dev.ps1
+```
+
+If you need migrations only:
+
+```bash
+./scripts/migrate.sh
+```
+
+```powershell
+.\scripts\migrate.ps1
+```
+
+On console-ui startup, the app will call `GET /api/setup/status` and show a first-run setup wizard when the DB is not initialized yet. This replaces the need to manually seed the initial platform admin + first tenant SQL on first run.
+
+For local development, `./scripts/dev.sh` / `./scripts/dev.ps1` also ensure `CONSOLE_JWT_SECRET` is set in `.env` (generating a strong secret if missing) and run `docker compose` with `--env-file` so compose interpolation uses the correct values.
 
 ### Running tests
 
@@ -831,7 +910,7 @@ make build
 ### Local (Docker Compose)
 
 ```bash
-make dev
+./scripts/dev.sh
 ```
 
 Runs all services including the console UI. See `deploy/docker-compose.yml`.

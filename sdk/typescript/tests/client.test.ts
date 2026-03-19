@@ -74,7 +74,7 @@ describe("OpenClauseClient", () => {
         idempotency_key: "key-002",
         params: { table: "users", id: 42 },
         resource: "users/42",
-        risk_score: 0.95,
+        risk_score: 8,
         risk_factors: ["destructive", "production"],
         user_id: "user_xyz",
         session_id: "sess_456",
@@ -87,7 +87,7 @@ describe("OpenClauseClient", () => {
 
       expect(parsed.params).toEqual({ table: "users", id: 42 });
       expect(parsed.resource).toBe("users/42");
-      expect(parsed.risk_score).toBe(0.95);
+      expect(parsed.risk_score).toBe(8);
       expect(parsed.risk_factors).toEqual(["destructive", "production"]);
       expect(parsed.user_id).toBe("user_xyz");
       expect(parsed.session_id).toBe("sess_456");
@@ -159,6 +159,54 @@ describe("OpenClauseClient", () => {
       const response: ToolCallResponse = JSON.parse(raw);
       expect(response.result!.status).toBe("error");
       expect(response.result!.error).toBe("connection refused");
+    });
+  });
+
+  describe("waitForApproval", () => {
+    it("retries execute on 409 awaiting approval and returns execution response", async () => {
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+
+      const awaitingApprovalErr = new APIError(
+        "Conflict: awaiting approval",
+        409,
+        '{"code":"CONFLICT","message":"awaiting approval"}',
+      );
+
+      const executionResponse: ToolCallResponse = {
+        event_id: "evt_approve_1",
+        decision: "allow",
+        result: { status: "success", duration_ms: 10, output_json: {} },
+      };
+
+      const executeSpy = jest
+        .spyOn(client, "execute")
+        .mockRejectedValueOnce(awaitingApprovalErr)
+        .mockResolvedValueOnce(executionResponse);
+
+      const res = await client.waitForApproval("evt_approve_1", {
+        timeoutMs: 5_000,
+        pollIntervalMs: 0,
+      });
+
+      expect(executeSpy).toHaveBeenCalledTimes(2);
+      expect(res.decision).toBe("allow");
+      expect(res.result?.status).toBe("success");
+    });
+
+    it("throws immediately on permanent failures (400/403/404)", async () => {
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+
+      const permErr = new APIError(
+        "Forbidden",
+        403,
+        '{"code":"FORBIDDEN","message":"no permission"}',
+      );
+
+      jest.spyOn(client, "execute").mockRejectedValueOnce(permErr);
+
+      await expect(
+        client.waitForApproval("evt_perm_fail", { timeoutMs: 5_000, pollIntervalMs: 0 }),
+      ).rejects.toBe(permErr);
     });
   });
 

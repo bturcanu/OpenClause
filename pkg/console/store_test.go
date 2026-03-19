@@ -1,6 +1,11 @@
 package console
 
-import "testing"
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+)
 
 func TestClampLimit(t *testing.T) {
 	tests := []struct {
@@ -38,5 +43,39 @@ func TestClampOffset(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("clampOffset(%d) = %d, want %d", tt.input, got, tt.want)
 		}
+	}
+}
+
+func Test_hashInviteResetToken_DeterministicAndDistinct(t *testing.T) {
+	s := &Store{tokenHMACSecret: []byte("test-secret")}
+
+	h1 := s.hashInviteResetToken("token-a")
+	h2 := s.hashInviteResetToken("token-a")
+	h3 := s.hashInviteResetToken("token-b")
+
+	if h1 == "" {
+		t.Fatal("expected non-empty hash")
+	}
+	if h1 != h2 {
+		t.Fatalf("expected deterministic hash, got h1=%q h2=%q", h1, h2)
+	}
+	if h1 == h3 {
+		t.Fatalf("expected distinct tokens to have distinct hashes: h=%q", h1)
+	}
+}
+
+func Test_hashInviteResetToken_MatchesExpectedHMACSHA256(t *testing.T) {
+	secret := []byte("test-secret")
+	raw := "token-a"
+
+	s := &Store{tokenHMACSecret: secret}
+	got := s.hashInviteResetToken(raw)
+
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(raw))
+	want := hex.EncodeToString(mac.Sum(nil))
+
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }

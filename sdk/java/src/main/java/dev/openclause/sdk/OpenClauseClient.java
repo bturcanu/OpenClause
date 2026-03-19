@@ -51,17 +51,17 @@ public class OpenClauseClient {
 
     public ToolCallResponse submitToolCall(ToolCallRequest request) throws OpenClauseException {
         String json = gson.toJson(request);
-        return post("/v1/tool-calls", json, ToolCallResponse.class);
+        return post("/v1/toolcalls", json, ToolCallResponse.class);
     }
 
     public ToolCallResponse getEvent(String eventId) throws OpenClauseException {
         String encoded = URLEncoder.encode(eventId, StandardCharsets.UTF_8);
-        return get("/v1/tool-calls/" + encoded, ToolCallResponse.class);
+        return get("/v1/toolcalls/" + encoded, ToolCallResponse.class);
     }
 
     public ToolCallResponse execute(String eventId) throws OpenClauseException {
         String encoded = URLEncoder.encode(eventId, StandardCharsets.UTF_8);
-        return post("/v1/tool-calls/" + encoded + "/execute", "{}", ToolCallResponse.class);
+        return post("/v1/toolcalls/" + encoded + "/execute", "{}", ToolCallResponse.class);
     }
 
     public ToolCallResponse waitForApproval(String eventId, long timeoutMs, long pollIntervalMs) throws OpenClauseException {
@@ -69,24 +69,42 @@ public class OpenClauseClient {
         int attempt = 0;
 
         while (System.currentTimeMillis() < deadline) {
-            ToolCallResponse response = getEvent(eventId);
-            if (!"approve".equals(response.getDecision())) {
-                return response;
-            }
-
-            attempt++;
-            long backoff = Math.min(
-                    pollIntervalMs * (long) Math.pow(2, attempt - 1),
-                    30_000
-            );
-            long remaining = deadline - System.currentTimeMillis();
-            if (remaining <= 0) break;
-
             try {
-                Thread.sleep(Math.min(backoff, remaining));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new OpenClauseException("Wait interrupted", e);
+                // Execute is the source-of-truth: it returns 200 once the grant exists,
+                // and returns 409 with an "awaiting approval" conflict until then.
+                return execute(eventId);
+            } catch (APIException exc) {
+                boolean isAwaitingApproval = (
+                        exc.getStatusCode() == 409 &&
+                        exc.getResponseBody() != null &&
+                        exc.getResponseBody().toLowerCase().contains("awaiting approval")
+                );
+
+                if (isAwaitingApproval) {
+                    attempt++;
+                    long backoff = Math.min(
+                            pollIntervalMs * (long) Math.pow(2, attempt - 1),
+                            30_000
+                    );
+                    long remaining = deadline - System.currentTimeMillis();
+                    if (remaining <= 0) break;
+
+                    try {
+                        Thread.sleep(Math.min(backoff, remaining));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new OpenClauseException("Wait interrupted", e);
+                    }
+                    continue;
+                }
+
+                // Permanent failures: do not retry.
+                int statusCode = exc.getStatusCode();
+                if (statusCode == 400 || statusCode == 403 || statusCode == 404) {
+                    throw exc;
+                }
+
+                throw exc;
             }
         }
 

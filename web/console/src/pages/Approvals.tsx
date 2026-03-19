@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, formatDate } from '../api'
 
 interface Approval {
   id: string
+  event_id: string
   tool: string
   action: string
   risk_score: number
@@ -19,27 +20,71 @@ export default function Approvals() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const fetchSeq = useRef(0)
+  const [executeApiKey, setExecuteApiKey] = useState('')
+  const [copyStatus, setCopyStatus] = useState('')
 
-  const fetchApprovals = useCallback(async () => {
+  const executeCommand = (() => {
+    if (!selected?.event_id) return ''
+    const apiKey = executeApiKey.trim()
+    const gatewayBase = 'http://localhost:8080'
+    const url = `${gatewayBase}/v1/toolcalls/${encodeURIComponent(selected.event_id)}/execute`
+    const header = apiKey ? `X-API-Key: ${apiKey}` : 'X-API-Key: <API_KEY>'
+    return `curl -s -X POST "${url}" -H "Content-Type: application/json" -H "${header}" -d '{}'`
+  })()
+
+  const fetchApprovals = useCallback(async (silent = false) => {
+    const seq = ++fetchSeq.current
     try {
-      setLoading(true)
+      if (!silent) {
+        setLoading(true)
+        setError('')
+      }
       const data = await api.get('/admin/approvals/pending')
+      if (seq !== fetchSeq.current) return
       setApprovals(Array.isArray(data) ? data : data?.approvals || [])
     } catch (err: any) {
-      setError(err.message)
+      if (!silent) setError(err.message)
     } finally {
-      setLoading(false)
+      if (!silent) {
+        if (seq === fetchSeq.current) setLoading(false)
+      }
     }
   }, [])
 
-  useEffect(() => { fetchApprovals() }, [fetchApprovals])
+  useEffect(() => {
+    void fetchApprovals(false)
+    const timer = window.setInterval(() => {
+      void fetchApprovals(true)
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [fetchApprovals])
+
+  // Prevent stale execution helper state when switching between approvals.
+  useEffect(() => {
+    setExecuteApiKey('')
+    setCopyStatus('')
+  }, [selected?.id])
+
+  // If the selected pending approval disappears from the polled list (resolved/expired),
+  // close the modal to avoid a stale UI.
+  useEffect(() => {
+    if (!selected) return
+    if (selected.status === 'approved') return
+    const stillPending = approvals.some(a => a.id === selected.id)
+    if (!stillPending) setSelected(null)
+  }, [approvals, selected?.id, selected?.status])
 
   async function handleAction(id: string, action: 'approve' | 'deny') {
     setActionLoading(id)
     try {
       await api.post(`/admin/approvals/${id}/${action}`)
-      await fetchApprovals()
-      if (selected?.id === id) setSelected(null)
+      await fetchApprovals(true)
+      setSelected(prev => {
+        if (!prev || prev.id !== id) return prev
+        if (action === 'approve') return { ...prev, status: 'approved' }
+        return null
+      })
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -52,6 +97,12 @@ export default function Approvals() {
       <div className="page-header">
         <h2>Approvals Queue</h2>
         <p>Review and action pending human-in-the-loop requests</p>
+      </div>
+
+      <div className="btn-group mb-16">
+        <button className="btn btn-outline" disabled={loading} onClick={() => void fetchApprovals(false)}>
+          Refresh
+        </button>
       </div>
 
       {error && <div className="error-msg">{error}</div>}
@@ -149,6 +200,12 @@ export default function Approvals() {
               <div className="detail-value">{selected.tenant_id}</div>
             </div>
             <div className="detail-row">
+              <div className="detail-label">Event</div>
+              <div className="detail-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                {selected.event_id}
+              </div>
+            </div>
+            <div className="detail-row">
               <div className="detail-label">Created</div>
               <div className="detail-value">{formatDate(selected.created_at)}</div>
             </div>
@@ -176,6 +233,69 @@ export default function Approvals() {
                 Deny
               </button>
             </div>
+
+            {selected.status !== 'approved' ? (
+              <div style={{ marginTop: 16, color: '#64748b', fontSize: 12 }}>
+                Approve this request first to unlock the execution helper.
+              </div>
+            ) : (
+              <div style={{ marginTop: 16 }}>
+                <div className="detail-row" style={{ display: 'block' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Execute approved request</div>
+                  <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
+                    This sends{' '}
+                    <code>{`POST /v1/toolcalls/${selected.event_id}/execute`}</code> to the gateway. You need a tenant-scoped API
+                    key.
+                  </div>
+                  <div className="form-group" style={{ marginTop: 8, marginBottom: 8 }}>
+                    <label>Gateway API Key</label>
+                    <input
+                      value={executeApiKey}
+                      onChange={e => setExecuteApiKey(e.target.value)}
+                      placeholder="sk-oc-..."
+                      style={{ fontFamily: 'monospace' }}
+                    />
+                  </div>
+                  <textarea
+                    readOnly
+                    value={executeCommand}
+                    style={{
+                      width: '100%',
+                      minHeight: 64,
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      padding: 10,
+                      borderRadius: 6,
+                      border: '1px solid #e2e8f0',
+                    }}
+                  />
+                  <div className="btn-group" style={{ marginTop: 10 }}>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      type="button"
+                      disabled={!executeApiKey.trim()}
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(executeCommand)
+                          setCopyStatus('Copied')
+                          setTimeout(() => setCopyStatus(''), 1500)
+                        } catch {
+                          setCopyStatus('Copy failed')
+                          setTimeout(() => setCopyStatus(''), 1500)
+                        }
+                      }}
+                    >
+                      Copy execute command
+                    </button>
+                    {copyStatus ? (
+                      <div style={{ alignSelf: 'center', color: '#16a34a', fontSize: 12, fontWeight: 700 }}>
+                        {copyStatus}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

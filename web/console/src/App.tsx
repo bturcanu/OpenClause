@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
 import Login from './pages/Login'
 import Overview from './pages/Overview'
@@ -11,6 +12,10 @@ import SessionTimeline from './pages/SessionTimeline'
 import Policies from './pages/Policies'
 import Alerts from './pages/Alerts'
 import Connectors from './pages/Connectors'
+import Users from './pages/Users'
+import InviteAccept from './pages/InviteAccept'
+import PasswordReset from './pages/PasswordReset'
+import SetupWizard from './pages/SetupWizard'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('oc_token')
@@ -49,6 +54,9 @@ function Layout({ children }: { children: React.ReactNode }) {
           <NavLink to="/tenants">
             <span className="nav-icon">⊞</span> Tenants
           </NavLink>
+          <NavLink to="/users">
+            <span className="nav-icon">⌁</span> Users
+          </NavLink>
           <NavLink to="/sessions">
             <span className="nav-icon">↻</span> Sessions
           </NavLink>
@@ -74,9 +82,39 @@ function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const [setupState, setSetupState] = useState<'checking' | 'initialized' | 'not_initialized'>('checking')
+
+  useEffect(() => {
+    let cancelled = false
+    async function check() {
+      try {
+        const resp = await fetch('/api/setup/status', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+        const data = await resp.json().catch(() => ({} as any))
+        if (cancelled) return
+        setSetupState(data?.initialized ? 'initialized' : 'not_initialized')
+      } catch {
+        if (!cancelled) setSetupState('not_initialized')
+      }
+    }
+    void check()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (setupState === 'checking') {
+    return <div className="loading">Checking setup…</div>
+  }
+
+  if (setupState === 'not_initialized') {
+    return <SetupWizard onInitialized={() => setSetupState('initialized')} />
+  }
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/invite/accept" element={<InviteAccept />} />
+      <Route path="/reset" element={<PasswordReset />} />
       <Route
         path="/*"
         element={
@@ -89,6 +127,7 @@ export default function App() {
                 <Route path="/events/:eventId" element={<EventDetail />} />
                 <Route path="/tenants" element={<Tenants />} />
                 <Route path="/tenants/:id" element={<TenantDetail />} />
+                <Route path="/users" element={<Users />} />
                 <Route path="/sessions" element={<Sessions />} />
                 <Route path="/sessions/:id" element={<SessionTimeline />} />
                 <Route path="/policies" element={<Policies />} />

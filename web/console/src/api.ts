@@ -16,8 +16,9 @@ async function apiFetch(path: string, options?: RequestInit) {
     throw new Error('Unauthorized');
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
+    const err = await res.json().catch(() => ({} as any));
+    const msg = err?.message || err?.error || res.statusText;
+    throw new Error(msg);
   }
   return res;
 }

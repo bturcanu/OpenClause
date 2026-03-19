@@ -73,6 +73,8 @@ Branch: `main` (merged from `feature/next-priorities`)
 - [x] Add minimal approver identity + per-tenant allowlist enforcement.
   - **Acceptance:** approve/deny paths reject unauthorized approvers (API + Slack).
   - **Commit:** `c242cda`
+- **Tier 1 decision (2026-03-18):** switch approver authorization primary source of truth to DB-backed `users` + `user_roles(role='approver')`, defaulting to DB-only with `ALLOWLIST_SOURCE=db`. Env allowlists (`APPROVER_EMAIL_ALLOWLIST` / `APPROVER_SLACK_ALLOWLIST`) are supported only when explicitly enabled via `ALLOWLIST_SOURCE=env|both`; the authorizer still resolves Slack identities via `users.slack_user_id` and (in `both`) allows when either DB role membership or env allowlist matches.
+- **Slack identity mapping:** Slack interactions resolve `slack_user_id -> users` and store the resolved console user email as the canonical approver identity.
 
 ## Phase 7 — Agent SDK
 

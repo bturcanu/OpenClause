@@ -33,16 +33,24 @@ export class OpenClauseClient {
   }
 
   async submitToolCall(request: ToolCallRequest): Promise<ToolCallResponse> {
-    return this.post<ToolCallResponse>("/v1/tool-calls", request);
+    if (request.risk_score !== undefined) {
+      if (!Number.isInteger(request.risk_score)) {
+        throw new OpenClauseError("risk_score must be an integer");
+      }
+      if (request.risk_score < 0 || request.risk_score > 10) {
+        throw new OpenClauseError("risk_score must be between 0 and 10");
+      }
+    }
+    return this.post<ToolCallResponse>("/v1/toolcalls", request);
   }
 
   async getEvent(eventId: string): Promise<ToolCallResponse> {
-    return this.get<ToolCallResponse>(`/v1/tool-calls/${encodeURIComponent(eventId)}`);
+    return this.get<ToolCallResponse>(`/v1/toolcalls/${encodeURIComponent(eventId)}`);
   }
 
   async execute(eventId: string): Promise<ToolCallResponse> {
     return this.post<ToolCallResponse>(
-      `/v1/tool-calls/${encodeURIComponent(eventId)}/execute`,
+      `/v1/toolcalls/${encodeURIComponent(eventId)}/execute`,
       {},
     );
   }
@@ -57,20 +65,49 @@ export class OpenClauseClient {
 
     let attempt = 0;
     while (Date.now() < deadline) {
-      const response = await this.getEvent(eventId);
-      if (response.decision !== "approve") {
-        return response;
+      try {
+        // Execute is the source-of-truth: it will return 200 once the grant exists,
+        // and return 409 with an "awaiting approval" conflict until then.
+        return await this.execute(eventId);
+      } catch (err: any) {
+        if (!(err instanceof APIError)) throw err;
+
+        const isAwaitingApproval =
+          err.statusCode === 409 &&
+          (() => {
+            const body = err.responseBody;
+            if (typeof body === "string") {
+              try {
+                const parsed = JSON.parse(body);
+                const msg = parsed?.message ?? parsed?.error;
+                return typeof msg === "string" && msg.toLowerCase().includes("awaiting approval");
+              } catch {
+                // fallthrough
+              }
+            }
+            return err.message.toLowerCase().includes("awaiting approval");
+          })();
+
+        // Retry only when the event is still awaiting approval.
+        if (isAwaitingApproval) {
+          attempt++;
+          const backoff = Math.min(
+            pollIntervalMs * Math.pow(2, attempt - 1),
+            30_000,
+          );
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          await this.sleep(Math.min(backoff, remaining));
+          continue;
+        }
+
+        // Permanent failures: do not retry.
+        if (err.statusCode === 400 || err.statusCode === 403 || err.statusCode === 404) {
+          throw err;
+        }
+
+        throw err;
       }
-
-      attempt++;
-      const backoff = Math.min(
-        pollIntervalMs * Math.pow(2, attempt - 1),
-        30_000,
-      );
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-
-      await this.sleep(Math.min(backoff, remaining));
     }
 
     throw new TimeoutError(

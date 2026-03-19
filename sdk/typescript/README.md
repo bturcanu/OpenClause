@@ -18,28 +18,26 @@ npm install openclause
 import { OpenClauseClient, ToolCallRequest } from "openclause";
 
 const client = new OpenClauseClient({
-  baseUrl: "https://api.openclause.dev",
+  baseUrl: "http://localhost:8080",
   apiKey: process.env.OPENCLAUSE_API_KEY!,
 });
 
 const request: ToolCallRequest = {
-  tenant_id: "t_acme",
-  agent_id: "agent_billing",
-  tool: "stripe",
-  action: "refund",
+  tenant_id: "<tenant_id>",
+  agent_id: "<agent_id>",
+  tool: "slack",
+  action: "msg.post",
   idempotency_key: OpenClauseClient.generateIdempotencyKey(),
-  params: { charge_id: "ch_abc123", amount: 5000 },
-  resource: "charges/ch_abc123",
-  risk_score: 0.7,
+  params: { channel: "#general", text: "Hello from OpenClause!" },
+  risk_score: 3,
 };
 
 const response = await client.submitToolCall(request);
 
 switch (response.decision) {
   case "allow":
-    console.log("Tool call allowed, executing...");
-    const result = await client.execute(response.event_id);
-    console.log("Result:", result);
+    console.log("Tool call allowed.");
+    console.log("Result:", response.result);
     break;
 
   case "approve":
@@ -83,7 +81,7 @@ try {
 | `submitToolCall(request)` | Submit a tool call for policy evaluation |
 | `getEvent(eventId)` | Retrieve the status of a tool call event |
 | `execute(eventId)` | Execute a previously approved tool call |
-| `waitForApproval(eventId, options?)` | Poll until approval is granted or denied |
+| `waitForApproval(eventId, options?)` | Retry `execute()` until it succeeds (409 "awaiting approval" -> retry) |
 | `generateIdempotencyKey()` | Generate a UUID v4 idempotency key (static) |
 
 ### Configuration

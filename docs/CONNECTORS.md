@@ -24,7 +24,7 @@ Remote connectors take precedence: if a tool name is registered both ways, the H
 | Tool | Binary | Actions | Env vars |
 |------|--------|---------|----------|
 | `slack` | `cmd/connector-slack` | `msg.post`, `channel.list`, `approval.request` | `SLACK_BOT_TOKEN` |
-| `jira` | `cmd/connector-jira` | `issue.create`, `issue.transition`, `issue.comment`, `issue.get` | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` |
+| `jira` | `cmd/connector-jira` | `issue.create`, `issue.list` | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` |
 
 ### Built-in connectors (`pkg/connectors/builtins/`)
 

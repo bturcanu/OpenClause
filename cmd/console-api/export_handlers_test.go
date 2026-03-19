@@ -160,3 +160,79 @@ func TestEncodeBundleJSON_PropagatesWriterErrors(t *testing.T) {
 		t.Fatal("expected encoder error, got nil")
 	}
 }
+
+func TestHandleExportEventsCSV_MissingTenantIDReturnsStructuredAPIError(t *testing.T) {
+	const since = "2020-01-01T00:00:00Z"
+	const until = "2020-01-02T00:00:00Z"
+
+	api := newTestConsoleAPI(&fakeExportStore{})
+
+	claims := &console.JWTClaims{
+		Roles: []string{"platform_admin"},
+	}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/events/export/csv?since="+since+"&until="+until,
+		nil,
+	).WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	api.handleExportEventsCSV(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var apiErr types.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &apiErr); err != nil {
+		t.Fatalf("expected JSON APIError, got decode error=%v body=%s", err, rr.Body.String())
+	}
+	if apiErr.Code != "BAD_REQUEST" {
+		t.Fatalf("expected BAD_REQUEST, got %s", apiErr.Code)
+	}
+	if apiErr.Message != "tenant_id required for CSV export" {
+		t.Fatalf("expected message %q, got %q", "tenant_id required for CSV export", apiErr.Message)
+	}
+	if apiErr.Retryable {
+		t.Fatalf("expected retryable=false")
+	}
+}
+
+func TestHandleExportBundle_MissingTenantIDReturnsStructuredAPIError(t *testing.T) {
+	const since = "2020-01-01T00:00:00Z"
+	const until = "2020-01-02T00:00:00Z"
+
+	api := newTestConsoleAPI(&fakeExportStore{})
+
+	claims := &console.JWTClaims{
+		Roles: []string{"platform_admin"},
+	}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/reports/export/bundle?since="+since+"&until="+until,
+		nil,
+	).WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	api.handleExportBundle(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var apiErr types.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &apiErr); err != nil {
+		t.Fatalf("expected JSON APIError, got decode error=%v body=%s", err, rr.Body.String())
+	}
+	if apiErr.Code != "BAD_REQUEST" {
+		t.Fatalf("expected BAD_REQUEST, got %s", apiErr.Code)
+	}
+	if apiErr.Message != "tenant_id required" {
+		t.Fatalf("expected message %q, got %q", "tenant_id required", apiErr.Message)
+	}
+	if apiErr.Retryable {
+		t.Fatalf("expected retryable=false")
+	}
+}
