@@ -58,7 +58,18 @@ SQL
 ```
 
 > **Hashes above**: API key hash is `SHA-256("sk-test-key-1")`.
-> Your `.env` already has `API_KEYS=tenant1:sk-test-key-1` so the in-memory keystore also works.
+>
+> IMPORTANT: `API_KEYS` must map to the *actual* `tenant_id` values present in your database.
+> If you used the setup wizard, your tenant id is likely a UUID (not `tenant1`), so update
+> `API_KEYS` accordingly.
+
+## Token handling note (dev)
+
+- Invite + password reset tokens are stored in the database as keyed HMAC hashes (not plaintext).
+- The `token` you receive (e.g. from `POST /admin/invites`) is still the raw value the accept/confirm endpoints require.
+- Console-api may log raw invite/reset token URLs in development. Control this with `CONSOLE_DEV_LOG_RAW_TOKENS`:
+  - `true` (default): log raw token URLs for easier local testing
+  - `false`: suppress raw token URLs in logs
 
 On Windows PowerShell, pipe the SQL through docker directly:
 
@@ -85,6 +96,17 @@ Save the `token` from the response:
 export TOKEN="<paste token here>"
 ```
 
+Determine your `TENANT_ID` (copy from the `/admin/tenants` response):
+```bash
+curl -s "http://localhost:8090/admin/tenants" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Set:
+```bash
+export TENANT_ID="<paste tenant id>"
+```
+
 ## 4. Create a Tenant via Console (optional)
 
 ```bash
@@ -101,7 +123,7 @@ curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant1",
+    "tenant_id": "$TENANT_ID",
     "agent_id": "agent-1",
     "tool": "slack",
     "action": "channel.list",
@@ -119,7 +141,7 @@ curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant1",
+    "tenant_id": "$TENANT_ID",
     "agent_id": "agent-1",
     "tool": "database",
     "action": "query.run",
@@ -137,7 +159,7 @@ curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant1",
+    "tenant_id": "$TENANT_ID",
     "agent_id": "agent-1",
     "tool": "jira",
     "action": "issue.delete",
@@ -160,7 +182,7 @@ export EVENT_ID="<paste event_id>"
 First, list pending approvals to get the approval request ID:
 
 ```bash
-curl -s "http://localhost:8081/v1/approvals/pending?tenant_id=tenant1" \
+curl -s "http://localhost:8081/v1/approvals/pending?tenant_id=$TENANT_ID" \
   -H "X-Internal-Token: dev-internal-token-change-me"
 ```
 
@@ -170,7 +192,7 @@ Save the `id` of the pending request:
 export APPROVAL_ID="<paste id>"
 ```
 
-Approve it (you need the approver assigned as `role='approver'` for `tenant1` in the Console UI):
+Approve it (you need the approver assigned as `role='approver'` for your `$TENANT_ID` in the Console UI):
 
 ```bash
 curl -s "http://localhost:8081/v1/approvals/requests/$APPROVAL_ID/approve" \
@@ -179,7 +201,7 @@ curl -s "http://localhost:8081/v1/approvals/requests/$APPROVAL_ID/approve" \
   -d '{"approver":"<platform-admin-email>","max_uses":1}'
 ```
 
-> If you get `403 approver is not allowed for tenant`, confirm the approver user exists in the Console and has the `approver` role assigned for `tenant1`.
+> If you get `403 approver is not allowed for tenant`, confirm the approver user exists in the Console and has the `approver` role assigned for `$TENANT_ID`.
 
 ## 9. Execute the Approved Tool-Call
 
@@ -191,13 +213,17 @@ curl -s "http://localhost:8080/v1/toolcalls/$EVENT_ID/execute" \
 
 Expected: `"decision": "allow"`, `"reason": "approved execution"`, with a `result`.
 
+Alternatively, use the Console UI:
+- Open the Approvals queue and select the approved request.
+- Use the modal's **Copy execute command** helper and paste your tenant-scoped API key.
+
 Call it again to verify idempotent replay returns the same `event_id`.
 
 ## 10. View Audit Trail via Console API
 
 ```bash
 # List events
-curl -s "http://localhost:8090/admin/events?tenant_id=tenant1" \
+curl -s "http://localhost:8090/admin/events?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
 # Get event detail
@@ -205,7 +231,7 @@ curl -s "http://localhost:8090/admin/events/$EVENT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
 # List sessions
-curl -s "http://localhost:8090/admin/sessions?tenant_id=tenant1" \
+curl -s "http://localhost:8090/admin/sessions?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -219,7 +245,7 @@ for i in $(seq 1 105); do
     http://localhost:8080/v1/toolcalls \
     -H "X-API-Key: sk-test-key-1" \
     -H "Content-Type: application/json" \
-    -d "{\"tenant_id\":\"tenant1\",\"agent_id\":\"agent-1\",\"tool\":\"slack\",\"action\":\"channel.list\",\"risk_score\":1,\"idempotency_key\":\"rate-$i\"}"
+    -d "{\"tenant_id\":\"$TENANT_ID\",\"agent_id\":\"agent-1\",\"tool\":\"slack\",\"action\":\"channel.list\",\"risk_score\":1,\"idempotency_key\":\"rate-$i\"}"
 done
 ```
 
@@ -237,8 +263,8 @@ Verify that no `base_url` fields are present (internal URLs are no longer leaked
 ## 13. Disabled Tenant
 
 ```bash
-# Disable tenant1 via console
-curl -s "http://localhost:8090/admin/tenants/tenant1/status" \
+# Disable tenant via console
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/status" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status":"disabled"}'
@@ -247,10 +273,10 @@ curl -s "http://localhost:8090/admin/tenants/tenant1/status" \
 curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
-  -d '{"tenant_id":"tenant1","agent_id":"agent-1","tool":"slack","action":"channel.list","risk_score":1,"idempotency_key":"disabled-test"}'
+  -d '{"tenant_id":"'$TENANT_ID'","agent_id":"agent-1","tool":"slack","action":"channel.list","risk_score":1,"idempotency_key":"disabled-test"}'
 
 # Re-enable
-curl -s "http://localhost:8090/admin/tenants/tenant1/status" \
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/status" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status":"active"}'
@@ -266,7 +292,7 @@ curl -s http://localhost:8090/admin/policy/simulate \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant1",
+    "tenant_id": "'"$TENANT_ID"'",
     "agent_id": "agent-1",
     "tool": "jira",
     "action": "issue.delete",
@@ -300,7 +326,7 @@ the real curl binary, or use `Invoke-RestMethod` natively.
 
 ```powershell
 @'
-{"tenant_id":"tenant1","agent_id":"agent-1","tool":"slack","action":"channel.list","risk_score":1,"idempotency_key":"test-allow-1"}
+{"tenant_id":"<TENANT_ID>","agent_id":"agent-1","tool":"slack","action":"channel.list","risk_score":1,"idempotency_key":"test-allow-1"}
 '@ | Set-Content -NoNewline toolcall.json
 
 curl.exe -s "http://localhost:8080/v1/toolcalls" `
@@ -322,7 +348,7 @@ $TOKEN = $resp.token
 
 ```powershell
 @'{"status":"disabled"}'@ | Set-Content -NoNewline tenant-disable.json
-curl.exe -s "http://localhost:8090/admin/tenants/tenant1/status" `
+curl.exe -s "http://localhost:8090/admin/tenants/<TENANT_ID>/status" `
   -H "Authorization: Bearer $TOKEN" `
   -H "Content-Type: application/json" `
   --data-binary "@tenant-disable.json"

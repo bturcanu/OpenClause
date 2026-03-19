@@ -109,7 +109,8 @@ export default function Events() {
       const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = objectUrl
-      a.download = 'audit-bundle.zip'
+      // `GET /admin/reports/export/bundle` returns JSON (not a zip archive).
+      a.download = 'audit-bundle.json'
       a.click()
       URL.revokeObjectURL(objectUrl)
     } catch (err: any) {
