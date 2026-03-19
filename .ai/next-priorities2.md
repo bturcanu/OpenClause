@@ -116,7 +116,7 @@ This document tracks implementation work for OpenClause “Approver Management +
   - Acceptance criteria:
     - tenant_admin can accept an invite for `tenant_id` and immediately create API keys for that tenant
     - tenant_admin cannot manage other tenants' API keys (verified via RBAC tests)
-  - Commit links: `TBD`
+  - Commit links: `021a79d`
   - Verification notes:
     - `go test ./... -count=1` (PASS)
     - `go test -race ./... -count=1` (PASS)
