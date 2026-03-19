@@ -95,6 +95,16 @@ func main() {
 	// CRIT-01: Parse allowed CORS origins from env.
 	allowedOrigins := parseCORSOrigins(os.Getenv("CONSOLE_CORS_ORIGINS"))
 
+	authProvider, err := authProviderFromEnv(AuthProviderDeps{
+		log:    log,
+		store:  store,
+		jwtCfg: jwtCfg,
+	})
+	if err != nil {
+		log.Error("auth provider init failed", "error", err)
+		os.Exit(1)
+	}
+
 	api := &ConsoleAPI{
 		log:                log,
 		store:              store,
@@ -103,6 +113,7 @@ func main() {
 		approvalsStore:     approvalsStore,
 		approverAuth:       approverAuth,
 		approverAuthSource: allowlistSource,
+		authProvider:       authProvider,
 		devLogRawTokens:   devLogRawTokens,
 	}
 
@@ -235,6 +246,7 @@ type ConsoleAPI struct {
 	store              *console.Store
 	exportStore        exportEventsStore
 	jwtCfg             console.JWTConfig
+	authProvider       AuthProvider
 	approvalsStore     *approvals.Store
 	approverAuth       *approvals.ApproverAuthorizer
 	approverAuthSource string
@@ -377,49 +389,20 @@ func (api *ConsoleAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, roles, err := api.store.AuthenticateUser(r.Context(), in.Email, in.Password)
+	res, err := api.authProvider.Login(r.Context(), AuthLoginInput{
+		Email:    in.Email,
+		Password: in.Password,
+	})
 	if err != nil {
+		if ae, ok := err.(*AuthProviderError); ok {
+			writeError(w, ae.Status, ae.Message)
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	roleNames := make([]string, len(roles))
-	var scopedTenant string
-	for i, role := range roles {
-		roleNames[i] = role.Role
-		if role.TenantID != nil {
-			scopedTenant = *role.TenantID
-		}
-	}
-
-	// HIGH-02: Reject non-platform_admin users who have no tenant scope.
-	if scopedTenant == "" && !containsRole(roleNames, "platform_admin") {
-		writeError(w, http.StatusForbidden, "user has no tenant assignment")
-		return
-	}
-
-	token, err := console.GenerateToken(api.jwtCfg, console.JWTClaims{
-		Sub:    user.ID,
-		Email:  user.Email,
-		Name:   user.Name,
-		Roles:  roleNames,
-		Tenant: scopedTenant,
-	})
-	if err != nil {
-		api.log.Error("generate token failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to generate token")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token": token,
-		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
-			"name":  user.Name,
-			"roles": roleNames,
-		},
-	})
+	writeJSON(w, http.StatusOK, res)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
