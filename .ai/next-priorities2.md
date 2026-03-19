@@ -178,10 +178,41 @@ This document tracks implementation work for OpenClause “Approver Management +
 ## Tier 3 — Polish (9 → 12)
 
 ### (9) Dashboard & analytics improvements
-- [ ] Trend charts, risk heatmap, per-agent breakdown, onboarding checklist
-  - Scope: UI charts + API fields as needed
-  - Acceptance criteria: dashboard renders without regressions; data matches backend
-  - Commit links: ``
+- [x] Trend charts, risk heatmap, per-agent breakdown, onboarding checklist
+  - Scope: add tenant-scoped analytics summary endpoint + render charts in Tenant Detail “Analytics” tab
+  - Files/services:
+    - Backend: `pkg/console/store.go`, `cmd/console-api/tenant_analytics_handlers.go`, `cmd/console-api/main.go` (+ tests)
+    - Frontend: `web/console/src/pages/TenantDetail.tsx`
+    - Docs: `docs/LOCAL_TESTING.md`, `README.md`
+  - API changes:
+    - `GET /admin/tenants/{tenant_id}/analytics/summary?range=24h&bucket_minutes=60&top_agents=5`
+  - UI changes:
+    - Tenant Detail -> `Analytics` tab with range selector and:
+      - Allow/Deny/Approve trend buckets
+      - Risk heatmap (risk_score 0..10)
+      - Per-agent breakdown (top agents)
+      - Onboarding checklist widget (has_api_key/has_approver/has_toolcall/has_approval/has_execution)
+  - Acceptance criteria:
+    - Tenant selection drives analytics queries (tenant id comes from `/tenants/:id` route + explicit smoke-selected tenant id)
+    - Charts populate without regressions and totals match DB counts for the same 24h window
+  - Commit links: `e0d5ac1`
+  - Verification notes:
+    - `go test ./... -count=1` (PASS)
+    - `go test -race ./... -count=1` (PASS)
+    - `docker run --rm -v \"$PWD/policy\":/policy openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v` (PASS; 17/17)
+    - `web/console`: `npm install && npm run build` (PASS)
+    - `sdk/typescript`: `npm install && npm run build` (PASS)
+    - Smoke (curl) for tenant `338e57f1-0114-45b6-8c7f-34871c04601c`:
+      - toolcalls:
+        - allow `event_id=1ff6e3f8-b5a7-47f0-896e-5d1794840bb7`
+        - deny `event_id=751be1e3-6320-433c-8ebb-f2bc85b0337e`
+        - approve `event_id=b4427ea9-95af-40c7-8718-09923ed078bb` (approval_id=`fa8149f5-49e5-4120-9d85-845a85c45fe0`)
+      - approve+execute:
+        - execution `event_id=4546a60f-ce4f-465d-8ff4-7832bc049df1` with `result.status=success` (audit trail verified via `GET /admin/events/{execution_event_id}`)
+      - analytics:
+        - `analytics/summary` totals: `total_events=37 allow=10 deny=17 approve=10`
+        - `onboarding_checklist`: all `true`
+        - DB totals (24h) matched: `37|10|17|10`
 
 ### (10) API key lifecycle UX
 - [ ] Rotation workflow + last-used + expiry warnings
