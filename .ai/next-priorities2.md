@@ -136,7 +136,7 @@ This document tracks implementation work for OpenClause “Approver Management +
   - API changes: `GET/PUT /admin/tenants/{tenant_id}/notification-config` (tenant_admin)
   - UI changes: API Keys tab shows notification routing form and saves via `PUT`
   - Acceptance criteria: tenant_admin updates config; SSRF-protected webhook validation; approvals created afterwards use updated routing (verified via approve+execute after PUT; outbox recipients not directly asserted)
-  - Commit links: `TBD (not committed in this step)`
+  - Commit links: `5286d3f`
   - Verification notes:
     - `go test ./... -count=1` (PASS)
     - `go test -race ./... -count=1` (PASS)
