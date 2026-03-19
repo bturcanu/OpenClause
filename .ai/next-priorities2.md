@@ -147,13 +147,33 @@ This document tracks implementation work for OpenClause “Approver Management +
     - Curl smoke (approve+execute): toolcall decision=`approve` event_id=`9c09cfa3-caf9-4e77-9e51-5f9df8bc46bf`; approval_id=`033a3c46-5047-43b5-bb8f-c6e580109977`; gateway execute_status=200; audit `GET /admin/events/{event_id}` event_id match=true
 
 ### (8) Complete alert system
-- [ ] Ensure alert rules persisted + evaluation worker skeleton exists
-  - Scope: minimal worker + deny spike rule hook (if easy)
-  - Files/services: alert persistence + worker/cron
-  - API changes: None required
-  - UI changes: alert rule editor/preview improvements if needed
-  - Acceptance criteria: rules persist; worker skeleton runs and emits alert events (even if minimal)
-  - Commit links: ``
+- [x] Ensure alert rules persisted + evaluation worker runs
+  - Scope: end-to-end tenant `deny_spike` alert system (CRUD rules + emitted events + notification dispatch) with UI visibility
+  - Files/services: `cmd/alert-worker/*`, `cmd/console-api/alerts_handlers.go` + tests, `pkg/alerts/*`, `pkg/console/store.go`, `cmd/console-api/main.go`, `migrations/001_initial.sql`, `web/console/src/pages/TenantDetail.tsx`, `deploy/docker-compose.yml`, plus docs (`README.md`, `docs/LOCAL_TESTING.md`)
+  - API changes: tenant-scoped CRUD + event listing:
+    - `GET/POST/PUT/DELETE /admin/tenants/{tenant_id}/alerts/rules`
+    - `GET /admin/tenants/{tenant_id}/alerts/events`
+    - Legacy global routes preserved (`/admin/alerts/*`)
+  - UI changes: Tenant Detail “Alerts” tab (create/edit/enable/disable deny_spike rules; list recent alert events)
+  - Acceptance criteria: rules persist; worker evaluates denies spike per tenant window; alert events are created and notifications are dispatched via per-tenant routing
+  - Commit links: `f429ac6`
+  - Verification notes:
+    - Go tests: `go test ./... -count=1` (PASS)
+    - Go tests (race): `go test -race ./... -count=1` (PASS)
+    - Policy tests: `docker run --rm -v \"$PWD/policy\":/policy openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v` (PASS, 17/17)
+    - Web build: `web/console: npm install && npm run build` (PASS)
+    - TS SDK build: `sdk/typescript: npm install && npm run build` (PASS)
+    - Smoke test (tenant UUID based on `sk-test-key-1`):
+      - tenant UUID: `338e57f1-0114-45b6-8c7f-34871c04601c`
+      - notification-config PUT: `{"notify":[{"kind":"slack","channel":"alerts"}]}`
+      - created rule:
+        - `rule_id=3272d815-08e8-46e7-9964-bb9d54442b8f` name=`deny-spike-smoke-20260319192000` config=`n=3,m_minutes=5`
+      - generated 3 deny toolcalls (decision=`deny`):
+        - tool event_ids: `5ae4df8f-4fa6-482c-a607-73fdfb685ebe`, `a955e30f-049f-4721-a64c-9ab3b52eee18`, `143c9b03-3b50-4ecc-af82-73aea1c22499`
+      - waited ~45s, then verified via console-api:
+        - `GET /admin/tenants/$TENANT_ID/alerts/events?limit=50`
+        - found alert event `alert_event_id=49ee32c4-9806-4559-a003-253cb759f1fd`
+        - `status=sent`, `delivered_at=2026-03-19T19:20:05.713147Z`, message includes `deny spike: 3 denies`
 
 ## Tier 3 — Polish (9 → 12)
 
