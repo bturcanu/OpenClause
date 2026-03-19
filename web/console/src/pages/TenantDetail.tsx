@@ -42,6 +42,35 @@ interface TenantNotificationConfig {
   }>
 }
 
+interface AlertRuleConfigJSON {
+  n: number
+  m_minutes: number
+}
+
+interface AlertRule {
+  id: string
+  tenant_id: string
+  name: string
+  kind: string
+  enabled: boolean
+  config_json: AlertRuleConfigJSON
+  created_at: string
+  updated_at: string
+}
+
+interface AlertEvent {
+  id: string
+  rule_id: string
+  tenant_id: string
+  severity: string
+  message: string
+  context_json?: Record<string, unknown>
+  status: string
+  delivered_at?: string
+  attempt_count?: number
+  created_at: string
+}
+
 export default function TenantDetail() {
   const { id } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
@@ -64,15 +93,25 @@ export default function TenantDetail() {
   const [approverName, setApproverName] = useState('')
 
   const [allowlistSource, setAllowlistSource] = useState<string>('db')
-  const [activeTab, setActiveTab] = useState<'agents' | 'api_keys' | 'approvers'>('agents')
+  const [activeTab, setActiveTab] = useState<'agents' | 'api_keys' | 'approvers' | 'alerts'>('agents')
 
   const [notifForm, setNotifForm] = useState({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
   const [savingNotif, setSavingNotif] = useState(false)
   const [notifError, setNotifError] = useState('')
 
+  const [alertRules, setAlertRules] = useState<AlertRule[]>([])
+  const [alertEvents, setAlertEvents] = useState<AlertEvent[]>([])
+  const [alertsLoading, setAlertsLoading] = useState(false)
+  const [alertsError, setAlertsError] = useState('')
+
+  const [alertRuleForm, setAlertRuleForm] = useState({ name: '', n: 3, mMinutes: 5, enabled: true })
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null)
+  const [editRuleForm, setEditRuleForm] = useState({ name: '', n: 3, mMinutes: 5, enabled: true })
+  const [alertRuleSaving, setAlertRuleSaving] = useState(false)
+
   useEffect(() => {
     const tab = searchParams.get('tab')
-    if (tab === 'agents' || tab === 'api_keys' || tab === 'approvers') {
+    if (tab === 'agents' || tab === 'api_keys' || tab === 'approvers' || tab === 'alerts') {
       setActiveTab(tab)
     } else {
       setActiveTab('agents')
@@ -89,6 +128,9 @@ export default function TenantDetail() {
     setApprovers([])
     setNotificationConfig(null)
     setNotifError('')
+    setAlertRules([])
+    setAlertEvents([])
+    setAlertsError('')
     setNotifForm({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
     setAllowlistSource('db')
 
@@ -131,6 +173,111 @@ export default function TenantDetail() {
   }
 
   useEffect(() => { fetchAll() }, [id])
+
+  async function fetchAlerts() {
+    setAlertsLoading(true)
+    setAlertsError('')
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const [rulesResp, eventsResp] = await Promise.all([
+        api.get(`/admin/tenants/${id}/alerts/rules`).catch(() => []),
+        api.get(`/admin/tenants/${id}/alerts/events?limit=50&since=${encodeURIComponent(since)}`).catch(() => []),
+      ])
+      setAlertRules(Array.isArray(rulesResp) ? rulesResp as AlertRule[] : [])
+      setAlertEvents(Array.isArray(eventsResp) ? eventsResp as AlertEvent[] : [])
+    } catch (err: any) {
+      setAlertsError(err?.message || 'Failed to load alerts')
+    } finally {
+      setAlertsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'alerts') void fetchAlerts()
+  }, [activeTab, id])
+
+  async function createAlertRule(e: FormEvent) {
+    e.preventDefault()
+    setAlertRuleSaving(true)
+    setAlertsError('')
+    try {
+      if (!id) throw new Error('tenant id missing')
+      await api.post(`/admin/tenants/${id}/alerts/rules`, {
+        name: alertRuleForm.name,
+        kind: 'deny_spike',
+        enabled: alertRuleForm.enabled,
+        config_json: { n: alertRuleForm.n, m_minutes: alertRuleForm.mMinutes },
+      })
+      setAlertRuleForm({ name: '', n: 3, mMinutes: 5, enabled: true })
+      await fetchAlerts()
+    } catch (err: any) {
+      setAlertsError(err?.message || 'Failed to create alert rule')
+    } finally {
+      setAlertRuleSaving(false)
+    }
+  }
+
+  function startEditRule(rule: AlertRule) {
+    setEditingRuleId(rule.id)
+    setEditRuleForm({
+      name: rule.name,
+      n: rule.config_json.n,
+      mMinutes: rule.config_json.m_minutes,
+      enabled: rule.enabled,
+    })
+  }
+
+  async function saveEditRule() {
+    if (!editingRuleId) return
+    setAlertRuleSaving(true)
+    setAlertsError('')
+    try {
+      await api.put(`/admin/tenants/${id}/alerts/rules/${editingRuleId}`, {
+        name: editRuleForm.name,
+        kind: 'deny_spike',
+        enabled: editRuleForm.enabled,
+        config_json: { n: editRuleForm.n, m_minutes: editRuleForm.mMinutes },
+      })
+      setEditingRuleId(null)
+      await fetchAlerts()
+    } catch (err: any) {
+      setAlertsError(err?.message || 'Failed to update alert rule')
+    } finally {
+      setAlertRuleSaving(false)
+    }
+  }
+
+  async function setRuleEnabled(rule: AlertRule, enabled: boolean) {
+    setAlertRuleSaving(true)
+    setAlertsError('')
+    try {
+      await api.put(`/admin/tenants/${id}/alerts/rules/${rule.id}`, {
+        name: rule.name,
+        kind: 'deny_spike',
+        enabled,
+        config_json: { n: rule.config_json.n, m_minutes: rule.config_json.m_minutes },
+      })
+      await fetchAlerts()
+    } catch (err: any) {
+      setAlertsError(err?.message || 'Failed to update rule')
+    } finally {
+      setAlertRuleSaving(false)
+    }
+  }
+
+  async function deleteAlertRule(ruleID: string) {
+    setAlertRuleSaving(true)
+    setAlertsError('')
+    try {
+      await api.delete(`/admin/tenants/${id}/alerts/rules/${ruleID}`)
+      if (editingRuleId === ruleID) setEditingRuleId(null)
+      await fetchAlerts()
+    } catch (err: any) {
+      setAlertsError(err?.message || 'Failed to delete rule')
+    } finally {
+      setAlertRuleSaving(false)
+    }
+  }
 
   async function createAgent(e: FormEvent) {
     e.preventDefault()
@@ -306,6 +453,12 @@ export default function TenantDetail() {
         >
           Approvers
         </button>
+        <button
+          className={`btn btn-outline btn-sm ${activeTab === 'alerts' ? 'active' : ''}`}
+          onClick={() => setActiveTab('alerts')}
+        >
+          Alerts
+        </button>
       </div>
 
       {activeTab === 'agents' && (
@@ -458,6 +611,237 @@ export default function TenantDetail() {
                           <button className="btn btn-danger btn-sm" onClick={() => revokeKey(k.id)}>Revoke</button>
                         )}
                       </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {activeTab === 'alerts' && (
+        <>
+          <div className="section-title mt-16">Alerts</div>
+
+          {alertsError && <div className="error-msg">{alertsError}</div>}
+
+          <div className="form-card mt-16">
+            <h3>+ New deny_spike rule</h3>
+            <form onSubmit={createAlertRule}>
+              <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
+                <div className="form-group" style={{ minWidth: 240 }}>
+                  <label>Rule name</label>
+                  <input
+                    value={alertRuleForm.name}
+                    onChange={e => setAlertRuleForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g., Deny spike detector"
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ minWidth: 180 }}>
+                  <label>N (denies)</label>
+                  <input
+                    type="number"
+                    value={alertRuleForm.n}
+                    min={1}
+                    onChange={e => setAlertRuleForm(f => ({ ...f, n: parseInt(e.target.value || '0', 10) || 1 }))}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ minWidth: 220 }}>
+                  <label>M (window minutes)</label>
+                  <input
+                    type="number"
+                    value={alertRuleForm.mMinutes}
+                    min={1}
+                    onChange={e => setAlertRuleForm(f => ({ ...f, mMinutes: parseInt(e.target.value || '0', 10) || 1 }))}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ minWidth: 200 }}>
+                  <label>Enabled</label>
+                  <div style={{ marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={alertRuleForm.enabled}
+                      onChange={e => setAlertRuleForm(f => ({ ...f, enabled: e.target.checked }))}
+                    />{' '}
+                    <span style={{ fontSize: 13, color: '#334155' }}>{alertRuleForm.enabled ? 'On' : 'Off'}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                  <button className="btn btn-primary" disabled={alertRuleSaving || alertsLoading}>
+                    {alertRuleSaving ? 'Saving…' : 'Create'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div className="section-title mt-16">Alert Rules</div>
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>N</th>
+                  <th>M (minutes)</th>
+                  <th>Status</th>
+                  <th>Updated</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {alertsLoading ? (
+                  <tr>
+                    <td colSpan={6} className="loading">
+                      Loading…
+                    </td>
+                  </tr>
+                ) : alertRules.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
+                      No alert rules configured
+                    </td>
+                  </tr>
+                ) : (
+                  alertRules.map(r => (
+                    <tr key={r.id}>
+                      <td style={{ fontWeight: 600 }}>
+                        {editingRuleId === r.id ? (
+                          <input
+                            value={editRuleForm.name}
+                            onChange={e => setEditRuleForm(f => ({ ...f, name: e.target.value }))}
+                            required
+                          />
+                        ) : (
+                          r.name
+                        )}
+                      </td>
+                      <td>
+                        {editingRuleId === r.id ? (
+                          <input
+                            type="number"
+                            min={1}
+                            value={editRuleForm.n}
+                            onChange={e => setEditRuleForm(f => ({ ...f, n: parseInt(e.target.value || '0', 10) || 1 }))}
+                          />
+                        ) : (
+                          r.config_json.n
+                        )}
+                      </td>
+                      <td>
+                        {editingRuleId === r.id ? (
+                          <input
+                            type="number"
+                            min={1}
+                            value={editRuleForm.mMinutes}
+                            onChange={e => setEditRuleForm(f => ({ ...f, mMinutes: parseInt(e.target.value || '0', 10) || 1 }))}
+                          />
+                        ) : (
+                          r.config_json.m_minutes
+                        )}
+                      </td>
+                      <td>
+                        {editingRuleId === r.id ? (
+                          <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={editRuleForm.enabled}
+                              onChange={e => setEditRuleForm(f => ({ ...f, enabled: e.target.checked }))}
+                            />
+                            <span style={{ fontSize: 13, color: '#334155' }}>{editRuleForm.enabled ? 'On' : 'Off'}</span>
+                          </label>
+                        ) : r.enabled ? (
+                          <span className="badge badge-green">Active</span>
+                        ) : (
+                          <span className="badge badge-gray">Disabled</span>
+                        )}
+                      </td>
+                      <td>{formatDate(r.updated_at, 'date')}</td>
+                      <td style={{ width: 280 }}>
+                        {editingRuleId === r.id ? (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            <button className="btn btn-primary btn-sm" onClick={saveEditRule}>
+                              Save
+                            </button>
+                            <button className="btn btn-outline btn-sm" onClick={() => setEditingRuleId(null)}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            <button className="btn btn-outline btn-sm" onClick={() => startEditRule(r)}>
+                              Edit
+                            </button>
+                            <button
+                              className={`btn btn-sm ${r.enabled ? 'btn-outline-danger' : 'btn-outline-success'}`}
+                              onClick={() => setRuleEnabled(r, !r.enabled)}
+                              disabled={alertRuleSaving}
+                            >
+                              {r.enabled ? 'Disable' : 'Enable'}
+                            </button>
+                            <button className="btn btn-danger btn-sm" onClick={() => deleteAlertRule(r.id)} disabled={alertRuleSaving}>
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="section-title mt-16">Alert Events</div>
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>Status</th>
+                  <th>Severity</th>
+                  <th>Message</th>
+                  <th>Fired</th>
+                  <th>Delivered</th>
+                </tr>
+              </thead>
+              <tbody>
+                {alertsLoading ? (
+                  <tr>
+                    <td colSpan={6} className="loading">
+                      Loading…
+                    </td>
+                  </tr>
+                ) : alertEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
+                      No alert events yet
+                    </td>
+                  </tr>
+                ) : (
+                  alertEvents.map(ev => (
+                    <tr key={ev.id}>
+                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{ev.rule_id.slice(0, 8)}…</td>
+                      <td>
+                        {ev.status === 'sent' ? (
+                          <span className="badge badge-green">Sent</span>
+                        ) : ev.status === 'pending' ? (
+                          <span className="badge badge-yellow">Pending</span>
+                        ) : (
+                          <span className="badge badge-gray">{ev.status}</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${ev.severity === 'critical' ? 'badge-red' : ev.severity === 'warning' ? 'badge-yellow' : 'badge-gray'}`}>
+                          {ev.severity}
+                        </span>
+                      </td>
+                      <td>{ev.message}</td>
+                      <td>{formatDate(ev.created_at, 'date')}</td>
+                      <td>{formatDate(ev.delivered_at || null, 'date')}</td>
                     </tr>
                   ))
                 )}

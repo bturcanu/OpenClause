@@ -108,6 +108,7 @@ func main() {
 	api := &ConsoleAPI{
 		log:                     log,
 		store:                   store,
+		alertsStore:            store,
 		notificationConfigStore: store,
 		exportStore:             store,
 		jwtCfg:                  jwtCfg,
@@ -208,6 +209,14 @@ func main() {
 		r.Post("/admin/policy/versions", api.requireRole("tenant_admin", api.handleCreatePolicyVersion))
 		r.Post("/admin/policy/simulate", api.handleSimulatePolicy)
 
+		// Alerts (Tier 2 item 8)
+		r.Get("/admin/tenants/{tenant_id}/alerts/rules", api.requireTenantRole("tenant_admin", api.handleListTenantAlertRules))
+		r.Post("/admin/tenants/{tenant_id}/alerts/rules", api.requireTenantRole("tenant_admin", api.handleCreateTenantAlertRule))
+		r.Put("/admin/tenants/{tenant_id}/alerts/rules/{rule_id}", api.requireTenantRole("tenant_admin", api.handleUpdateTenantAlertRule))
+		r.Delete("/admin/tenants/{tenant_id}/alerts/rules/{rule_id}", api.requireTenantRole("tenant_admin", api.handleDeleteTenantAlertRule))
+		r.Get("/admin/tenants/{tenant_id}/alerts/events", api.requireTenantRole("tenant_admin", api.handleListTenantAlertEvents))
+
+		// Legacy (non-tenant-scoped) endpoints kept for compatibility.
 		r.Get("/admin/alerts/rules", api.handleListAlertRules)
 		r.Post("/admin/alerts/rules", api.requireRole("tenant_admin", api.handleCreateAlertRule))
 		r.Get("/admin/alerts/events", api.handleListAlertEvents)
@@ -249,6 +258,7 @@ func main() {
 type ConsoleAPI struct {
 	log                     *slog.Logger
 	store                   *console.Store
+	alertsStore            alertsStore
 	notificationConfigStore notificationConfigStore
 	exportStore             exportEventsStore
 	jwtCfg                  console.JWTConfig
@@ -268,6 +278,15 @@ type exportEventsStore interface {
 type notificationConfigStore interface {
 	GetTenantNotificationConfig(ctx context.Context, tenantID string) (*console.TenantNotificationConfig, bool, error)
 	SetTenantNotificationConfig(ctx context.Context, tenantID string, cfg console.TenantNotificationConfig) error
+}
+
+type alertsStore interface {
+	ListAlertRules(ctx context.Context, tenantID string) ([]console.AlertRule, error)
+	CreateAlertRule(ctx context.Context, rule console.AlertRule) (*console.AlertRule, error)
+	UpdateAlertRule(ctx context.Context, tenantID, ruleID, name, ruleType string, config json.RawMessage, enabled bool) error
+	DeleteAlertRule(ctx context.Context, tenantID, ruleID string) error
+	GetAlertRule(ctx context.Context, tenantID, ruleID string) (*console.AlertRule, error)
+	ListAlertEventsSince(ctx context.Context, tenantID string, since time.Time, limit int) ([]console.AlertEvent, error)
 }
 
 type claimsKey struct{}
@@ -2054,6 +2073,10 @@ func parsePagination(r *http.Request) (limit, offset int) {
 func parseSince(r *http.Request, defaultDuration time.Duration) time.Time {
 	if v := r.URL.Query().Get("since"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+		// RFC3339Nano accepts timestamps with optional fractional seconds.
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
 			return t
 		}
 	}

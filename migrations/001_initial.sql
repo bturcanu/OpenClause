@@ -325,6 +325,25 @@ CREATE TABLE IF NOT EXISTS alert_events (
 
 CREATE INDEX IF NOT EXISTS idx_alert_events_tenant ON alert_events(tenant_id, created_at DESC);
 
+-- ── Alert schema evolution (idempotent) ─────────────────────────────────────
+-- These columns support the deny_spike worker: tracking delivery + retries.
+
+ALTER TABLE alert_rules
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE alert_events
+  ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_rule_created
+  ON alert_events(rule_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_status_due
+  ON alert_events(status, next_attempt_at);
+
 -- ── Usage counters (cost/budget controls scaffold) ──────────────────────────
 
 CREATE TABLE IF NOT EXISTS usage_counters (

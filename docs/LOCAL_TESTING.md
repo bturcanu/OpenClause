@@ -213,6 +213,79 @@ Save the `event_id`:
 export EVENT_ID="<paste event_id>"
 ```
 
+## 7b. Create deny_spike Alert Rule (Tier 2 item 8)
+
+OpenClause evaluates alert rules in the background via `cmd/alert-worker` (poll interval controlled by `ALERT_WORKER_INTERVAL_SEC`, default `30s`).
+
+### 1) Ensure notification routing exists for alert delivery
+
+Alert notifications reuse the same per-tenant notification config as approval notifications (`tenants.config.notification_config`).
+
+Update routing for the target tenant as `tenant_admin` (or `platform_admin`):
+```bash
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/notification-config" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "approver_group": "",
+    "notify": [
+      { "kind": "slack", "channel": "#team-alerts" }
+    ]
+  }'
+```
+
+### 2) Create a deny_spike rule
+
+```bash
+curl -s -X POST "http://localhost:8090/admin/tenants/$TENANT_ID/alerts/rules" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "deny-spike-smoke",
+    "kind": "deny_spike",
+    "enabled": true,
+    "config_json": { "n": 3, "m_minutes": 5 }
+  }' | jq .
+```
+
+### 3) Generate 3 deny tool-calls quickly
+
+Important: for alert firing, the tenant id on the *alert rule* must match the tenant id written to `tool_events`.
+- In the default dev setup, `TENANT_ID` is `tenant1`.
+- If you used the Setup Wizard only, your tenant id may be a UUID; ensure `$TENANT_ID` matches the tenant id for the API key you use (e.g. `sk-test-key-1`).
+
+These tool-call parameters are the default “deny” example used by the local policy tests (slack `msg.update`):
+```bash
+for i in 1 2 3; do
+  curl -s -X POST "http://localhost:8080/v1/toolcalls" \
+    -H "X-API-Key: sk-test-key-1" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "tenant_id": "'"$TENANT_ID"'",
+      "agent_id": "agent-1",
+      "tool": "slack",
+      "action": "msg.update",
+      "risk_score": 1,
+      "idempotency_key": "deny-spike-smoke-'"$i"'"
+    }' | jq -r '.decision + " " + .event_id'
+done
+```
+
+Expected: each call returns `"decision": "deny"` with an `event_id`.
+
+### 4) Verify the worker emitted an alert event
+
+Wait for the worker (default 30s), then list alert events for the tenant:
+```bash
+sleep 45
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/alerts/events?limit=10" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+Expected: at least one alert event with:
+- `status` = `sent` (or `pending` if the sink temporarily fails)
+- message containing `"deny spike: 3 denies"`
+
 ## 8. Approve the Request
 
 First, list pending approvals to get the approval request ID:

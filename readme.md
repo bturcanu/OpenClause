@@ -330,8 +330,10 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/sessions/{id}/timeline` | JWT | Session event timeline |
 | `GET/POST` | `/admin/policy/versions` | JWT | List/create policy versions |
 | `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
-| `GET/POST` | `/admin/alerts/rules` | JWT | List/create alert rules |
-| `GET` | `/admin/alerts/events` | JWT | List alert events |
+| `GET/POST/PUT/DELETE` | `/admin/tenants/{tenant_id}/alerts/rules` | JWT (`tenant_admin`) | CRUD alert rules (currently `deny_spike`) |
+| `GET` | `/admin/tenants/{tenant_id}/alerts/events` | JWT (`tenant_admin`) | List alert events for a tenant |
+| `GET/POST` | `/admin/alerts/rules` | JWT | Legacy global alert rules (preserved for backward compatibility) |
+| `GET` | `/admin/alerts/events` | JWT | Legacy global alert events (preserved for backward compatibility) |
 
 ### Approvals (`:8081`)
 
@@ -698,6 +700,31 @@ When approval requests are created, notifications are enqueued transactionally a
 ### Per-tenant Notification Routing (Tier 2 item 7)
 OpenClause routes newly created approval notifications based on per-tenant configuration stored in `tenants.config.notification_config`.
 
+### Tenant Alerting (Tier 2 item 8 - deny_spike)
+OpenClause evaluates per-tenant `deny_spike` alert rules in the background (`cmd/alert-worker`).
+
+When a rule fires, OpenClause creates an `alert_events` row and dispatches notifications using the same per-tenant notification sinks as approval notifications (Slack and/or HTTPS webhooks).
+
+### How to configure Tenant Alerting (deny_spike)
+1. Configure alert notification sinks for your tenant (same API as approval notifications):
+   - `PUT /admin/tenants/{tenant_id}/notification-config` (JWT; `tenant_admin`)
+2. Create a `deny_spike` rule:
+   - `POST /admin/tenants/{tenant_id}/alerts/rules` (JWT; `tenant_admin`)
+   - Example payload:
+     ```json
+     {
+       "name": "deny-spike-smoke",
+       "kind": "deny_spike",
+       "enabled": true,
+       "config_json": { "n": 3, "m_minutes": 5 }
+     }
+     ```
+3. Generate deny tool-calls and verify alert events:
+   - `GET /admin/tenants/{tenant_id}/alerts/events?limit=10`
+
+Tuning:
+- `ALERT_WORKER_INTERVAL_SEC` (default `30`) controls how quickly new denies are evaluated.
+
 ### How to configure Per-tenant Notification Routing
 1. Log in as a `tenant_admin` for the target tenant.
 2. Update routing via the Console API:
@@ -785,6 +812,8 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `APPROVER_SLACK_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
 | `MOCK_CONNECTORS` | `true` | Use mock connectors (no real API calls) |
 | `SLACK_SIGNING_SECRET` | — | Slack signing secret for interactions endpoint |
+| `ALERT_WORKER_INTERVAL_SEC` | `30` | Poll interval for evaluating alert rules (`cmd/alert-worker`). |
+| `ALERT_WORKER_BATCH_SIZE` | `100` | Batch size for retrying pending alert events. |
 | `APPROVALS_NOTIFIER_ENABLED` | `true` | Enable transactional outbox dispatcher |
 | `WEBHOOK_SECRET_REFS` | — | Mapping `secret_ref=secret` used for HMAC signatures |
 | `EVIDENCE_S3_ENDPOINT` | `localhost:9000` | MinIO/S3 endpoint for archiver |

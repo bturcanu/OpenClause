@@ -160,6 +160,27 @@ services:
       - console-api
     restart: unless-stopped
 
+  alert-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: alert-worker
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_SSLMODE: disable
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:?INTERNAL_AUTH_TOKEN must be set}
+      CONNECTOR_SLACK_URL: http://connector-slack:8082
+      ALERT_WORKER_INTERVAL_SEC: 30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      connector-slack:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   minio_data:
