@@ -155,7 +155,7 @@ services:
       context: ../web/console
       dockerfile: Dockerfile
     ports:
-      - "3000:80"
+      - "3000:8080"
     depends_on:
       - console-api
     restart: unless-stopped

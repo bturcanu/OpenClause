@@ -30,12 +30,12 @@ decision := "approve" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in effective_read_actions
 	threshold := effective_max_risk_auto_approve
-	input.toolcall.risk_score < threshold
+	input.toolcall.risk_score <= threshold
 } else := "allow" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in effective_write_actions
 	threshold := effective_max_risk_auto_approve
-	input.toolcall.risk_score < threshold
+	input.toolcall.risk_score <= threshold
 }
 
 reason := "high risk score requires approval" if {
@@ -48,12 +48,12 @@ reason := "high risk score requires approval" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in effective_read_actions
 	threshold := effective_max_risk_auto_approve
-	input.toolcall.risk_score < threshold
+	input.toolcall.risk_score <= threshold
 } else := "write action on allowlist within tenant threshold" if {
 	tool_action := concat(".", [input.toolcall.tool, input.toolcall.action])
 	tool_action in effective_write_actions
 	threshold := effective_max_risk_auto_approve
-	input.toolcall.risk_score < threshold
+	input.toolcall.risk_score <= threshold
 }
 
 effective_max_risk_auto_approve := threshold if {

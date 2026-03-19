@@ -185,6 +185,22 @@ test_read_at_boundary_risk_4_allowed if {
 	result == "allow"
 }
 
+test_write_at_boundary_risk_5_allowed_at_threshold if {
+	# tenant1 has max_risk_auto_approve=5, risk_score 5 is at the threshold → allow
+	result := main.decision with input as {
+		"toolcall": {
+			"tenant_id": "tenant1",
+			"agent_id": "agent-1",
+			"tool": "slack",
+			"action": "msg.post",
+			"risk_score": 5,
+			"idempotency_key": "key-b2b"
+		},
+		"environment": {}
+	}
+	result == "allow"
+}
+
 test_write_at_boundary_risk_6_denied if {
 	# tenant1 has max_risk_auto_approve=5, so risk 6 exceeds threshold → deny
 	result := main.decision with input as {
@@ -285,8 +301,8 @@ test_tenant2_read_risk_2_denied if {
 	result == "allow"
 }
 
-test_tenant2_read_risk_3_denied if {
-	# tenant2 has max_risk_auto_approve=3, so risk 3 is NOT within threshold (3 < 3 is false)
+test_tenant2_read_risk_3_allowed_at_threshold if {
+	# tenant2 has max_risk_auto_approve=3, risk_score 3 is at the threshold → allow
 	result := main.decision with input as {
 		"toolcall": {
 			"tenant_id": "tenant2",
@@ -295,6 +311,22 @@ test_tenant2_read_risk_3_denied if {
 			"action": "issue.list",
 			"risk_score": 3,
 			"idempotency_key": "key-t2b"
+		},
+		"environment": {}
+	}
+	result == "allow"
+}
+
+test_tenant2_read_risk_4_denied_above_threshold if {
+	# tenant2 has max_risk_auto_approve=3, risk_score 4 exceeds threshold → deny
+	result := main.decision with input as {
+		"toolcall": {
+			"tenant_id": "tenant2",
+			"agent_id": "agent-1",
+			"tool": "jira",
+			"action": "issue.list",
+			"risk_score": 4,
+			"idempotency_key": "key-t2c"
 		},
 		"environment": {}
 	}
