@@ -1668,6 +1668,7 @@ func (api *ConsoleAPI) handleApproveRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// HIGH-01: Enforce approver allowlist
 	if !hasRole(claims, "platform_admin") {
 		if api.approverAuth != nil && !api.approverAuth.AllowEmail(r.Context(), req.TenantID, approver) {
 			writeError(w, http.StatusForbidden, "approver is not allowed for tenant")
@@ -1696,7 +1697,7 @@ func (api *ConsoleAPI) handleDenyRequest(w http.ResponseWriter, r *http.Request)
 	var in struct {
 		Reason string `json:"reason"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
