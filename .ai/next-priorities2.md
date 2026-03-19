@@ -130,13 +130,21 @@ This document tracks implementation work for OpenClause “Approver Management +
       - approve+execute: `approve_event_id=031bf987-ae15-44c6-b28e-15e9de6ba7c2`
 
 ### (7) Notification configuration UI persistence
-- [ ] Persist per-tenant notification config + surface in console UI
-  - Scope: DB storage + minimal UI + allow OPA inputs to read config
-  - Files/services: console store + alerts/notifier-related code
-  - API changes: new CRUD for config if needed
-  - UI changes: notification config screen
-  - Acceptance criteria: tenant can update config; OPA can read it in policy input
-  - Commit links: ``
+- [x] Persist per-tenant notification config + surface in console UI
+  - Scope: console-api CRUD + notifier routing override in gateway + Tenant Detail “Notification Routing” form
+  - Files/services: `pkg/console/store.go`, `cmd/console-api/notification_config.go`, `cmd/console-api/main.go`, `cmd/gateway/main.go`, `web/console/src/pages/TenantDetail.tsx`, `web/console/src/api.ts`, plus new tests in `cmd/console-api/notification_config_test.go` and `cmd/console-api/notification_config_handler_test.go`
+  - API changes: `GET/PUT /admin/tenants/{tenant_id}/notification-config` (tenant_admin)
+  - UI changes: API Keys tab shows notification routing form and saves via `PUT`
+  - Acceptance criteria: tenant_admin updates config; SSRF-protected webhook validation; approvals created afterwards use updated routing (verified via approve+execute after PUT; outbox recipients not directly asserted)
+  - Commit links: `TBD (not committed in this step)`
+  - Verification notes:
+    - `go test ./... -count=1` (PASS)
+    - `go test -race ./... -count=1` (PASS)
+    - `make policy-test` (PASS; local `opa` symlink)
+    - `web/console`: `npm install && npm run build` (PASS)
+    - `sdk/typescript`: `npm install && npm run build` (PASS)
+    - Curl smoke (alternate fresh ports to avoid stale binaries): `PUT /admin/tenants/tenant1/notification-config` code=200; `GET` returns saved `notify[0].channel`
+    - Curl smoke (approve+execute): toolcall decision=`approve` event_id=`9c09cfa3-caf9-4e77-9e51-5f9df8bc46bf`; approval_id=`033a3c46-5047-43b5-bb8f-c6e580109977`; gateway execute_status=200; audit `GET /admin/events/{event_id}` event_id match=true
 
 ### (8) Complete alert system
 - [ ] Ensure alert rules persisted + evaluation worker skeleton exists

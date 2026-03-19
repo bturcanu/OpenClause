@@ -32,6 +32,16 @@ interface Approver {
   slack_user_id?: string | null
 }
 
+interface TenantNotificationConfig {
+  approver_group?: string
+  notify?: Array<{
+    kind: string
+    url?: string
+    secret_ref?: string
+    channel?: string
+  }>
+}
+
 export default function TenantDetail() {
   const { id } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
@@ -39,6 +49,7 @@ export default function TenantDetail() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
   const [approvers, setApprovers] = useState<Approver[]>([])
+  const [notificationConfig, setNotificationConfig] = useState<TenantNotificationConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const fetchSeq = useRef(0)
@@ -54,6 +65,10 @@ export default function TenantDetail() {
 
   const [allowlistSource, setAllowlistSource] = useState<string>('db')
   const [activeTab, setActiveTab] = useState<'agents' | 'api_keys' | 'approvers'>('agents')
+
+  const [notifForm, setNotifForm] = useState({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
+  const [savingNotif, setSavingNotif] = useState(false)
+  const [notifError, setNotifError] = useState('')
 
   useEffect(() => {
     const tab = searchParams.get('tab')
@@ -72,14 +87,22 @@ export default function TenantDetail() {
     setAgents([])
     setApiKeys([])
     setApprovers([])
+    setNotificationConfig(null)
+    setNotifError('')
+    setNotifForm({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
     setAllowlistSource('db')
 
     try {
-      const [t, ag, keys, approverResp] = await Promise.all([
+      let notifCfgFetchError: string | null = null
+      const [t, ag, keys, approverResp, notifCfg] = await Promise.all([
         api.get(`/admin/tenants/${id}`).catch(() => null),
         api.get(`/admin/tenants/${id}/agents`).catch(() => []),
         api.get(`/admin/tenants/${id}/apikeys`).catch(() => []),
         api.get(`/admin/tenants/${id}/approvers`).catch(() => ({ approvers: [], allowlist_source: 'db' })),
+        api.get(`/admin/tenants/${id}/notification-config`).catch((err) => {
+          notifCfgFetchError = err?.message || 'Failed to load notification config'
+          return null
+        }),
       ])
       if (seq !== fetchSeq.current) return
       setTenant(t ?? null)
@@ -87,6 +110,19 @@ export default function TenantDetail() {
       setApiKeys(Array.isArray(keys) ? keys : keys?.api_keys || [])
       setApprovers(Array.isArray(approverResp?.approvers) ? approverResp.approvers : [])
       if (approverResp?.allowlist_source) setAllowlistSource(approverResp.allowlist_source)
+      if (notifCfg) {
+        setNotificationConfig(notifCfg)
+        const slack = notifCfg.notify?.find((n: any) => n.kind === 'slack')
+        const webhook = notifCfg.notify?.find((n: any) => n.kind === 'webhook')
+        setNotifForm({
+          approver_group: notifCfg.approver_group || '',
+          slack_channel: slack?.channel || '',
+          webhook_url: webhook?.url || '',
+          webhook_secret_ref: webhook?.secret_ref || '',
+        })
+      } else if (notifCfgFetchError) {
+        setNotifError(notifCfgFetchError)
+      }
     } catch (err: any) {
       if (seq === fetchSeq.current) setError(err.message)
     } finally {
@@ -132,6 +168,42 @@ export default function TenantDetail() {
       await fetchAll()
     } catch (err: any) {
       setError(err.message)
+    }
+  }
+
+  async function saveNotificationConfig(e: FormEvent) {
+    e.preventDefault()
+    setSavingNotif(true)
+    setNotifError('')
+
+    try {
+      if (!notificationConfig) throw new Error('Notification configuration not available for this user.')
+
+      const approverGroup = notifForm.approver_group.trim()
+      const notify: Array<any> = []
+
+      const slackChannel = notifForm.slack_channel.trim()
+      if (slackChannel) {
+        notify.push({ kind: 'slack', channel: slackChannel })
+      }
+
+      const webhookUrl = notifForm.webhook_url.trim()
+      const webhookSecretRef = notifForm.webhook_secret_ref.trim()
+      if (webhookUrl || webhookSecretRef) {
+        if (!webhookUrl) throw new Error('Webhook URL is required when configuring a webhook.')
+        if (!webhookSecretRef) throw new Error('Webhook secret reference is required when configuring a webhook.')
+        notify.push({ kind: 'webhook', url: webhookUrl, secret_ref: webhookSecretRef })
+      }
+
+      await api.put(`/admin/tenants/${id}/notification-config`, {
+        approver_group: approverGroup,
+        notify,
+      })
+      await fetchAll()
+    } catch (err: any) {
+      setNotifError(err.message || 'Failed to save notification configuration.')
+    } finally {
+      setSavingNotif(false)
     }
   }
 
@@ -300,6 +372,59 @@ export default function TenantDetail() {
                 </p>
                 <div className="key-display">{newKeyRaw}</div>
               </div>
+            )}
+          </div>
+
+          <div className="section-title mt-16">Notification Routing</div>
+          <div className="form-card">
+            <h3>Approval notifications</h3>
+            {notifError && <div className="error-msg">{notifError}</div>}
+            {notificationConfig === null ? (
+              <div style={{ color: '#64748b', fontSize: 13 }}>
+                Notification configuration not available for this user (or not yet loaded).
+              </div>
+            ) : (
+              <form onSubmit={saveNotificationConfig}>
+                <div className="form-group">
+                  <label>Approver group</label>
+                  <input
+                    value={notifForm.approver_group}
+                    onChange={e => setNotifForm({ ...notifForm, approver_group: e.target.value })}
+                    placeholder="approver_group (e.g., platform_admin/tenant_admin)"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Slack channel (optional)</label>
+                  <input
+                    value={notifForm.slack_channel}
+                    onChange={e => setNotifForm({ ...notifForm, slack_channel: e.target.value })}
+                    placeholder="#team-alerts"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Webhook URL (optional)</label>
+                  <input
+                    value={notifForm.webhook_url}
+                    onChange={e => setNotifForm({ ...notifForm, webhook_url: e.target.value })}
+                    placeholder="https://hooks.example.com/..."
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Webhook secret reference (optional)</label>
+                  <input
+                    value={notifForm.webhook_secret_ref}
+                    onChange={e => setNotifForm({ ...notifForm, webhook_secret_ref: e.target.value })}
+                    placeholder="secret_ref name"
+                  />
+                </div>
+
+                <button className="btn btn-primary" disabled={savingNotif}>
+                  {savingNotif ? 'Saving…' : 'Save notification config'}
+                </button>
+              </form>
             )}
           </div>
 

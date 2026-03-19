@@ -177,6 +177,36 @@ curl -s http://localhost:8080/v1/toolcalls \
 
 Expected: `"decision": "approve"` with an `approval_url`.
 
+## 7a. (Optional) Update Notification Routing (Tier 2 item 7)
+
+To change where approval notifications are delivered for your tenant (Slack + HTTPS webhooks), update the per-tenant routing config as `tenant_admin`:
+
+1. Log in as `tenant_admin` and set:
+```bash
+export TENANT_ADMIN_TOKEN="<paste tenant_admin JWT>"
+```
+
+2. Update routing (example: Slack channel):
+```bash
+curl -s -X PUT "http://localhost:8090/admin/tenants/$TENANT_ID/notification-config" \
+  -H "Authorization: Bearer $TENANT_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "approver_group": "tenant_admin",
+    "notify": [
+      { "kind": "slack", "channel": "#team-alerts" }
+    ]
+  }'
+```
+
+3. (Optional) Verify it:
+```bash
+curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/notification-config" \
+  -H "Authorization: Bearer $TENANT_ADMIN_TOKEN"
+```
+
+Webhook URLs are validated server-side (`https` only; private/loopback IPs rejected) to prevent SSRF.
+
 Save the `event_id`:
 
 ```bash

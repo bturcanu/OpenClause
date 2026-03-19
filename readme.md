@@ -694,6 +694,36 @@ When approval requests are created, notifications are enqueued transactionally a
   - Dev bootstrap fallback (optional): env allowlists via `ALLOWLIST_SOURCE=env|both` using `APPROVER_SLACK_ALLOWLIST` / `APPROVER_EMAIL_ALLOWLIST`.
 - Approvers are managed in the console UI under `Tenants -> (select tenant) -> Approvers`.
 
+## Tier 2/3 Features
+### Per-tenant Notification Routing (Tier 2 item 7)
+OpenClause routes newly created approval notifications based on per-tenant configuration stored in `tenants.config.notification_config`.
+
+### How to configure Per-tenant Notification Routing
+1. Log in as a `tenant_admin` for the target tenant.
+2. Update routing via the Console API:
+   - `PUT /admin/tenants/{tenant_id}/notification-config`
+   - Payload example (Slack):
+     ```json
+     {
+       "approver_group": "tenant_admin",
+       "notify": [
+         { "kind": "slack", "channel": "#team-alerts" }
+       ]
+     }
+     ```
+   - Payload example (webhook) with SSRF protection:
+     ```json
+     {
+       "approver_group": "tenant_admin",
+       "notify": [
+         { "kind": "webhook", "url": "https://hooks.example.com/...", "secret_ref": "webhook_secret_name" }
+       ]
+     }
+     ```
+3. (Optional) Use the Console UI form: `Tenants -> (select tenant) -> API Keys -> Notification Routing`.
+
+Webhook URLs are validated server-side (`https` only; private/loopback IPs rejected) to prevent SSRF.
+
 ### Evidence Archival
 
 - `cmd/archiver` verifies each tenant hash chain and uploads bundles to MinIO/S3.

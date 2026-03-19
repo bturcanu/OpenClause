@@ -22,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -34,6 +36,15 @@ type Tenant struct {
 	Status    string          `json:"status"`
 	Config    json.RawMessage `json:"config"`
 	CreatedAt time.Time       `json:"created_at"`
+}
+
+// TenantNotificationConfig is the DB-persisted per-tenant routing config used
+// to build approval notification outbox entries.
+//
+// Stored inside tenants.config under `notification_config`.
+type TenantNotificationConfig struct {
+	ApproverGroup string             `json:"approver_group,omitempty"`
+	Notify         []types.PolicyNotify `json:"notify,omitempty"`
 }
 
 type Agent struct {
@@ -278,6 +289,57 @@ func (s *Store) GetTenant(ctx context.Context, id string) (*Tenant, error) {
 		return nil, fmt.Errorf("console.GetTenant: %w", err)
 	}
 	return &t, nil
+}
+
+func (s *Store) GetTenantNotificationConfig(ctx context.Context, tenantID string) (*TenantNotificationConfig, bool, error) {
+	t, err := s.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	if t == nil {
+		return nil, false, nil
+	}
+
+	// tenants.config is a JSON object that may or may not contain the
+	// notification_config payload.
+	type tenantConfigWrapper struct {
+		NotificationConfig *TenantNotificationConfig `json:"notification_config,omitempty"`
+	}
+	var w tenantConfigWrapper
+	if len(t.Config) == 0 || string(t.Config) == "{}" {
+		return nil, false, nil
+	}
+	if err := json.Unmarshal(t.Config, &w); err != nil {
+		return nil, false, fmt.Errorf("console.GetTenantNotificationConfig unmarshal: %w", err)
+	}
+	if w.NotificationConfig == nil {
+		return nil, false, nil
+	}
+	return w.NotificationConfig, true, nil
+}
+
+func (s *Store) SetTenantNotificationConfig(ctx context.Context, tenantID string, cfg TenantNotificationConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantNotificationConfig marshal: %w", err)
+	}
+
+	res, err := s.pool.Exec(ctx, `
+		UPDATE tenants
+		SET config = jsonb_set(
+			COALESCE(config, '{}'::jsonb),
+			'{notification_config}',
+			$1::jsonb,
+			true
+		)
+		WHERE id = $2`, b, tenantID)
+	if err != nil {
+		return fmt.Errorf("console.SetTenantNotificationConfig update: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.SetTenantNotificationConfig: tenant %s not found", tenantID)
+	}
+	return nil
 }
 
 func (s *Store) UpdateTenantStatus(ctx context.Context, id, status string) error {

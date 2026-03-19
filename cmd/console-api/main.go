@@ -106,15 +106,16 @@ func main() {
 	}
 
 	api := &ConsoleAPI{
-		log:                log,
-		store:              store,
-		exportStore:        store,
-		jwtCfg:             jwtCfg,
-		approvalsStore:     approvalsStore,
-		approverAuth:       approverAuth,
-		approverAuthSource: allowlistSource,
-		authProvider:       authProvider,
-		devLogRawTokens:   devLogRawTokens,
+		log:                     log,
+		store:                   store,
+		notificationConfigStore: store,
+		exportStore:             store,
+		jwtCfg:                  jwtCfg,
+		approvalsStore:          approvalsStore,
+		approverAuth:            approverAuth,
+		approverAuthSource:      allowlistSource,
+		authProvider:            authProvider,
+		devLogRawTokens:         devLogRawTokens,
 	}
 
 	// Basic throttling for unauthenticated endpoints to reduce abuse and
@@ -183,6 +184,10 @@ func main() {
 		r.Get("/admin/tenants/{tenant_id}/apikeys", api.requireTenantAccess(api.handleListAPIKeys))
 		r.Post("/admin/tenants/{tenant_id}/apikeys/{key_id}/revoke", api.requireTenantRole("tenant_admin", api.handleRevokeAPIKey))
 
+		// Per-tenant notification routing configuration (webhook/slack).
+		r.Get("/admin/tenants/{tenant_id}/notification-config", api.requireTenantRole("tenant_admin", api.handleGetTenantNotificationConfig))
+		r.Put("/admin/tenants/{tenant_id}/notification-config", api.requireTenantRole("tenant_admin", api.handleUpdateTenantNotificationConfig))
+
 		// Approver management (DB-backed)
 		r.Get("/admin/tenants/{tenant_id}/approvers", api.requireTenantRole("tenant_admin", api.handleListTenantApprovers))
 		r.Post("/admin/tenants/{tenant_id}/approvers", api.requireTenantRole("tenant_admin", api.handleUpsertTenantApprover))
@@ -242,14 +247,15 @@ func main() {
 }
 
 type ConsoleAPI struct {
-	log                *slog.Logger
-	store              *console.Store
-	exportStore        exportEventsStore
-	jwtCfg             console.JWTConfig
-	authProvider       AuthProvider
-	approvalsStore     *approvals.Store
-	approverAuth       *approvals.ApproverAuthorizer
-	approverAuthSource string
+	log                     *slog.Logger
+	store                   *console.Store
+	notificationConfigStore notificationConfigStore
+	exportStore             exportEventsStore
+	jwtCfg                  console.JWTConfig
+	authProvider            AuthProvider
+	approvalsStore          *approvals.Store
+	approverAuth            *approvals.ApproverAuthorizer
+	approverAuthSource      string
 
 	devLogRawTokens bool
 }
@@ -257,6 +263,11 @@ type ConsoleAPI struct {
 type exportEventsStore interface {
 	ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error
 	ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventListItem, error)
+}
+
+type notificationConfigStore interface {
+	GetTenantNotificationConfig(ctx context.Context, tenantID string) (*console.TenantNotificationConfig, bool, error)
+	SetTenantNotificationConfig(ctx context.Context, tenantID string, cfg console.TenantNotificationConfig) error
 }
 
 type claimsKey struct{}
@@ -2012,10 +2023,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 		apiErr = &types.APIError{Code: "VALIDATION_ERROR", Message: msg, HTTPCode: status}
 	default:
 		apiErr = &types.APIError{
-			Code:     "HTTP_ERROR",
-			Message:  msg,
+			Code:      "HTTP_ERROR",
+			Message:   msg,
 			Retryable: status >= 500,
-			HTTPCode: status,
+			HTTPCode:  status,
 		}
 	}
 	apiErr.WriteJSON(w)
