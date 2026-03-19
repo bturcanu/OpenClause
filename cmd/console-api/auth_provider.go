@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -61,10 +60,10 @@ type UserAuthenticator interface {
 }
 
 type EmailPasswordAuthProvider struct {
-	log      *slog.Logger
-	store    UserAuthenticator
-	jwtCfg   console.JWTConfig
-	issuerID string
+	log    *slog.Logger
+	store  UserAuthenticator
+	jwtCfg console.JWTConfig
+	// TODO: add issuerID to JWT claims when multi-issuer OIDC is needed
 }
 
 func (p *EmailPasswordAuthProvider) Name() string { return "email_password" }
@@ -147,6 +146,4 @@ func newAuthProvider(name string, deps AuthProviderDeps) (AuthProvider, error) {
 		return nil, fmt.Errorf("unknown auth provider %q", name)
 	}
 }
-
-var errAuthProviderNotSupported = errors.New("auth provider callback not supported")
 

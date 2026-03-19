@@ -226,9 +226,8 @@ func dispatchAlertEvent(
 	// Reuse a single HTTP client per dispatch to keep dial overhead low.
 	httpClient := &http.Client{Timeout: 10 * time.Second, Transport: safeTransport()}
 
-	var slackClient *http.Client
 	// Slack connector calls don't need SSRF transport (it's internal), keep it simple.
-	slackClient = &http.Client{Timeout: 10 * time.Second}
+	slackClient := &http.Client{Timeout: 10 * time.Second}
 
 	var lastErr error
 	deliveredAtLeastOne := false

@@ -10,6 +10,7 @@ env:
   REGISTRY: ghcr.io
   GO_VERSION: "1.25"
   IMAGE_BASE: ghcr.io/bturcanu/openclause
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   test:
