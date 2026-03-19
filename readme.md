@@ -227,14 +227,29 @@ curl -s -X POST http://localhost:8080/v1/toolcalls \
   }" | jq
 ```
 
-Approve from the console UI at http://localhost:3000/approvals, then execute:
+Save the `event_id` from the response, then approve via the Console API (platform admins can approve for any tenant):
 
 ```bash
-curl -s -X POST http://localhost:8080/v1/toolcalls/<event_id>/execute \
+export EVENT_ID="<event_id from response>"
+
+# Find the approval request
+APPROVAL_ID=$(curl -s http://localhost:8090/admin/approvals/pending \
+  -H "Authorization: Bearer $TOKEN" | jq -r --arg eid "$EVENT_ID" '.[] | select(.event_id==$eid) | .id')
+
+# Approve it
+curl -s -X POST "http://localhost:8090/admin/approvals/$APPROVAL_ID/approve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{}' | jq
+```
+
+Then execute the approved action:
+
+```bash
+curl -s -X POST "http://localhost:8080/v1/toolcalls/$EVENT_ID/execute" \
   -H "X-API-Key: $RAW_KEY" | jq
 ```
 
-Tip: in the Approvals UI modal, you can use the **Copy execute command** helper to copy the correct `.../<event_id>/execute` curl request, then paste your tenant-scoped API key.
+You can also approve from the console UI at http://localhost:3000/approvals.
 
 ### 8. Stop
 
