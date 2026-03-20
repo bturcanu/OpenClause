@@ -16,6 +16,7 @@ secretRef: ""
 
 env:
   CONSOLE_API_ADDR: ":8090"
+  GATEWAY_URL: http://gateway:8080
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
   POSTGRES_SSLMODE: disable

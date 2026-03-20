@@ -12,6 +12,7 @@ import (
 )
 
 type alertRuleCreateInput struct {
+	TenantID   string          `json:"tenant_id,omitempty"`
 	Name       string          `json:"name"`
 	Kind       string          `json:"kind"`
 	Enabled    *bool           `json:"enabled,omitempty"`
@@ -49,6 +50,65 @@ func toAlertRuleResponse(r *console.AlertRule) alertRuleResponse {
 	}
 }
 
+func buildAlertRule(tenantID string, in alertRuleCreateInput) (*console.AlertRule, error) {
+	name, err := normalizeRequiredName(in.Name, "name")
+	if err != nil {
+		return nil, err
+	}
+
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = strings.TrimSpace(in.TenantID)
+	}
+	if tenantID == "" {
+		return nil, errBadRequest("tenant_id required")
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(in.Kind))
+	if kind == "" {
+		return nil, errBadRequest("kind required")
+	}
+	if kind != "deny_spike" {
+		return nil, errBadRequest("unsupported alert kind")
+	}
+	if len(in.ConfigJSON) == 0 {
+		return nil, errBadRequest("config_json required")
+	}
+
+	cfg, err := alerts.ParseDenySpikeConfig(in.ConfigJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+
+	canonCfg := map[string]any{"n": cfg.N, "m_minutes": cfg.MMinutes}
+	canonBytes, _ := json.Marshal(canonCfg)
+
+	return &console.AlertRule{
+		TenantID: tenantID,
+		Name:     name,
+		RuleType: kind,
+		Config:   canonBytes,
+		Enabled:  enabled,
+	}, nil
+}
+
+func errBadRequest(msg string) error {
+	return &badRequestError{msg: msg}
+}
+
+type badRequestError struct {
+	msg string
+}
+
+func (e *badRequestError) Error() string {
+	return e.msg
+}
+
 // handleListTenantAlertRules handles:
 //
 //	GET /admin/tenants/{tenant_id}/alerts/rules
@@ -80,50 +140,13 @@ func (api *ConsoleAPI) handleCreateTenantAlertRule(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	in.Kind = strings.ToLower(strings.TrimSpace(in.Kind))
-	if in.Name == "" {
-		writeError(w, http.StatusBadRequest, "name required")
-		return
-	}
-	if in.Kind == "" {
-		writeError(w, http.StatusBadRequest, "kind required")
-		return
-	}
-
-	enabled := true
-	if in.Enabled != nil {
-		enabled = *in.Enabled
-	}
-
-	if len(in.ConfigJSON) == 0 {
-		writeError(w, http.StatusBadRequest, "config_json required")
-		return
-	}
-
-	cfg, err := alerts.ParseDenySpikeConfig(in.ConfigJSON)
+	ruleInput, err := buildAlertRule(tenantID, in)
 	if err != nil {
-		// Only deny_spike is supported for now; ParseDenySpikeConfig returns
-		// a consistent error for unknown/invalid config shapes.
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if in.Kind != "deny_spike" {
-		writeError(w, http.StatusBadRequest, "unsupported alert kind")
-		return
-	}
-
-	// Canonicalize config for consistent worker parsing/dedupe.
-	canonCfg := map[string]any{"n": cfg.N, "m_minutes": cfg.MMinutes}
-	canonBytes, _ := json.Marshal(canonCfg)
-
-	rule, err := api.alertsStore.CreateAlertRule(r.Context(), console.AlertRule{
-		TenantID: tenantID,
-		Name:     in.Name,
-		RuleType: in.Kind,
-		Config:   canonBytes,
-		Enabled:  enabled,
-	})
+	rule, err := api.alertsStore.CreateAlertRule(r.Context(), *ruleInput)
 	if err != nil {
 		api.log.Error("create alert rule failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create alert rule")
@@ -145,20 +168,21 @@ func (api *ConsoleAPI) handleUpdateTenantAlertRule(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	in.Kind = strings.ToLower(strings.TrimSpace(in.Kind))
 	if ruleID == "" {
 		writeError(w, http.StatusBadRequest, "rule_id required")
 		return
 	}
-	if in.Name == "" {
-		writeError(w, http.StatusBadRequest, "name required")
+	name, err := normalizeRequiredName(in.Name, "name")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if in.Kind == "" {
+	kind := strings.ToLower(strings.TrimSpace(in.Kind))
+	if kind == "" {
 		writeError(w, http.StatusBadRequest, "kind required")
 		return
 	}
-	if in.Kind != "deny_spike" {
+	if kind != "deny_spike" {
 		writeError(w, http.StatusBadRequest, "unsupported alert kind")
 		return
 	}
@@ -175,7 +199,7 @@ func (api *ConsoleAPI) handleUpdateTenantAlertRule(w http.ResponseWriter, r *htt
 	canonCfg := map[string]any{"n": cfg.N, "m_minutes": cfg.MMinutes}
 	canonBytes, _ := json.Marshal(canonCfg)
 
-	if err := api.alertsStore.UpdateAlertRule(r.Context(), tenantID, ruleID, in.Name, in.Kind, canonBytes, in.Enabled); err != nil {
+	if err := api.alertsStore.UpdateAlertRule(r.Context(), tenantID, ruleID, name, kind, canonBytes, in.Enabled); err != nil {
 		api.log.Error("update alert rule failed", "error", err, "tenant_id", tenantID, "rule_id", ruleID)
 		writeError(w, http.StatusInternalServerError, "failed to update alert rule")
 		return

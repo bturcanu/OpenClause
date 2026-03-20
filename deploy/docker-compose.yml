@@ -141,6 +141,7 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_SSLMODE: disable
       CONSOLE_API_ADDR: :8090
+      GATEWAY_URL: http://gateway:8080
       CONSOLE_JWT_SECRET: ${CONSOLE_JWT_SECRET:?CONSOLE_JWT_SECRET must be set in .env}
       OPA_URL: http://opa:8181
     depends_on:
@@ -148,6 +149,8 @@ services:
         condition: service_healthy
       opa:
         condition: service_healthy
+      gateway:
+        condition: service_started
     restart: unless-stopped
 
   console-ui:

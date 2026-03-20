@@ -26,6 +26,12 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
+var (
+	ErrTenantNotFound       = errors.New("tenant not found")
+	ErrAPIKeyNotFound       = errors.New("api key not found")
+	ErrAPIKeyAlreadyRevoked = errors.New("api key already revoked")
+)
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────────────────────────────────────
@@ -48,17 +54,17 @@ type TenantNotificationConfig struct {
 }
 
 type TenantPolicyConfig struct {
-	MaxRiskAutoApprove        int      `json:"max_risk_auto_approve"`
-	ReadActions               []string `json:"read_actions,omitempty"`
-	WriteActions              []string `json:"write_actions,omitempty"`
-	DestructiveActions        []string `json:"destructive_actions,omitempty"`
-	RequireDestructiveApproval bool    `json:"require_destructive_approval"`
+	MaxRiskAutoApprove         int      `json:"max_risk_auto_approve"`
+	ReadActions                []string `json:"read_actions,omitempty"`
+	WriteActions               []string `json:"write_actions,omitempty"`
+	DestructiveActions         []string `json:"destructive_actions,omitempty"`
+	RequireDestructiveApproval bool     `json:"require_destructive_approval"`
 }
 
 func (c TenantPolicyConfig) ToPolicyInputMap() map[string]string {
 	out := map[string]string{
-		"max_risk_auto_approve":         strconv.Itoa(c.MaxRiskAutoApprove),
-		"require_destructive_approval":  strconv.FormatBool(c.RequireDestructiveApproval),
+		"max_risk_auto_approve":        strconv.Itoa(c.MaxRiskAutoApprove),
+		"require_destructive_approval": strconv.FormatBool(c.RequireDestructiveApproval),
 	}
 	if len(c.ReadActions) > 0 {
 		out["read_actions_csv"] = strings.Join(c.ReadActions, ",")
@@ -165,13 +171,13 @@ type OnboardingChecklist struct {
 }
 
 type TenantAnalyticsSummary struct {
-	RangeStart           time.Time             `json:"range_start"`
-	RangeEnd             time.Time             `json:"range_end"`
-	Totals               DecisionTotals        `json:"totals"`
-	Trend                []DecisionTrendBucket `json:"trend"`
-	RiskHeatmap          []RiskHeatmapRow      `json:"risk_heatmap"`
-	PerAgent             []AgentBreakdownRow   `json:"per_agent"`
-	OnboardingChecklist  OnboardingChecklist   `json:"onboarding_checklist"`
+	RangeStart          time.Time             `json:"range_start"`
+	RangeEnd            time.Time             `json:"range_end"`
+	Totals              DecisionTotals        `json:"totals"`
+	Trend               []DecisionTrendBucket `json:"trend"`
+	RiskHeatmap         []RiskHeatmapRow      `json:"risk_heatmap"`
+	PerAgent            []AgentBreakdownRow   `json:"per_agent"`
+	OnboardingChecklist OnboardingChecklist   `json:"onboarding_checklist"`
 }
 
 type EventListItem struct {
@@ -477,7 +483,7 @@ func (s *Store) UpdateTenantStatus(ctx context.Context, id, status string) error
 		return fmt.Errorf("console.UpdateTenantStatus: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("console.UpdateTenantStatus: tenant %s not found", id)
+		return fmt.Errorf("console.UpdateTenantStatus: %w: %s", ErrTenantNotFound, id)
 	}
 	return nil
 }
@@ -636,6 +642,21 @@ func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]APIKey, err
 }
 
 func (s *Store) RevokeAPIKeyForTenant(ctx context.Context, tenantID, keyID string) error {
+	var status string
+	err := s.pool.QueryRow(ctx, `
+		SELECT status
+		FROM api_keys
+		WHERE id = $1 AND tenant_id = $2`, keyID, tenantID).Scan(&status)
+	if err == pgx.ErrNoRows {
+		return fmt.Errorf("console.RevokeAPIKeyForTenant: %w: %s", ErrAPIKeyNotFound, keyID)
+	}
+	if err != nil {
+		return fmt.Errorf("console.RevokeAPIKeyForTenant lookup: %w", err)
+	}
+	if status != "active" {
+		return fmt.Errorf("console.RevokeAPIKeyForTenant: %w: %s", ErrAPIKeyAlreadyRevoked, keyID)
+	}
+
 	res, err := s.pool.Exec(ctx, `
 		UPDATE api_keys
 		SET status = 'revoked', revoked_at = NOW(), is_primary = false
@@ -644,7 +665,7 @@ func (s *Store) RevokeAPIKeyForTenant(ctx context.Context, tenantID, keyID strin
 		return fmt.Errorf("console.RevokeAPIKeyForTenant: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("console.RevokeAPIKeyForTenant: key %s not found or already revoked", keyID)
+		return fmt.Errorf("console.RevokeAPIKeyForTenant: %w: %s", ErrAPIKeyAlreadyRevoked, keyID)
 	}
 	return nil
 }
@@ -820,6 +841,7 @@ func (s *Store) RotateAPIKeys(ctx context.Context, tenantID string) (*APIKeyCrea
 // ──────────────────────────────────────────────────────────────────────────────
 
 func (s *Store) CreateUser(ctx context.Context, email, password, name, role string, tenantID *string, slackUserID *string) (*User, error) {
+	email = canonicalEmail(email)
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 10)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateUser hash password: %w", err)
@@ -864,11 +886,12 @@ func (s *Store) CreateUser(ctx context.Context, email, password, name, role stri
 }
 
 func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (*User, []UserRole, error) {
+	email = canonicalEmail(email)
 	var u User
 	var passwordHash *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, email, password_hash, name, status, created_at
-		FROM users WHERE email = $1`, email,
+		FROM users WHERE lower(email) = lower($1)`, email,
 	).Scan(&u.ID, &u.Email, &passwordHash, &u.Name, &u.Status, &u.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil, fmt.Errorf("console.AuthenticateUser: invalid credentials")
@@ -1061,6 +1084,7 @@ func (s *Store) RemoveTenantRole(ctx context.Context, userID, tenantID, role str
 // CreateUserBare creates a user record without assigning any roles.
 // password may be nil to create a user without credentials (invite/reset flow).
 func (s *Store) CreateUserBare(ctx context.Context, email string, password *string, name string, slackUserID *string) (*User, error) {
+	email = canonicalEmail(email)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("console.CreateUserBare begin tx: %w", err)
@@ -1230,6 +1254,7 @@ type InviteAcceptResult struct {
 }
 
 func (s *Store) CreateInvite(ctx context.Context, token, email, tenantID, role, name string, expiresAt time.Time) error {
+	email = canonicalEmail(email)
 	tokenHash := s.hashInviteResetToken(token)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO invites (token, email, tenant_id, role, name, expires_at)
@@ -1413,6 +1438,7 @@ func (s *Store) ListInvites(ctx context.Context, tenantID *string, limit, offset
 }
 
 func (s *Store) CreatePasswordReset(ctx context.Context, token, email string, expiresAt time.Time) error {
+	email = canonicalEmail(email)
 	tokenHash := s.hashInviteResetToken(token)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO password_resets (token, email, expires_at)
@@ -1470,6 +1496,10 @@ func (s *Store) ConsumePasswordReset(ctx context.Context, token, password string
 		return fmt.Errorf("console.ConsumePasswordReset commit: %w", err)
 	}
 	return nil
+}
+
+func canonicalEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1763,10 +1793,10 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 	return &TenantAnalyticsSummary{
 		RangeStart:          since,
 		RangeEnd:            now,
-		Totals:               totals,
-		Trend:                trend,
-		RiskHeatmap:          riskHeatmap,
-		PerAgent:             perAgent,
+		Totals:              totals,
+		Trend:               trend,
+		RiskHeatmap:         riskHeatmap,
+		PerAgent:            perAgent,
 		OnboardingChecklist: onboarding,
 	}, nil
 }

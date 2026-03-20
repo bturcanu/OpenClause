@@ -3,9 +3,9 @@ import { api, formatDate } from '../api'
 
 interface AlertRule {
   id: string
+  tenant_id: string
   name: string
-  rule_type: string
-  notify_kind: string
+  kind: string
   enabled: boolean
   created_at: string
 }
@@ -13,6 +13,7 @@ interface AlertRule {
 interface AlertEvent {
   id: string
   rule_id: string
+  tenant_id: string
   message: string
   severity: string
   created_at: string
@@ -23,10 +24,33 @@ export default function Alerts() {
   const [events, setEvents] = useState<AlertEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false)
+  const [scopedTenantID, setScopedTenantID] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', n: 3, mMinutes: 5, enabled: true })
+  const [form, setForm] = useState({ tenantId: '', name: '', n: 3, mMinutes: 5, enabled: true })
   const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    const token = localStorage.getItem('oc_token')
+    if (!token) return
+    try {
+      const payload = token.split('.')[1]
+      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+      const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=')
+      const decoded = JSON.parse(atob(padded))
+      const roles: string[] = Array.isArray(decoded?.roles) ? decoded.roles : []
+      const tenantID = typeof decoded?.tenant === 'string' ? decoded.tenant : ''
+      setIsPlatformAdmin(roles.includes('platform_admin'))
+      setScopedTenantID(tenantID)
+      if (tenantID) {
+        setForm(f => ({ ...f, tenantId: tenantID }))
+      }
+    } catch {
+      setIsPlatformAdmin(false)
+      setScopedTenantID('')
+    }
+  }, [])
 
   async function fetchAll() {
     try {
@@ -50,13 +74,18 @@ export default function Alerts() {
     setCreating(true)
     setError('')
     try {
+      const tenantID = form.tenantId.trim() || scopedTenantID.trim()
+      if (!tenantID) {
+        throw new Error('Tenant ID is required to create an alert rule.')
+      }
       await api.post('/admin/alerts/rules', {
+        tenant_id: tenantID,
         name: form.name,
         kind: 'deny_spike',
         enabled: form.enabled,
         config_json: { n: form.n, m_minutes: form.mMinutes },
       })
-      setForm({ name: '', n: 3, mMinutes: 5, enabled: true })
+      setForm({ tenantId: tenantID, name: '', n: 3, mMinutes: 5, enabled: true })
       setShowCreate(false)
       await fetchAll()
     } catch (err: any) {
@@ -84,6 +113,17 @@ export default function Alerts() {
         <div className="form-card">
           <h3>Create Alert Rule</h3>
           <form onSubmit={handleCreate}>
+            {(isPlatformAdmin || !scopedTenantID) && (
+              <div className="form-group">
+                <label>Tenant ID</label>
+                <input
+                  value={form.tenantId}
+                  onChange={e => setForm(f => ({ ...f, tenantId: e.target.value }))}
+                  placeholder="tenant-id"
+                  required
+                />
+              </div>
+            )}
             <div className="form-group">
               <label>Rule Name</label>
               <input
@@ -137,9 +177,9 @@ export default function Alerts() {
         <table>
           <thead>
             <tr>
+              <th>Tenant</th>
               <th>Name</th>
               <th>Type</th>
-              <th>Channel</th>
               <th>Status</th>
               <th>Created</th>
             </tr>
@@ -152,11 +192,11 @@ export default function Alerts() {
             ) : (
               rules.map(r => (
                 <tr key={r.id}>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.tenant_id?.slice(0, 12) || '—'}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: 12, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {r.rule_type}
+                    {r.kind}
                   </td>
-                  <td><span className="badge badge-gray">{r.notify_kind}</span></td>
                   <td>
                     {r.enabled !== false
                       ? <span className="badge badge-green">Active</span>
@@ -175,6 +215,7 @@ export default function Alerts() {
         <table>
           <thead>
             <tr>
+              <th>Tenant</th>
               <th>Rule</th>
               <th>Severity</th>
               <th>Message</th>
@@ -183,10 +224,11 @@ export default function Alerts() {
           </thead>
           <tbody>
             {events.length === 0 ? (
-              <tr><td colSpan={4} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No alert events</td></tr>
+              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No alert events</td></tr>
             ) : (
               events.map(ev => (
                 <tr key={ev.id}>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{ev.tenant_id?.slice(0, 12) || '—'}</td>
                   <td style={{ fontWeight: 600 }}>{ev.rule_id?.slice(0, 8)}</td>
                   <td>
                     <span className={`badge ${ev.severity === 'critical' ? 'badge-red' : ev.severity === 'warning' ? 'badge-yellow' : 'badge-gray'}`}>

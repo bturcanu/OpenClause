@@ -146,6 +146,7 @@ export default function TenantDetail() {
   const [rotating, setRotating] = useState(false)
   const [rotationError, setRotationError] = useState('')
   const [creating, setCreating] = useState(false)
+  const [updatingTenantStatus, setUpdatingTenantStatus] = useState(false)
 
   const [approverEmail, setApproverEmail] = useState('')
   const [approverSlackUserID, setApproverSlackUserID] = useState('')
@@ -525,6 +526,19 @@ export default function TenantDetail() {
     }
   }
 
+  async function updateTenantStatus(status: 'active' | 'disabled') {
+    setUpdatingTenantStatus(true)
+    setError('')
+    try {
+      await api.post(`/admin/tenants/${id}/status`, { status })
+      await fetchAll()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setUpdatingTenantStatus(false)
+    }
+  }
+
   if (loading) return <div className="loading">Loading tenant…</div>
   if (error && !tenant) return (
     <div>
@@ -567,6 +581,20 @@ export default function TenantDetail() {
           <div className="detail-label">Status</div>
           <div className="detail-value">
             <span className={`badge ${tenant.status === 'active' ? 'badge-green' : 'badge-red'}`}>{tenant.status}</span>
+          </div>
+        </div>
+        <div className="detail-row">
+          <div className="detail-label">Tenant Controls</div>
+          <div className="detail-value">
+            <button
+              className={`btn btn-sm ${tenant.status === 'active' ? 'btn-danger' : 'btn-primary'}`}
+              onClick={() => updateTenantStatus(tenant.status === 'active' ? 'disabled' : 'active')}
+              disabled={updatingTenantStatus}
+            >
+              {updatingTenantStatus
+                ? (tenant.status === 'active' ? 'Disabling…' : 'Enabling…')
+                : (tenant.status === 'active' ? 'Disable Tenant' : 'Enable Tenant')}
+            </button>
           </div>
         </div>
         <div className="detail-row">

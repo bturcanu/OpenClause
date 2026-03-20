@@ -79,3 +79,10 @@ func Test_hashInviteResetToken_MatchesExpectedHMACSHA256(t *testing.T) {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
+
+func TestCanonicalEmail(t *testing.T) {
+	got := canonicalEmail("  User.Name+test@Example.COM ")
+	if got != "user.name+test@example.com" {
+		t.Fatalf("unexpected canonical email: %q", got)
+	}
+}

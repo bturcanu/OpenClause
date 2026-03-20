@@ -3,6 +3,7 @@ package approvals
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrApprovalRequestNotPendingOrExpired = errors.New("approval request not pending or expired")
 
 // Store manages approval requests and grants in Postgres.
 type Store struct {
@@ -267,7 +270,7 @@ func (s *Store) GrantRequest(ctx context.Context, requestID string, in GrantInpu
 		return nil, fmt.Errorf("approvals.GrantRequest update: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return nil, fmt.Errorf("approval request %s not found, not pending, or expired", requestID)
+		return nil, fmt.Errorf("approvals.GrantRequest: %w: %s", ErrApprovalRequestNotPendingOrExpired, requestID)
 	}
 
 	// Fetch the request details for the grant scope.
@@ -342,12 +345,12 @@ func (s *Store) DenyRequest(ctx context.Context, requestID string, in DenyInput)
 	}
 	res, err := s.pool.Exec(ctx, `
 		UPDATE approval_requests SET status = 'denied', deny_reason = $2, denied_by = $3, updated_at = NOW()
-		WHERE id = $1 AND status = 'pending'`, requestID, in.Reason, in.Approver)
+		WHERE id = $1 AND status = 'pending' AND expires_at > NOW()`, requestID, in.Reason, in.Approver)
 	if err != nil {
 		return fmt.Errorf("approvals.DenyRequest: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("approval request %s not found or not pending", requestID)
+		return fmt.Errorf("approvals.DenyRequest: %w: %s", ErrApprovalRequestNotPendingOrExpired, requestID)
 	}
 	return nil
 }

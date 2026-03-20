@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestSlackInteractionInvalidSignatureRejected(t *testing.T) {
@@ -31,7 +33,10 @@ func TestSlackInteractionInvalidSignatureRejected(t *testing.T) {
 }
 
 type fakeHandlersStore struct {
-	granted bool
+	granted  bool
+	req      *ApprovalRequest
+	grantErr error
+	denyErr  error
 }
 
 func (f *fakeHandlersStore) CreateRequest(context.Context, CreateApprovalInput) (*ApprovalRequest, error) {
@@ -39,15 +44,24 @@ func (f *fakeHandlersStore) CreateRequest(context.Context, CreateApprovalInput) 
 }
 
 func (f *fakeHandlersStore) GetRequest(context.Context, string) (*ApprovalRequest, error) {
+	if f.req != nil {
+		return f.req, nil
+	}
 	return &ApprovalRequest{TenantID: "tenant1", EventID: "evt-1"}, nil
 }
 
 func (f *fakeHandlersStore) GrantRequest(_ context.Context, _ string, _ GrantInput) (*ApprovalGrant, error) {
+	if f.grantErr != nil {
+		return nil, f.grantErr
+	}
 	f.granted = true
 	return &ApprovalGrant{ID: "g1"}, nil
 }
 
 func (f *fakeHandlersStore) DenyRequest(context.Context, string, DenyInput) error {
+	if f.denyErr != nil {
+		return f.denyErr
+	}
 	return nil
 }
 
@@ -116,4 +130,46 @@ func (f *fakeApproverLookup) FindUserBySlackUserID(context.Context, string) (*Co
 
 func (f *fakeApproverLookup) IsApproverUserForTenant(context.Context, string, string) (bool, error) {
 	return true, nil
+}
+
+func TestApproveRequest_ResolvedRequestReturnsConflict(t *testing.T) {
+	store := &fakeHandlersStore{
+		req:      &ApprovalRequest{TenantID: "tenant1", EventID: "evt-1"},
+		grantErr: ErrApprovalRequestNotPendingOrExpired,
+	}
+	h := NewHandlers(store, nil, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/approvals/requests/req-1/approve", bytes.NewReader([]byte(`{"approver":"alice@example.com"}`)))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, func() *chi.Context {
+		rc := chi.NewRouteContext()
+		rc.URLParams.Add("id", "req-1")
+		return rc
+	}()))
+	rr := httptest.NewRecorder()
+	h.ApproveRequest(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDenyRequest_ResolvedRequestReturnsConflict(t *testing.T) {
+	store := &fakeHandlersStore{
+		req:     &ApprovalRequest{TenantID: "tenant1", EventID: "evt-1"},
+		denyErr: ErrApprovalRequestNotPendingOrExpired,
+	}
+	h := NewHandlers(store, nil, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/approvals/requests/req-1/deny", bytes.NewReader([]byte(`{"approver":"alice@example.com"}`)))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, func() *chi.Context {
+		rc := chi.NewRouteContext()
+		rc.URLParams.Add("id", "req-1")
+		return rc
+	}()))
+	rr := httptest.NewRecorder()
+	h.DenyRequest(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409 got %d body=%s", rr.Code, rr.Body.String())
+	}
 }

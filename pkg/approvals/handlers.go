@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -137,6 +138,10 @@ func (h *Handlers) ApproveRequest(w http.ResponseWriter, r *http.Request) {
 
 	grant, err := h.store.GrantRequest(r.Context(), id, in)
 	if err != nil {
+		if errors.Is(err, ErrApprovalRequestNotPendingOrExpired) {
+			types.ErrConflict("approval request is already resolved or expired").WriteJSON(w)
+			return
+		}
 		slog.Error("approve request failed", "error", err)
 		types.ErrInternal("failed to approve request").WriteJSON(w)
 		return
@@ -180,6 +185,10 @@ func (h *Handlers) DenyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.DenyRequest(r.Context(), id, in); err != nil {
+		if errors.Is(err, ErrApprovalRequestNotPendingOrExpired) {
+			types.ErrConflict("approval request is already resolved or expired").WriteJSON(w)
+			return
+		}
 		slog.Error("deny request failed", "error", err)
 		types.ErrInternal("failed to deny request").WriteJSON(w)
 		return
@@ -288,6 +297,10 @@ func (h *Handlers) SlackInteractions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		if errors.Is(err, ErrApprovalRequestNotPendingOrExpired) {
+			types.ErrConflict("approval request is already resolved or expired").WriteJSON(w)
+			return
+		}
 		slog.Error("slack interaction action failed", "error", err, "request_id", requestID, "decision", decision)
 		types.ErrInternal("failed to process interaction").WriteJSON(w)
 		return

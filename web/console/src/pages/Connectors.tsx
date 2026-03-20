@@ -24,7 +24,7 @@ export default function Connectors() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.get('/v1/connectors')
+    api.get('/admin/connectors')
       .then(data => setConnectors(normalizeConnectors(data)))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))

@@ -15,8 +15,8 @@ import (
 )
 
 type fakeAlertsStore struct {
-	lastCreate  *console.AlertRule
-	lastUpdate  *struct {
+	lastCreate *console.AlertRule
+	lastUpdate *struct {
 		TenantID string
 		RuleID   string
 		Name     string
@@ -24,7 +24,7 @@ type fakeAlertsStore struct {
 		Config   json.RawMessage
 		Enabled  bool
 	}
-	lastDelete  *struct {
+	lastDelete *struct {
 		TenantID string
 		RuleID   string
 	}
@@ -34,9 +34,9 @@ type fakeAlertsStore struct {
 		Limit    int
 	}
 
-	listRules    []console.AlertRule
-	getRule      *console.AlertRule
-	listEvents   []console.AlertEvent
+	listRules  []console.AlertRule
+	getRule    *console.AlertRule
+	listEvents []console.AlertEvent
 }
 
 func (f *fakeAlertsStore) ListAlertRules(_ context.Context, tenantID string) ([]console.AlertRule, error) {
@@ -83,6 +83,13 @@ func (f *fakeAlertsStore) GetAlertRule(_ context.Context, tenantID, ruleID strin
 	_ = tenantID
 	_ = ruleID
 	return f.getRule, nil
+}
+
+func (f *fakeAlertsStore) ListAlertEvents(_ context.Context, tenantID string, limit, offset int) ([]console.AlertEvent, error) {
+	_ = tenantID
+	_ = limit
+	_ = offset
+	return f.listEvents, nil
 }
 
 func (f *fakeAlertsStore) DeleteAlertRule(_ context.Context, tenantID, ruleID string) error {
@@ -163,6 +170,82 @@ func Test_handleCreateTenantAlertRule_canonicalizesConfigAndCreates(t *testing.T
 	}
 }
 
+func Test_handleCreateAlertRule_UsesBodyTenantAndTrimsName(t *testing.T) {
+	fs := &fakeAlertsStore{}
+	api := &ConsoleAPI{
+		log:         slog.Default(),
+		alertsStore: fs,
+	}
+
+	body := map[string]any{
+		"tenant_id": "tenant1",
+		"name":      "  deny-spike  ",
+		"kind":      "deny_spike",
+		"enabled":   true,
+		"config_json": map[string]any{
+			"N": 3,
+			"M": 5,
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/alerts/rules", bytes.NewReader(b))
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey{}, &console.JWTClaims{Roles: []string{"platform_admin"}}))
+
+	rr := httptest.NewRecorder()
+	api.handleCreateAlertRule(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if fs.lastCreate == nil {
+		t.Fatal("expected CreateAlertRule to be called")
+	}
+	if fs.lastCreate.TenantID != "tenant1" {
+		t.Fatalf("expected tenant1, got %q", fs.lastCreate.TenantID)
+	}
+	if fs.lastCreate.Name != "deny-spike" {
+		t.Fatalf("expected trimmed name, got %q", fs.lastCreate.Name)
+	}
+}
+
+func Test_handleCreateAlertRule_TenantScopeOverridesBodyTenant(t *testing.T) {
+	fs := &fakeAlertsStore{}
+	api := &ConsoleAPI{
+		log:         slog.Default(),
+		alertsStore: fs,
+	}
+
+	body := map[string]any{
+		"tenant_id": "tenant-other",
+		"name":      "rule",
+		"kind":      "deny_spike",
+		"enabled":   true,
+		"config_json": map[string]any{
+			"n":         3,
+			"m_minutes": 5,
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/alerts/rules", bytes.NewReader(b))
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey{}, &console.JWTClaims{
+		Tenant: "tenant-scoped",
+		Roles:  []string{"tenant_admin"},
+	}))
+
+	rr := httptest.NewRecorder()
+	api.handleCreateAlertRule(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if fs.lastCreate == nil {
+		t.Fatal("expected CreateAlertRule to be called")
+	}
+	if fs.lastCreate.TenantID != "tenant-scoped" {
+		t.Fatalf("expected tenant-scoped, got %q", fs.lastCreate.TenantID)
+	}
+}
+
 func Test_handleUpdateTenantAlertRule_callsUpdateAndReturnsRule(t *testing.T) {
 	fs := &fakeAlertsStore{
 		getRule: &console.AlertRule{
@@ -186,7 +269,7 @@ func Test_handleUpdateTenantAlertRule_callsUpdateAndReturnsRule(t *testing.T) {
 		"kind":    "deny_spike",
 		"enabled": false,
 		"config_json": map[string]any{
-			"n":          3,
+			"n":         3,
 			"m_minutes": 10,
 		},
 	}
@@ -274,4 +357,3 @@ func Test_handleListTenantAlertEvents_usesSinceAndLimit(t *testing.T) {
 		t.Fatalf("expected limit=5, got %d", fs.lastListSince.Limit)
 	}
 }
-

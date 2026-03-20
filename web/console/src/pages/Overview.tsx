@@ -13,7 +13,7 @@ interface OverviewData {
 
 interface TimeseriesBucket {
   bucket: string
-  count: number
+  total: number
 }
 
 interface Event {
@@ -50,7 +50,7 @@ export default function Overview() {
   if (error) return <div className="error-msg">{error}</div>
   if (loading || !overview) return <div className="loading">Loading dashboard…</div>
 
-  const maxCount = Math.max(...timeseries.map(b => b.count), 1)
+  const maxCount = Math.max(...timeseries.map(b => b.total || 0), 1)
 
   return (
     <div>
@@ -93,12 +93,12 @@ export default function Overview() {
             {timeseries.map((b, i) => (
               <div
                 key={i}
-                title={`${b.bucket}: ${b.count}`}
+                title={`${b.bucket}: ${b.total}`}
                 style={{
                   flex: 1,
                   background: '#3b82f6',
                   borderRadius: '3px 3px 0 0',
-                  height: `${(b.count / maxCount) * 100}%`,
+                  height: `${((b.total || 0) / maxCount) * 100}%`,
                   minHeight: 2,
                   transition: 'height 0.3s',
                 }}

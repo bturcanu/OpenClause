@@ -23,7 +23,7 @@ export class AuthenticationError extends OpenClauseError {
   public readonly responseBody?: string;
 
   constructor(
-    statusCode: number,
+    statusCode = 401,
     responseBody?: string,
     message = "Authentication failed: invalid or missing API key",
   ) {

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/bturcanu/OpenClause/pkg/approvals"
 	"github.com/bturcanu/OpenClause/pkg/config"
+	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/bturcanu/OpenClause/pkg/console"
 	"github.com/bturcanu/OpenClause/pkg/policy"
 	"github.com/bturcanu/OpenClause/pkg/types"
@@ -36,6 +38,7 @@ import (
 )
 
 const maxBodyBytes = 1 << 20
+const defaultGatewayURL = "http://localhost:8080"
 
 // tenantDenySentinel is returned by tenantScope for non-admin users with no tenant.
 // Handlers MUST check for this and return 403 before passing to the DB layer.
@@ -108,8 +111,8 @@ func main() {
 	api := &ConsoleAPI{
 		log:                     log,
 		store:                   store,
-		analyticsStore:         store,
-		alertsStore:            store,
+		analyticsStore:          store,
+		alertsStore:             store,
 		notificationConfigStore: store,
 		exportStore:             store,
 		jwtCfg:                  jwtCfg,
@@ -117,6 +120,8 @@ func main() {
 		approverAuth:            approverAuth,
 		approverAuthSource:      allowlistSource,
 		authProvider:            authProvider,
+		gatewayURL:              config.EnvOr("GATEWAY_URL", defaultGatewayURL),
+		httpClient:              &http.Client{Timeout: 10 * time.Second},
 		devLogRawTokens:         devLogRawTokens,
 	}
 
@@ -230,6 +235,7 @@ func main() {
 		r.Post("/admin/alerts/rules", api.requireRole("tenant_admin", api.handleCreateAlertRule))
 		r.Get("/admin/alerts/events", api.handleListAlertEvents)
 
+		r.Get("/admin/connectors", api.handleListConnectors)
 		r.Get("/v1/connectors", api.handleListConnectors)
 
 		r.Get("/admin/reports/activity", api.handleListEvents)
@@ -267,8 +273,8 @@ func main() {
 type ConsoleAPI struct {
 	log                     *slog.Logger
 	store                   *console.Store
-	analyticsStore         analyticsStore
-	alertsStore            alertsStore
+	analyticsStore          analyticsStore
+	alertsStore             alertsStore
 	notificationConfigStore notificationConfigStore
 	exportStore             exportEventsStore
 	jwtCfg                  console.JWTConfig
@@ -276,6 +282,8 @@ type ConsoleAPI struct {
 	approvalsStore          *approvals.Store
 	approverAuth            *approvals.ApproverAuthorizer
 	approverAuthSource      string
+	gatewayURL              string
+	httpClient              *http.Client
 
 	devLogRawTokens bool
 }
@@ -296,6 +304,7 @@ type alertsStore interface {
 	UpdateAlertRule(ctx context.Context, tenantID, ruleID, name, ruleType string, config json.RawMessage, enabled bool) error
 	DeleteAlertRule(ctx context.Context, tenantID, ruleID string) error
 	GetAlertRule(ctx context.Context, tenantID, ruleID string) (*console.AlertRule, error)
+	ListAlertEvents(ctx context.Context, tenantID string, limit, offset int) ([]console.AlertEvent, error)
 	ListAlertEventsSince(ctx context.Context, tenantID string, since time.Time, limit int) ([]console.AlertEvent, error)
 }
 
@@ -434,7 +443,7 @@ func (api *ConsoleAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := api.authProvider.Login(r.Context(), AuthLoginInput{
-		Email:    in.Email,
+		Email:    strings.TrimSpace(in.Email),
 		Password: in.Password,
 	})
 	if err != nil {
@@ -824,7 +833,7 @@ func (api *ConsoleAPI) handleCreateInvite(w http.ResponseWriter, r *http.Request
 			"email", email,
 			"tenant_id", in.TenantID,
 			"role", in.Role,
-			"accept_url", "/auth/invite/accept?token="+token,
+			"accept_url", inviteAcceptPageURL(token),
 		)
 	} else {
 		api.log.Info("invite created", "email", email, "tenant_id", in.TenantID, "role", in.Role)
@@ -932,7 +941,7 @@ func (api *ConsoleAPI) handleResetRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	if api.devLogRawTokens {
-		api.log.Info("password reset created (dev)", "email", email, "confirm_url", "/reset/confirm?token="+token)
+		api.log.Info("password reset created (dev)", "email", email, "confirm_url", passwordResetPageURL(token))
 	} else {
 		api.log.Info("password reset created", "email", email)
 	}
@@ -984,7 +993,12 @@ func (api *ConsoleAPI) handleSetupInitialize(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if in.Email == "" || in.Password == "" || in.FirstTenantName == "" {
+	firstTenantName, err := normalizeSetupFirstTenantName(in.FirstTenantName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.Email == "" || in.Password == "" {
 		writeError(w, http.StatusBadRequest, "email, password, and first_tenant_name are required")
 		return
 	}
@@ -1009,7 +1023,7 @@ func (api *ConsoleAPI) handleSetupInitialize(w http.ResponseWriter, r *http.Requ
 	}
 
 	tenantCfg := setupTenantConfig(in.OrgName)
-	tenant, err := api.store.CreateTenant(r.Context(), strings.TrimSpace(in.FirstTenantName), tenantCfg)
+	tenant, err := api.store.CreateTenant(r.Context(), firstTenantName, tenantCfg)
 	if err != nil {
 		api.log.Error("create tenant failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to initialize tenant")
@@ -1037,6 +1051,35 @@ func setupTenantConfig(orgName string) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return json.RawMessage(b)
+}
+
+func normalizeSetupFirstTenantName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", fmt.Errorf("email, password, and first_tenant_name are required")
+	}
+	return name, nil
+}
+
+func normalizeRequiredName(raw, field string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", fmt.Errorf("%s required", field)
+	}
+	return name, nil
+}
+
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+func inviteAcceptPageURL(token string) string {
+	return "/invite/accept?token=" + url.QueryEscape(token)
+}
+
+func passwordResetPageURL(token string) string {
+	return "/reset?token=" + url.QueryEscape(token)
 }
 
 func containsRole(roles []string, role string) bool {
@@ -1101,11 +1144,12 @@ func (api *ConsoleAPI) handleCreateTenant(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if in.Name == "" {
-		writeError(w, http.StatusBadRequest, "name required")
+	name, err := normalizeRequiredName(in.Name, "name")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	t, err := api.store.CreateTenant(r.Context(), in.Name, in.Config)
+	t, err := api.store.CreateTenant(r.Context(), name, in.Config)
 	if err != nil {
 		api.log.Error("create tenant failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create tenant")
@@ -1179,6 +1223,10 @@ func (api *ConsoleAPI) handleUpdateTenantStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err := api.store.UpdateTenantStatus(r.Context(), id, in.Status); err != nil {
+		if errors.Is(err, console.ErrTenantNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
 		api.log.Error("update tenant status failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to update tenant status")
 		return
@@ -1200,12 +1248,17 @@ func (api *ConsoleAPI) handleCreateAgent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if in.Name == "" {
-		writeError(w, http.StatusBadRequest, "name required")
+	name, err := normalizeRequiredName(in.Name, "name")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	agent, err := api.store.CreateAgent(r.Context(), tenantID, in.Name)
+	agent, err := api.store.CreateAgent(r.Context(), tenantID, name)
 	if err != nil {
+		if isForeignKeyViolation(err) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
 		api.log.Error("create agent failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create agent")
 		return
@@ -1233,15 +1286,16 @@ func (api *ConsoleAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request
 	tenantID := chi.URLParam(r, "tenant_id")
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var in struct {
-		Name       string  `json:"name"`
-		ExpiresAt  *string `json:"expires_at,omitempty"`
+		Name      string  `json:"name"`
+		ExpiresAt *string `json:"expires_at,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" {
-		writeError(w, http.StatusBadRequest, "name required")
+	name, err := normalizeRequiredName(in.Name, "name")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1260,8 +1314,12 @@ func (api *ConsoleAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	result, err := api.store.CreateAPIKey(r.Context(), tenantID, in.Name, expiresAt)
+	result, err := api.store.CreateAPIKey(r.Context(), tenantID, name, expiresAt)
 	if err != nil {
+		if isForeignKeyViolation(err) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
 		api.log.Error("create api key failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create api key")
 		return
@@ -1284,6 +1342,14 @@ func (api *ConsoleAPI) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request
 	tenantID := chi.URLParam(r, "tenant_id")
 	keyID := chi.URLParam(r, "key_id")
 	if err := api.store.RevokeAPIKeyForTenant(r.Context(), tenantID, keyID); err != nil {
+		if errors.Is(err, console.ErrAPIKeyNotFound) {
+			writeError(w, http.StatusNotFound, "api key not found")
+			return
+		}
+		if errors.Is(err, console.ErrAPIKeyAlreadyRevoked) {
+			writeError(w, http.StatusConflict, "api key already revoked")
+			return
+		}
 		api.log.Error("revoke api key failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to revoke api key")
 		return
@@ -1326,16 +1392,17 @@ func (api *ConsoleAPI) handleRotateAPIKey(w http.ResponseWriter, r *http.Request
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var in struct {
 		Name             string  `json:"name"`
-		ExpiresAt       *string `json:"expires_at,omitempty"`
+		ExpiresAt        *string `json:"expires_at,omitempty"`
 		MakePrimary      *bool   `json:"make_primary,omitempty"`
-		RevokeOldPrimary *bool  `json:"revoke_old_primary,omitempty"`
+		RevokeOldPrimary *bool   `json:"revoke_old_primary,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" {
-		writeError(w, http.StatusBadRequest, "name required")
+	name, err := normalizeRequiredName(in.Name, "name")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1361,8 +1428,12 @@ func (api *ConsoleAPI) handleRotateAPIKey(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	result, err := api.store.RotateAPIKeysPrimary(r.Context(), tenantID, in.Name, expiresAt, makePrimary, revokeOldPrimary)
+	result, err := api.store.RotateAPIKeysPrimary(r.Context(), tenantID, name, expiresAt, makePrimary, revokeOldPrimary)
 	if err != nil {
+		if isForeignKeyViolation(err) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
 		api.log.Error("rotate api key failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to rotate api key")
 		return
@@ -1681,6 +1752,10 @@ func (api *ConsoleAPI) handleApproveRequest(w http.ResponseWriter, r *http.Reque
 		MaxUses:  1,
 	})
 	if err != nil {
+		if errors.Is(err, approvals.ErrApprovalRequestNotPendingOrExpired) {
+			writeError(w, http.StatusConflict, "request already resolved or expired")
+			return
+		}
 		api.log.Error("approve request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to approve request")
 		return
@@ -1735,8 +1810,12 @@ func (api *ConsoleAPI) handleDenyRequest(w http.ResponseWriter, r *http.Request)
 		Approver: claims.Email,
 		Reason:   in.Reason,
 	}); err != nil {
+		if errors.Is(err, approvals.ErrApprovalRequestNotPendingOrExpired) {
+			writeError(w, http.StatusConflict, "request already resolved or expired")
+			return
+		}
 		api.log.Error("deny request failed", "error", err)
-		writeError(w, http.StatusConflict, "request not found or already resolved")
+		writeError(w, http.StatusInternalServerError, "failed to deny request")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "denied"})
@@ -2062,38 +2141,41 @@ func (api *ConsoleAPI) handleListAlertRules(w http.ResponseWriter, r *http.Reque
 	if tenant == "" {
 		tenant = r.URL.Query().Get("tenant_id")
 	}
-	rules, err := api.store.ListAlertRules(r.Context(), tenant)
+	rules, err := api.alertsStore.ListAlertRules(r.Context(), tenant)
 	if err != nil {
 		api.log.Error("list alert rules failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list alert rules")
 		return
 	}
-	writeJSON(w, http.StatusOK, rules)
+	out := make([]alertRuleResponse, 0, len(rules))
+	for i := range rules {
+		rule := rules[i]
+		out = append(out, toAlertRuleResponse(&rule))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (api *ConsoleAPI) handleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	var rule console.AlertRule
-	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+	var in alertRuleCreateInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	claims := claimsFromCtx(r.Context())
 	tenant := tenantScope(claims)
-	if tenant != "" {
-		rule.TenantID = tenant
-	}
-	if rule.TenantID == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id required")
+	rule, err := buildAlertRule(tenant, in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := api.store.CreateAlertRule(r.Context(), rule)
+	result, err := api.alertsStore.CreateAlertRule(r.Context(), *rule)
 	if err != nil {
 		api.log.Error("create alert rule failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create alert rule")
 		return
 	}
-	writeJSON(w, http.StatusCreated, result)
+	writeJSON(w, http.StatusCreated, toAlertRuleResponse(result))
 }
 
 func (api *ConsoleAPI) handleListAlertEvents(w http.ResponseWriter, r *http.Request) {
@@ -2107,7 +2189,7 @@ func (api *ConsoleAPI) handleListAlertEvents(w http.ResponseWriter, r *http.Requ
 		tenant = r.URL.Query().Get("tenant_id")
 	}
 	limit, offset := parsePagination(r)
-	events, err := api.store.ListAlertEvents(r.Context(), tenant, limit, offset)
+	events, err := api.alertsStore.ListAlertEvents(r.Context(), tenant, limit, offset)
 	if err != nil {
 		api.log.Error("list alert events failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list alert events")
@@ -2121,13 +2203,54 @@ func (api *ConsoleAPI) handleListAlertEvents(w http.ResponseWriter, r *http.Requ
 // ──────────────────────────────────────────────────────────────────────────────
 
 func (api *ConsoleAPI) handleListConnectors(w http.ResponseWriter, r *http.Request) {
-	connectors, err := api.store.ListConnectors(r.Context())
+	catalog, err := api.fetchConnectorCatalog(r.Context())
 	if err != nil {
 		api.log.Error("list connectors failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to list connectors")
+		writeError(w, http.StatusBadGateway, "failed to load connector registry")
 		return
 	}
-	writeJSON(w, http.StatusOK, connectors)
+	writeJSON(w, http.StatusOK, catalog)
+}
+
+func (api *ConsoleAPI) fetchConnectorCatalog(ctx context.Context) ([]connectors.ConnectorInfo, error) {
+	client := api.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(api.gatewayURL), "/")
+	if baseURL == "" {
+		baseURL = defaultGatewayURL
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/connectors", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build gateway connectors request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request gateway connectors: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read gateway connectors response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("gateway connectors returned HTTP %d", resp.StatusCode)
+	}
+
+	var catalog []connectors.ConnectorInfo
+	if err := json.Unmarshal(body, &catalog); err != nil {
+		return nil, fmt.Errorf("decode gateway connectors response: %w", err)
+	}
+
+	for i := range catalog {
+		catalog[i].BaseURL = ""
+	}
+	return catalog, nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

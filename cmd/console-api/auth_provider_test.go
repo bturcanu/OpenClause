@@ -161,6 +161,9 @@ func Test_handleLogin_dispatchesToAuthProvider(t *testing.T) {
 	if !rec.called {
 		t.Fatal("expected provider Login to be called")
 	}
+	if rec.gotIn.Email != "a@b.c" {
+		t.Fatalf("expected trimmed email, got %q", rec.gotIn.Email)
+	}
 
 	b, _ := io.ReadAll(resp.Body)
 	var decoded AuthLoginResponse
@@ -169,6 +172,38 @@ func Test_handleLogin_dispatchesToAuthProvider(t *testing.T) {
 	}
 	if decoded.Token != "tok123" {
 		t.Fatalf("unexpected token: %q", decoded.Token)
+	}
+}
+
+func Test_handleLogin_trimsEmailBeforeDispatch(t *testing.T) {
+	rec := &recordingProvider{
+		res: &AuthLoginResponse{
+			Token: "tok123",
+			User: AuthUser{
+				ID:    "u1",
+				Email: "a@b.c",
+				Name:  "A",
+				Roles: []string{"platform_admin"},
+			},
+		},
+	}
+
+	api := &ConsoleAPI{
+		authProvider: rec,
+	}
+
+	body, _ := json.Marshal(map[string]any{"email": "  a@b.c  ", "password": "pw"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.handleLogin(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if rec.gotIn.Email != "a@b.c" {
+		t.Fatalf("expected trimmed email, got %q", rec.gotIn.Email)
 	}
 }
 
@@ -190,4 +225,3 @@ func (p *recordingProvider) Login(ctx context.Context, in AuthLoginInput) (*Auth
 func (p *recordingProvider) Callback(ctx context.Context, _ map[string]any) (*AuthLoginResponse, error) {
 	return nil, authProviderError(http.StatusNotImplemented, "callback not supported")
 }
-
