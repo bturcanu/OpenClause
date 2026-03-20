@@ -7,6 +7,12 @@ Official Java SDK for the OpenClause access governance platform.
 - Java 11+
 - Gson
 
+## Development
+
+```bash
+./gradlew test
+```
+
 ## Installation
 
 ### Gradle
