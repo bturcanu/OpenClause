@@ -7,6 +7,8 @@ End-to-end walkthrough: boot the stack, seed data, and exercise every major flow
 - Docker Desktop running
 - `curl` (or any HTTP client)
 - Go 1.25+ (for `go test`)
+- Java 11+ (for `sdk/java/gradlew test`)
+- Python 3.10+ with recent `pip`/`setuptools`/`wheel` if you want to validate `sdk/python` editable installs
 
 ## 1. Start the Stack
 
@@ -126,14 +128,14 @@ curl -s http://localhost:8090/admin/tenants \
 curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "$TENANT_ID",
-    "agent_id": "agent-1",
-    "tool": "slack",
-    "action": "channel.list",
-    "risk_score": 1,
-    "idempotency_key": "test-allow-1"
-  }'
+  -d "{
+    \"tenant_id\": \"$TENANT_ID\",
+    \"agent_id\": \"agent-1\",
+    \"tool\": \"slack\",
+    \"action\": \"channel.list\",
+    \"risk_score\": 1,
+    \"idempotency_key\": \"test-allow-1\"
+  }"
 ```
 
 Expected: `"decision": "allow"` with a `result` object.
@@ -144,15 +146,15 @@ Expected: `"decision": "allow"` with a `result` object.
 curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "$TENANT_ID",
-    "agent_id": "agent-1",
-    "tool": "postgres",
-    "action": "query.readonly",
-    "params": { "sql": "SELECT 1", "params": [] },
-    "risk_score": 3,
-    "idempotency_key": "test-deny-1"
-  }'
+  -d "{
+    \"tenant_id\": \"$TENANT_ID\",
+    \"agent_id\": \"agent-1\",
+    \"tool\": \"postgres\",
+    \"action\": \"query.readonly\",
+    \"params\": { \"sql\": \"SELECT 1\", \"params\": [] },
+    \"risk_score\": 3,
+    \"idempotency_key\": \"test-deny-1\"
+  }"
 ```
 
 Expected: `"decision": "deny"`, reason `"action not in allowlist"`.
@@ -163,16 +165,16 @@ Expected: `"decision": "deny"`, reason `"action not in allowlist"`.
 curl -s http://localhost:8080/v1/toolcalls \
   -H "X-API-Key: sk-test-key-1" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "$TENANT_ID",
-    "agent_id": "agent-1",
-    "tool": "jira",
-    "action": "issue.create",
-    "params": { "project": "OPS", "summary": "Test issue from local testing" },
-    "resource": "project/OPS",
-    "risk_score": 8,
-    "idempotency_key": "test-approve-1"
-  }'
+  -d "{
+    \"tenant_id\": \"$TENANT_ID\",
+    \"agent_id\": \"agent-1\",
+    \"tool\": \"jira\",
+    \"action\": \"issue.create\",
+    \"params\": { \"project\": \"OPS\", \"summary\": \"Test issue from local testing\" },
+    \"resource\": \"project/OPS\",
+    \"risk_score\": 8,
+    \"idempotency_key\": \"test-approve-1\"
+  }"
 ```
 
 Expected: `"decision": "approve"` with an `approval_url`.
@@ -260,14 +262,14 @@ for i in 1 2 3; do
   curl -s -X POST "http://localhost:8080/v1/toolcalls" \
     -H "X-API-Key: sk-test-key-1" \
     -H "Content-Type: application/json" \
-    -d '{
-      "tenant_id": "'"$TENANT_ID"'",
-      "agent_id": "agent-1",
-      "tool": "slack",
-      "action": "msg.update",
-      "risk_score": 1,
-      "idempotency_key": "deny-spike-smoke-'"$i"'"
-    }' | jq -r '.decision + " " + .event_id'
+    -d "{
+      \"tenant_id\": \"$TENANT_ID\",
+      \"agent_id\": \"agent-1\",
+      \"tool\": \"slack\",
+      \"action\": \"msg.update\",
+      \"risk_score\": 1,
+      \"idempotency_key\": \"deny-spike-smoke-$i\"
+    }" | jq -r '.decision + " " + .event_id'
 done
 ```
 
@@ -326,7 +328,7 @@ Alternatively, use the Console UI:
 - Open the Approvals queue and select the approved request.
 - Use the modal's **Copy execute command** helper and paste your tenant-scoped API key.
 
-Call it again to verify idempotent replay returns the same `event_id`.
+Call it again to verify idempotent replay returns the same `event_id` and prior execution `result`.
 
 ## 10. View Audit Trail via Console API
 
@@ -363,11 +365,11 @@ You should see `429` responses with a `Retry-After: 1` header once the limit is 
 ## 12. Connectors List
 
 ```bash
-curl -s http://localhost:8080/v1/connectors \
-  -H "X-API-Key: sk-test-key-1"
+curl -s http://localhost:8090/admin/connectors \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-Verify that no `base_url` fields are present (internal URLs are no longer leaked).
+Verify that all 8 connectors are listed even before any toolcalls exist, and that no `base_url` fields are present.
 
 ## 13. Disabled Tenant
 
@@ -400,13 +402,13 @@ curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/status" \
 curl -s http://localhost:8090/admin/policy/simulate \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "'"$TENANT_ID"'",
-    "agent_id": "agent-1",
-    "tool": "jira",
-    "action": "issue.delete",
-    "risk_score": 9
-  }'
+  -d "{
+    \"tenant_id\": \"$TENANT_ID\",
+    \"agent_id\": \"agent-1\",
+    \"tool\": \"jira\",
+    \"action\": \"issue.delete\",
+    \"risk_score\": 9
+  }"
 ```
 
 Expected: `policy_result.result.decision` = `"approve"` (destructive action + high risk).

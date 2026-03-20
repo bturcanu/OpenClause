@@ -225,7 +225,7 @@ SINCE="$(date -u -Iseconds | sed 's/+00:00/Z/')"
 UNTIL="$(date -u -Iseconds | sed 's/+00:00/Z/')"
 
 CSV_BODY="$(
-  curl -sS "${CONSOLE_API_URL}/admin/reports/export/csv?tenant_id=${TENANT_ID}&since=${SINCE}&until=${UNTIL}" \
+  curl -sS "${CONSOLE_API_URL}/admin/events/export/csv?tenant_id=${TENANT_ID}&since=${SINCE}&until=${UNTIL}" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}"
 )"
 echo "${CSV_BODY}" | head -n 1 | grep -q "event_id" || { echo "CSV export header missing" >&2; exit 1; }
@@ -236,4 +236,3 @@ echo "${bundle}" | jq -e --arg tenant_id "${TENANT_ID}" '.tenant_id==$tenant_id 
 
 echo ">>> Happy-path smoke test completed successfully"
 echo "    Admin UI: ${CONSOLE_UI_URL}"
-

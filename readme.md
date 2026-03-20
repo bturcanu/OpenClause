@@ -348,6 +348,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/events/export/csv` | JWT | Export events as CSV |
 | `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON |
 | `GET` | `/admin/sessions` | JWT | List sessions with event counts |
+| `GET` | `/admin/connectors` | JWT | List the full connector registry for the console (works before any toolcalls) |
 | `GET` | `/admin/sessions/{id}/timeline` | JWT | Session event timeline |
 | `GET/POST` | `/admin/policy/versions` | JWT | List/create policy versions |
 | `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
@@ -414,7 +415,10 @@ Note: the SDK examples below are written for the local dev seed data (`tenant_id
 ### Python
 
 ```bash
-cd sdk/python && pip install -e .
+cd sdk/python
+# The package metadata currently requires Python 3.10+ for editable installs.
+python3.10 -m pip install -U pip setuptools wheel
+python3.10 -m pip install -e .
 ```
 
 ```python
@@ -462,6 +466,10 @@ const response = await client.submitToolCall({
 MCP server stub: `import { createMCPToolDefinitions } from 'openclause';`
 
 ### Java
+
+```bash
+cd sdk/java && ./gradlew test
+```
 
 ```java
 OpenClauseClient client = new OpenClauseClient("http://localhost:8080", "<raw_api_key>");
@@ -562,6 +570,7 @@ OpenClause uses a strict two-phase approval flow:
 5. Repeated `/execute` calls return the prior execution response (idempotent replay by parent event).
 
 Important behavior:
+- Repeated `POST /v1/toolcalls` calls with the same idempotency key return the original `event_id` plus the prior execution `result` or `approval_url` when available.
 - Gateway does not overwrite original evidence rows from phase 1.
 - Execution evidence is append-only and linked via `tool_executions`.
 - If grant is missing, `/execute` returns `409 awaiting approval` (fail-closed).
@@ -690,6 +699,15 @@ curl http://localhost:8080/v1/connectors | jq
 ```
 
 Returns all registered connectors with their names, types, and supported actions.
+
+The admin console uses the console-api proxy endpoint instead:
+
+```bash
+curl -s http://localhost:8090/admin/connectors \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+This returns the same full connector catalog even on a fresh install with zero toolcalls.
 
 ### Mock Mode
 
@@ -909,6 +927,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `OPA_URL` | `http://localhost:8181` | OPA server URL |
 | `GATEWAY_ADDR` | `:8080` | Gateway listen address |
 | `CONSOLE_API_ADDR` | `:8090` | Console API listen address |
+| `GATEWAY_URL` | `http://localhost:8080` | Gateway base URL used by console-api for connector discovery |
 | `CONSOLE_JWT_SECRET` | — | **Required for production.** JWT signing secret for console |
 | `CONSOLE_JWT_EXPIRY_HOURS` | `24` | JWT token expiry in hours |
 | `APPROVALS_ADDR` | `:8081` | Approvals service listen address |

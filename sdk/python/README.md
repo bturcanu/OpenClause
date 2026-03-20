@@ -84,8 +84,9 @@ except TimeoutError:
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+# Editable installs require Python 3.10+ and current packaging tools.
+python3.10 -m pip install -U pip setuptools wheel
+python3.10 -m pip install -e ".[dev]"
 
 # Run tests
 pytest

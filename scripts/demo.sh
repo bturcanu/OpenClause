@@ -109,7 +109,7 @@ AUDIT_TOOL=$(echo "$AUDIT" | jq -r '.tool // .event.tool // empty')
 
 # ─── 10. Exports ────────────────────────────────────────────────────────────
 info "Step 10: Export data"
-CSV_CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$API/admin/reports/export/csv?tenant_id=$TENANT_ID" -H "Authorization: Bearer $TOKEN")
+CSV_CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$API/admin/events/export/csv?tenant_id=$TENANT_ID" -H "Authorization: Bearer $TOKEN")
 [ "$CSV_CODE" = "200" ] && ok "CSV export: HTTP $CSV_CODE" || fail "CSV export failed"
 
 BUNDLE=$(curl -sS "$API/admin/reports/export/bundle?tenant_id=$TENANT_ID" -H "Authorization: Bearer $TOKEN")
@@ -118,8 +118,10 @@ ok "Bundle export: $BUNDLE_COUNT events"
 
 # ─── 11. Connectors ─────────────────────────────────────────────────────────
 info "Step 11: List connectors"
-CONN_COUNT=$(curl -sS "$GW/v1/connectors" -H "X-API-Key: $RAW_KEY" | jq 'length')
-ok "Gateway connectors: $CONN_COUNT registered"
+GW_CONN_COUNT=$(curl -sS "$GW/v1/connectors" | jq 'length')
+API_CONN_COUNT=$(curl -sS "$API/admin/connectors" -H "Authorization: Bearer $TOKEN" | jq 'length')
+ok "Gateway connectors: $GW_CONN_COUNT registered"
+ok "Console connectors: $API_CONN_COUNT registered"
 
 # ─── 12. Analytics ──────────────────────────────────────────────────────────
 info "Step 12: Tenant analytics"
