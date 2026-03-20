@@ -48,16 +48,16 @@ func (l *Logger) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) e
 }
 
 // CheckIdempotency delegates to the store.
-func (l *Logger) CheckIdempotency(ctx context.Context, tenantID, key string) (*types.ToolCallResponse, error) {
+func (l *Logger) CheckIdempotency(ctx context.Context, tenantID, key string) (*ReplayResponse, error) {
 	resp, err := l.store.CheckIdempotency(ctx, tenantID, key)
 	if err != nil {
 		return nil, err
 	}
-	if resp != nil {
+	if resp != nil && resp.Response != nil {
 		l.log.InfoContext(ctx, "idempotency hit",
 			"tenant_id", tenantID,
 			"idempotency_key", key,
-			"event_id", resp.EventID,
+			"event_id", resp.Response.EventID,
 		)
 	}
 	return resp, nil

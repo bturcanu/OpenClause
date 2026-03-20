@@ -6,11 +6,11 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -200,7 +200,7 @@ type Gateway struct {
 	connectors     gatewayConnectors
 	approvals      gatewayApprovals
 	approvalsURL   string
-	consoleStore   *console.Store
+	consoleStore   gatewayConsoleStore
 	rateLimiters   map[string]*list.Element
 	rlList         *list.List
 	rlMu           sync.Mutex
@@ -209,7 +209,7 @@ type Gateway struct {
 
 type gatewayEvidence interface {
 	RecordEvent(context.Context, *types.ToolCallEnvelope) error
-	CheckIdempotency(context.Context, string, string) (*types.ToolCallResponse, error)
+	CheckIdempotency(context.Context, string, string) (*evidence.ReplayResponse, error)
 	GetEvent(context.Context, string) (*types.ToolCallEnvelope, error)
 	GetExecutionByParentEvent(context.Context, string) (*types.ToolCallResponse, error)
 	LinkExecutionToParent(context.Context, string, string, string) (bool, error)
@@ -227,6 +227,11 @@ type gatewayConnectors interface {
 type gatewayApprovals interface {
 	CreateRequest(context.Context, approvals.CreateApprovalInput) (*approvals.ApprovalRequest, error)
 	FindAndConsumeGrant(context.Context, string, string, string, string, string) (*approvals.ApprovalGrant, error)
+}
+
+type gatewayConsoleStore interface {
+	GetTenantPolicyConfig(context.Context, string) (*console.TenantPolicyConfig, bool, error)
+	GetTenantNotificationConfig(context.Context, string) (*console.TenantNotificationConfig, bool, error)
 }
 
 // HandleToolCall is POST /v1/toolcalls
@@ -264,8 +269,7 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if prior != nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(prior)
+		gw.writeReplayResponse(w, prior)
 		return
 	}
 
@@ -292,13 +296,11 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 			Timestamp: time.Now().UTC(),
 		},
 	}
-	var tenantPolicyCfg *console.TenantPolicyConfig
 	if gw.consoleStore != nil {
 		cfg, found, err := gw.consoleStore.GetTenantPolicyConfig(ctx, req.TenantID)
 		if err != nil {
 			gw.log.ErrorContext(ctx, "load tenant policy config failed", "error", err, "tenant_id", req.TenantID)
 		} else if found && cfg != nil {
-			tenantPolicyCfg = cfg
 			policyInput.Environment.TenantConfig = cfg.ToPolicyInputMap()
 		}
 	}
@@ -316,15 +318,6 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		}
 		policyResult = &types.PolicyResult{Decision: types.DecisionDeny, Reason: reason}
 	}
-	if tenantPolicyCfg != nil {
-		policyResult = policy.EvaluateWithRuleBuilder(req, policy.RuleBuilderConfig{
-			MaxRiskAutoApprove:         tenantPolicyCfg.MaxRiskAutoApprove,
-			ReadActions:                tenantPolicyCfg.ReadActions,
-			WriteActions:               tenantPolicyCfg.WriteActions,
-			DestructiveActions:         tenantPolicyCfg.DestructiveActions,
-			RequireDestructiveApproval: tenantPolicyCfg.RequireDestructiveApproval,
-		})
-	}
 	env.Decision = policyResult.Decision
 	env.PolicyResult = policyResult
 
@@ -339,6 +332,8 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 	case types.DecisionDeny:
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
+			types.ErrInternal("failed to record decision evidence").WriteJSON(w)
+			return
 		}
 
 	case types.DecisionApprove:
@@ -346,6 +341,8 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		// approval_requests references it via FK.
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
+			types.ErrInternal("failed to record approval evidence").WriteJSON(w)
+			return
 		}
 
 		// Override notification routing directives from per-tenant DB config
@@ -377,9 +374,15 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			gw.log.ErrorContext(ctx, "create approval failed", "error", err)
-		} else {
-			resp.ApprovalURL = fmt.Sprintf("%s/v1/approvals/requests/%s", gw.approvalsURL, approvalReq.ID)
+			types.ErrInternal("failed to create approval request").WriteJSON(w)
+			return
 		}
+		if approvalReq == nil || approvalReq.ID == "" {
+			gw.log.ErrorContext(ctx, "create approval returned empty request", "event_id", eventID)
+			types.ErrInternal("failed to create approval request").WriteJSON(w)
+			return
+		}
+		resp.ApprovalURL = gw.approvalRequestURL(approvalReq.ID)
 
 	case types.DecisionAllow:
 		env.ExecutionResult = gw.executeConnector(ctx, eventID, req)
@@ -402,6 +405,8 @@ func (gw *Gateway) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		resp.Reason = "unrecognized policy decision"
 		if err := gw.evidence.RecordEvent(ctx, env); err != nil {
 			gw.log.ErrorContext(ctx, "evidence record failed", "error", err)
+			types.ErrInternal("failed to record decision evidence").WriteJSON(w)
+			return
 		}
 	}
 
@@ -482,6 +487,16 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
+	execReplay, err := gw.evidence.CheckIdempotency(ctx, parent.Request.TenantID, "exec:"+parentEventID)
+	if err != nil {
+		gw.log.ErrorContext(ctx, "get execution idempotency replay failed", "event_id", parentEventID, "error", err)
+		types.ErrInternal("failed to retrieve prior execution").WriteJSON(w)
+		return
+	}
+	if execReplay != nil {
+		gw.writeReplayResponse(w, execReplay)
+		return
+	}
 
 	grant, err := gw.approvals.FindAndConsumeGrant(
 		ctx,
@@ -517,6 +532,16 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 				if err := json.NewEncoder(w).Encode(existing); err != nil {
 					gw.log.ErrorContext(ctx, "response encode failed", "error", err)
 				}
+				return
+			}
+			execReplay, err := gw.evidence.CheckIdempotency(ctx, parent.Request.TenantID, "exec:"+parentEventID)
+			if err != nil {
+				gw.log.ErrorContext(ctx, "poll execution idempotency replay failed", "event_id", parentEventID, "error", err)
+				types.ErrInternal("failed to retrieve prior execution").WriteJSON(w)
+				return
+			}
+			if execReplay != nil {
+				gw.writeReplayResponse(w, execReplay)
 				return
 			}
 		}
@@ -593,6 +618,27 @@ func (gw *Gateway) HandleExecuteToolCall(w http.ResponseWriter, r *http.Request)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		gw.log.ErrorContext(ctx, "response encode failed", "error", err)
 	}
+}
+
+func (gw *Gateway) approvalRequestURL(requestID string) string {
+	base := strings.TrimRight(gw.approvalsURL, "/")
+	if base == "" {
+		return "/v1/approvals/requests/" + requestID
+	}
+	return base + "/v1/approvals/requests/" + requestID
+}
+
+func (gw *Gateway) writeReplayResponse(w http.ResponseWriter, replay *evidence.ReplayResponse) {
+	if replay == nil || replay.Response == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	resp := *replay.Response
+	if resp.Decision == types.DecisionApprove && resp.ApprovalURL == "" && replay.ApprovalRequestID != "" {
+		resp.ApprovalURL = gw.approvalRequestURL(replay.ApprovalRequestID)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleGetEvent is GET /v1/toolcalls/{event_id}

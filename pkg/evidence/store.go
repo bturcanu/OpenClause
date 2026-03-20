@@ -19,6 +19,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+type ReplayResponse struct {
+	Response          *types.ToolCallResponse
+	ApprovalRequestID string
+}
+
 // NewStore creates a new evidence store backed by the given connection pool.
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
@@ -123,27 +128,65 @@ func (s *Store) RecordEvent(ctx context.Context, env *types.ToolCallEnvelope) er
 }
 
 // CheckIdempotency returns a prior response if one exists for (tenant, key).
-func (s *Store) CheckIdempotency(ctx context.Context, tenantID, idempotencyKey string) (*types.ToolCallResponse, error) {
+func (s *Store) CheckIdempotency(ctx context.Context, tenantID, idempotencyKey string) (*ReplayResponse, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT event_id, decision
-		FROM tool_events
-		WHERE tenant_id = $1 AND idempotency_key = $2
+		SELECT e.event_id, e.decision, e.policy_result,
+		       r.status, r.output_json, r.error_msg, r.duration_ms,
+		       ar.id
+		FROM tool_events e
+		LEFT JOIN tool_results r ON r.event_id = e.event_id
+		LEFT JOIN approval_requests ar ON ar.event_id = e.event_id
+		WHERE e.tenant_id = $1 AND e.idempotency_key = $2
 		LIMIT 1`, tenantID, idempotencyKey)
 
 	var eventID string
 	var decision string
-	err := row.Scan(&eventID, &decision)
+	var policyJSON []byte
+	var status *string
+	var output []byte
+	var errMsg *string
+	var duration *int64
+	var approvalRequestID *string
+	err := row.Scan(&eventID, &decision, &policyJSON, &status, &output, &errMsg, &duration, &approvalRequestID)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("evidence.CheckIdempotency: %w", err)
 	}
-	return &types.ToolCallResponse{
+
+	resp := &types.ToolCallResponse{
 		EventID:  eventID,
 		Decision: types.Decision(decision),
 		Reason:   "idempotent replay",
-	}, nil
+	}
+	if len(policyJSON) > 0 {
+		var policyResult types.PolicyResult
+		if err := json.Unmarshal(policyJSON, &policyResult); err != nil {
+			return nil, fmt.Errorf("evidence.CheckIdempotency unmarshal policy: %w", err)
+		}
+		if policyResult.Reason != "" {
+			resp.Reason = policyResult.Reason
+		}
+	}
+	if status != nil {
+		resp.Result = &types.ExecutionResult{Status: *status}
+		if len(output) > 0 {
+			resp.Result.OutputJSON = output
+		}
+		if errMsg != nil {
+			resp.Result.Error = *errMsg
+		}
+		if duration != nil {
+			resp.Result.DurationMS = *duration
+		}
+	}
+
+	replay := &ReplayResponse{Response: resp}
+	if approvalRequestID != nil {
+		replay.ApprovalRequestID = *approvalRequestID
+	}
+	return replay, nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

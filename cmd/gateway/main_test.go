@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,8 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/approvals"
 	"github.com/bturcanu/OpenClause/pkg/auth"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
+	"github.com/bturcanu/OpenClause/pkg/console"
+	"github.com/bturcanu/OpenClause/pkg/evidence"
 	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/go-chi/chi/v5"
 )
@@ -25,6 +28,8 @@ type fakeEvidence struct {
 	events      map[string]*types.ToolCallEnvelope
 	byParent    map[string]*types.ToolCallResponse
 	linkedPairs map[string]string
+	replays     map[string]*evidence.ReplayResponse
+	recordErr   error
 }
 
 func newFakeEvidence() *fakeEvidence {
@@ -32,18 +37,42 @@ func newFakeEvidence() *fakeEvidence {
 		events:      map[string]*types.ToolCallEnvelope{},
 		byParent:    map[string]*types.ToolCallResponse{},
 		linkedPairs: map[string]string{},
+		replays:     map[string]*evidence.ReplayResponse{},
 	}
 }
 
 func (f *fakeEvidence) RecordEvent(_ context.Context, env *types.ToolCallEnvelope) error {
+	if f.recordErr != nil {
+		return f.recordErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events[env.EventID] = env
+	resp := &types.ToolCallResponse{
+		EventID:  env.EventID,
+		Decision: env.Decision,
+	}
+	if env.PolicyResult != nil {
+		resp.Reason = env.PolicyResult.Reason
+	}
+	if env.ExecutionResult != nil {
+		resultCopy := *env.ExecutionResult
+		resp.Result = &resultCopy
+	}
+	f.replays[replayKey(env.Request.TenantID, env.Request.IdempotencyKey)] = &evidence.ReplayResponse{
+		Response: resp,
+	}
 	return nil
 }
 
-func (f *fakeEvidence) CheckIdempotency(context.Context, string, string) (*types.ToolCallResponse, error) {
-	return nil, nil
+func replayKey(tenantID, idempotencyKey string) string {
+	return tenantID + "|" + idempotencyKey
+}
+
+func (f *fakeEvidence) CheckIdempotency(_ context.Context, tenantID, idempotencyKey string) (*evidence.ReplayResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.replays[replayKey(tenantID, idempotencyKey)], nil
 }
 
 func (f *fakeEvidence) GetEvent(_ context.Context, eventID string) (*types.ToolCallEnvelope, error) {
@@ -83,8 +112,10 @@ func (f *fakeEvidence) LockParentExecution(_ context.Context, parentEventID stri
 }
 
 type fakePolicy struct {
-	decision types.Decision
-	reason   string
+	decision      types.Decision
+	reason        string
+	notify        []types.PolicyNotify
+	approverGroup string
 }
 
 func (f fakePolicy) Evaluate(context.Context, types.PolicyInput) (*types.PolicyResult, error) {
@@ -96,7 +127,12 @@ func (f fakePolicy) Evaluate(context.Context, types.PolicyInput) (*types.PolicyR
 	if r == "" {
 		r = "ok"
 	}
-	return &types.PolicyResult{Decision: d, Reason: r}, nil
+	return &types.PolicyResult{
+		Decision:      d,
+		Reason:        r,
+		Notify:        f.notify,
+		ApproverGroup: f.approverGroup,
+	}, nil
 }
 
 type fakeConnectors struct {
@@ -118,12 +154,26 @@ func (f *fakeConnectors) Exec(_ context.Context, _ connectors.ExecRequest) (*con
 }
 
 type fakeApprovals struct {
-	mu       sync.Mutex
-	usesLeft int
+	mu         sync.Mutex
+	usesLeft   int
+	createErr  error
+	createID   string
+	lastCreate *approvals.CreateApprovalInput
 }
 
-func (f *fakeApprovals) CreateRequest(context.Context, approvals.CreateApprovalInput) (*approvals.ApprovalRequest, error) {
-	return &approvals.ApprovalRequest{}, nil
+func (f *fakeApprovals) CreateRequest(_ context.Context, in approvals.CreateApprovalInput) (*approvals.ApprovalRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	copied := in
+	f.lastCreate = &copied
+	id := f.createID
+	if id == "" {
+		id = "req-1"
+	}
+	return &approvals.ApprovalRequest{ID: id}, nil
 }
 
 func (f *fakeApprovals) FindAndConsumeGrant(_ context.Context, _, _, _, _, _ string) (*approvals.ApprovalGrant, error) {
@@ -136,6 +186,25 @@ func (f *fakeApprovals) FindAndConsumeGrant(_ context.Context, _, _, _, _, _ str
 	return &approvals.ApprovalGrant{ID: "grant-1"}, nil
 }
 
+type fakeGatewayConsoleStore struct {
+	policyCfg *console.TenantPolicyConfig
+	notifCfg  *console.TenantNotificationConfig
+}
+
+func (f *fakeGatewayConsoleStore) GetTenantPolicyConfig(context.Context, string) (*console.TenantPolicyConfig, bool, error) {
+	if f.policyCfg == nil {
+		return nil, false, nil
+	}
+	return f.policyCfg, true, nil
+}
+
+func (f *fakeGatewayConsoleStore) GetTenantNotificationConfig(context.Context, string) (*console.TenantNotificationConfig, bool, error) {
+	if f.notifCfg == nil {
+		return nil, false, nil
+	}
+	return f.notifCfg, true, nil
+}
+
 func newTestGateway(fe *fakeEvidence, fc *fakeConnectors, fa *fakeApprovals, pol gatewayPolicy) *Gateway {
 	if pol == nil {
 		pol = fakePolicy{}
@@ -146,6 +215,7 @@ func newTestGateway(fe *fakeEvidence, fc *fakeConnectors, fa *fakeApprovals, pol
 		policy:         pol,
 		connectors:     fc,
 		approvals:      fa,
+		approvalsURL:   "http://approvals.example",
 		rateLimiters:   make(map[string]*list.Element),
 		rlList:         list.New(),
 		perTenantLimit: 100,
@@ -441,5 +511,191 @@ func TestHandleToolCall_ValidationError(t *testing.T) {
 	rr := postToolCall(t, gw, body)
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleToolCall_IdempotentReplayPreservesExecutionResult(t *testing.T) {
+	fe := newFakeEvidence()
+	fe.replays[replayKey("tenant1", "k-replay")] = &evidence.ReplayResponse{
+		Response: &types.ToolCallResponse{
+			EventID:  "evt-replay",
+			Decision: types.DecisionAllow,
+			Reason:   "ok",
+			Result: &types.ExecutionResult{
+				Status:     "success",
+				OutputJSON: json.RawMessage(`{"ok":true}`),
+			},
+		},
+	}
+	gw := newTestGateway(fe, &fakeConnectors{}, &fakeApprovals{}, nil)
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		RiskScore:      1,
+		IdempotencyKey: "k-replay",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp types.ToolCallResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.EventID != "evt-replay" || resp.Result == nil || resp.Result.Status != "success" {
+		t.Fatalf("unexpected replay response: %+v", resp)
+	}
+}
+
+func TestHandleToolCall_IdempotentApproveReplayReconstructsApprovalURL(t *testing.T) {
+	fe := newFakeEvidence()
+	fe.replays[replayKey("tenant1", "k-approve")] = &evidence.ReplayResponse{
+		Response: &types.ToolCallResponse{
+			EventID:  "evt-approve",
+			Decision: types.DecisionApprove,
+			Reason:   "needs review",
+		},
+		ApprovalRequestID: "req-123",
+	}
+	gw := newTestGateway(fe, &fakeConnectors{}, &fakeApprovals{}, nil)
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "jira",
+		Action:         "issue.delete",
+		RiskScore:      8,
+		IdempotencyKey: "k-approve",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp types.ToolCallResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ApprovalURL != "http://approvals.example/v1/approvals/requests/req-123" {
+		t.Fatalf("unexpected approval_url: %q", resp.ApprovalURL)
+	}
+}
+
+func TestHandleToolCall_DenyEvidenceFailureReturns500(t *testing.T) {
+	fe := newFakeEvidence()
+	fe.recordErr = errors.New("db down")
+	gw := newTestGateway(fe, &fakeConnectors{}, &fakeApprovals{}, fakePolicy{decision: types.DecisionDeny, reason: "blocked"})
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		RiskScore:      2,
+		IdempotencyKey: "k-deny-error",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleToolCall_ApproveCreateFailureReturns500(t *testing.T) {
+	fe := newFakeEvidence()
+	fa := &fakeApprovals{createErr: errors.New("insert failed")}
+	gw := newTestGateway(fe, &fakeConnectors{}, fa, fakePolicy{decision: types.DecisionApprove, reason: "needs review"})
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "jira",
+		Action:         "issue.delete",
+		RiskScore:      8,
+		IdempotencyKey: "k-approve-error",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleToolCall_TenantPolicyConfigDoesNotOverrideOPAResult(t *testing.T) {
+	fe := newFakeEvidence()
+	fa := &fakeApprovals{}
+	gw := newTestGateway(fe, &fakeConnectors{}, fa, fakePolicy{
+		decision:      types.DecisionApprove,
+		reason:        "opa approve",
+		approverGroup: "security-review",
+		notify:        []types.PolicyNotify{{Kind: "slack", Channel: "#approvals"}},
+	})
+	gw.consoleStore = &fakeGatewayConsoleStore{
+		policyCfg: &console.TenantPolicyConfig{
+			MaxRiskAutoApprove: 5,
+			ReadActions:        []string{"slack.msg.post"},
+		},
+	}
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		RiskScore:      1,
+		IdempotencyKey: "k-opa",
+	})
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp types.ToolCallResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Decision != types.DecisionApprove || resp.Reason != "opa approve" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if fa.lastCreate == nil {
+		t.Fatal("expected approval request to be created")
+	}
+	if fa.lastCreate.ApproverGroup != "security-review" || len(fa.lastCreate.Notify) != 1 {
+		t.Fatalf("expected OPA metadata to be preserved, got %+v", fa.lastCreate)
+	}
+}
+
+func TestExecute_ReplaysRecordedExecutionWithoutLink(t *testing.T) {
+	const parentID = "00000000-0000-0000-0000-000000000005"
+	fe := newFakeEvidence()
+	fe.events[parentID] = &types.ToolCallEnvelope{
+		EventID: parentID,
+		Request: types.ToolCallRequest{
+			TenantID: "tenant1",
+			AgentID:  "agent-1",
+			Tool:     "jira",
+			Action:   "issue.create",
+		},
+		Decision: types.DecisionApprove,
+	}
+	fe.replays[replayKey("tenant1", "exec:"+parentID)] = &evidence.ReplayResponse{
+		Response: &types.ToolCallResponse{
+			EventID:  "exec-1",
+			Decision: types.DecisionAllow,
+			Reason:   "approved execution",
+			Result:   &types.ExecutionResult{Status: "success"},
+		},
+	}
+	gw := newTestGateway(fe, &fakeConnectors{}, &fakeApprovals{usesLeft: 0}, nil)
+
+	rr := executeRequest(t, gw, parentID)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp types.ToolCallResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.EventID != "exec-1" || resp.Result == nil || resp.Result.Status != "success" {
+		t.Fatalf("unexpected replay response: %+v", resp)
 	}
 }

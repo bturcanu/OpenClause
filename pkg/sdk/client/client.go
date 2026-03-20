@@ -98,10 +98,16 @@ func (c *Client) WaitForApprovalThenExecute(ctx context.Context, eventID string,
 func isRetryable(err error) bool {
 	var apiErr *types.APIError
 	if errors.As(err, &apiErr) {
-		return apiErr.Retryable || apiErr.HTTPCode == http.StatusConflict
+		if apiErr.HTTPCode == http.StatusConflict {
+			return strings.Contains(strings.ToLower(apiErr.Message), "awaiting approval")
+		}
+		return apiErr.Retryable || apiErr.HTTPCode == http.StatusBadGateway || apiErr.HTTPCode == http.StatusServiceUnavailable || apiErr.HTTPCode == http.StatusGatewayTimeout
 	}
-	msg := err.Error()
-	for _, code := range []string{"409", "502", "503", "504"} {
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "awaiting approval") {
+		return true
+	}
+	for _, code := range []string{"502", "503", "504"} {
 		if strings.Contains(msg, code) {
 			return true
 		}
