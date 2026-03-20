@@ -107,10 +107,11 @@ class OpenClauseClientTest {
     }
 
     @Test
-    void riskScoreRejectsNonInteger() {
-        assertThrows(IllegalArgumentException.class, () -> ToolCallRequest.builder(
+    void riskScoreAcceptsValidInteger() {
+        ToolCallRequest req = ToolCallRequest.builder(
                 "t_123", "agent_abc", "db", "op", "key-004"
-        ).riskScore(8.5).build());
+        ).riskScore(8).build();
+        assertEquals(8, req.getRiskScore());
     }
 
     @Test

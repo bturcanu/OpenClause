@@ -2,9 +2,20 @@ import { useState, useEffect } from 'react'
 import { api } from '../api'
 
 interface Connector {
-  tool: string
+  name: string
+  type?: string
   actions: string[]
-  event_count: number
+  event_count?: number
+}
+
+function normalizeConnectors(data: any): Connector[] {
+  const arr: any[] = Array.isArray(data) ? data : data?.connectors || []
+  return arr.map(c => ({
+    name: c.name || c.tool || 'unknown',
+    type: c.type,
+    actions: c.actions || [],
+    event_count: c.event_count,
+  }))
 }
 
 export default function Connectors() {
@@ -13,8 +24,8 @@ export default function Connectors() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.get('/admin/connectors')
-      .then(data => setConnectors(Array.isArray(data) ? data : data?.connectors || []))
+    api.get('/v1/connectors')
+      .then(data => setConnectors(normalizeConnectors(data)))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
@@ -38,10 +49,13 @@ export default function Connectors() {
       ) : (
         <div className="connector-grid">
           {connectors.map(c => (
-            <div key={c.tool} className="connector-card">
+            <div key={c.name} className="connector-card">
               <div className="flex-between">
-                <h4>{c.tool}</h4>
-                <span className="badge badge-gray">{c.event_count} events</span>
+                <h4>{c.name}</h4>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {c.type && <span className={`badge badge-${c.type === 'remote' ? 'blue' : 'gray'}`}>{c.type}</span>}
+                  {c.event_count != null && <span className="badge badge-gray">{c.event_count} events</span>}
+                </div>
               </div>
               <div className="cc-actions">
                 {(c.actions || []).map(action => (
