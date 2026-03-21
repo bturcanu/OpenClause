@@ -552,3 +552,30 @@ Status: Complete
 
 - Live smoke directly covered LF-002, LF-003, LF-004, LF-005, LF-006, LF-008, LF-009, LF-010, LF-011 API reachability, and LF-014.
 - LF-001, LF-007, and LF-012 remain primarily verified by focused automated regression tests because they require log-link inspection, policy-engine failure/override conditions, or SDK harness behavior that is more reliable to validate in tests than raw curl.
+
+## UI Issues Fixed
+
+- Global polish
+  - Improved sidebar contrast and active/hover affordance in `web/console/src/index.css`.
+  - Strengthened badge borders/contrast across zebra and hover table states in `web/console/src/index.css`.
+  - Contained `pre`/code blocks on smaller widths and kept single horizontal scroll behavior in `web/console/src/index.css`.
+  - Removed connector-page silent failure behavior by surfacing actionable inline errors with retry in `web/console/src/pages/Connectors.tsx`.
+- Sessions
+  - Reworked the Sessions banner copy, clarified local-time filters, and enforced numeric risk inputs in `web/console/src/pages/Sessions.tsx`.
+  - Simplified Session detail header actions into an export menu, added structured run context with copy actions, removed the stray approval punctuation, and made “Why OpenClause decided this way” more actionable with a direct policy link in `web/console/src/pages/SessionTimeline.tsx`.
+  - Added tenant preselection support for policy review links in `web/console/src/pages/Policies.tsx`.
+- Users
+  - Tightened the invite form into a two-column layout, improved invite delivery feedback, cleaned up role pill wrapping, and simplified the sessions cell/action layout in `web/console/src/pages/Users.tsx`.
+- Tenant detail
+  - Realigned Rotate Primary Key controls, clarified expiration date copy, and split Notification Routing into clearer desktop/mobile sections in `web/console/src/pages/TenantDetail.tsx`.
+  - Improved approver helper-text contrast, aligned the Add action with the form, and upgraded empty states for approvers and alerts in `web/console/src/pages/TenantDetail.tsx`.
+  - Converted alert creation into a clear create card, made enabled/disabled semantics explicit, added trend-chart low-data messaging, improved analytics legend readability, and de-emphasized zero-value heatmap cells in `web/console/src/pages/TenantDetail.tsx`.
+- Connectors
+  - Added a search box, help panel, and capped action-badge display with `+N more` expansion in `web/console/src/pages/Connectors.tsx`.
+
+### UI Verification
+
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built in 575ms`
+- No Go tests were required for this pass because the changes were limited to console UI behavior and styling.

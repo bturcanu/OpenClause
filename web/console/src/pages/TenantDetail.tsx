@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent, useRef } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { InlineErrorState } from '../ui'
+import { EmptyState, InlineErrorState } from '../ui'
 
 interface Tenant {
   id: string
@@ -750,41 +750,42 @@ export default function TenantDetail() {
           <div className="form-card mt-16">
             <h3>Rotate Primary Key</h3>
             {rotationError && <div className="error-msg">{rotationError}</div>}
-            <div style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+            <div className="form-helper-text" style={{ marginBottom: 12 }}>
               Workflow: create new key -&gt; optionally mark primary -&gt; optionally revoke old primary.
             </div>
 
             <form onSubmit={rotatePrimaryKey}>
-              <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                <div className="form-group" style={{ minWidth: 260 }}>
+              <div className="form-grid api-key-rotation-grid">
+                <div className="form-group">
                   <label>New key name</label>
                   <input value={rotationName} onChange={e => setRotationName(e.target.value)} required placeholder="e.g., rotated-2026-03" />
                 </div>
 
-                <div className="form-group" style={{ minWidth: 220 }}>
-                  <label>Expires (optional)</label>
+                <div className="form-group">
+                  <label>Expires on (UTC date, optional)</label>
                   <input
                     type="date"
                     value={rotationExpiresAt}
                     onChange={e => setRotationExpiresAt(e.target.value)}
                   />
+                  <div className="form-helper-text">Use a calendar date like <code className="mono">2030-01-01</code>. The key stays active until that date passes.</div>
                 </div>
 
-                <div className="form-group" style={{ minWidth: 240 }}>
-                  <label style={{ display: 'block' }}>Options</label>
-                  <div style={{ display: 'grid', gap: 8, marginTop: 6 }}>
-                    <label style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+                <div className="form-group">
+                  <label>Rotation options</label>
+                  <div className="toggle-stack">
+                    <label className="toggle-field">
                       <input type="checkbox" checked={rotationMakePrimary} onChange={e => setRotationMakePrimary(e.target.checked)} />
-                      <span style={{ fontSize: 13, color: '#334155' }}>Make new key primary</span>
+                      <span>Make the new key primary immediately</span>
                     </label>
-                    <label style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+                    <label className="toggle-field">
                       <input type="checkbox" checked={rotationRevokeOldPrimary} onChange={e => setRotationRevokeOldPrimary(e.target.checked)} />
-                      <span style={{ fontSize: 13, color: '#334155' }}>Revoke old primary</span>
+                      <span>Revoke the old primary after rotation</span>
                     </label>
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <div className="form-actions-row form-actions-row-end">
                   <button className="btn btn-primary" disabled={rotating || creating}>
                     {rotating ? 'Rotating…' : 'Rotate'}
                   </button>
@@ -807,50 +808,75 @@ export default function TenantDetail() {
             <h3>Approval notifications</h3>
             {notifError && <div className="error-msg">{notifError}</div>}
             {notificationConfig === null ? (
-              <div style={{ color: '#64748b', fontSize: 13 }}>
+              <div className="form-helper-text">
                 Notification configuration not available for this user (or not yet loaded).
               </div>
             ) : (
               <form onSubmit={saveNotificationConfig}>
-                <div className="form-group">
-                  <label>Approver group</label>
-                  <input
-                    value={notifForm.approver_group}
-                    onChange={e => setNotifForm({ ...notifForm, approver_group: e.target.value })}
-                    placeholder="approver_group (e.g., platform_admin/tenant_admin)"
-                  />
-                </div>
+                <div className="notification-config-grid">
+                  <div className="detail-panel notification-config-card">
+                    <h3>Routing defaults</h3>
+                    <div className="form-group">
+                      <label>Approver group</label>
+                      <input
+                        value={notifForm.approver_group}
+                        onChange={e => setNotifForm({ ...notifForm, approver_group: e.target.value })}
+                        placeholder="platform_admin or tenant_admin"
+                      />
+                      <div className="form-helper-text">
+                        Controls which operator group is notified for new approval requests.
+                      </div>
+                    </div>
+                    <div className="table-subtext">
+                      Add one or both delivery channels below. Slack is easiest for demos, while webhooks are useful for external incident tooling.
+                    </div>
+                  </div>
 
-                <div className="form-group">
-                  <label>Slack channel (optional)</label>
-                  <input
-                    value={notifForm.slack_channel}
-                    onChange={e => setNotifForm({ ...notifForm, slack_channel: e.target.value })}
-                    placeholder="#team-alerts"
-                  />
-                </div>
+                  <div className="notification-config-stack">
+                    <div className="detail-panel notification-config-card">
+                      <h3>Slack delivery</h3>
+                      <div className="form-group">
+                        <label>Slack channel</label>
+                        <input
+                          value={notifForm.slack_channel}
+                          onChange={e => setNotifForm({ ...notifForm, slack_channel: e.target.value })}
+                          placeholder="#team-alerts"
+                        />
+                        <div className="form-helper-text">Leave blank if this tenant should not send approval notifications to Slack.</div>
+                      </div>
+                    </div>
 
-                <div className="form-group">
-                  <label>Webhook URL (optional)</label>
-                  <input
-                    value={notifForm.webhook_url}
-                    onChange={e => setNotifForm({ ...notifForm, webhook_url: e.target.value })}
-                    placeholder="https://hooks.example.com/..."
-                  />
-                </div>
+                    <div className="detail-panel notification-config-card">
+                      <h3>Webhook delivery</h3>
+                      <div className="form-grid form-grid-2">
+                        <div className="form-group">
+                          <label>Webhook URL</label>
+                          <input
+                            value={notifForm.webhook_url}
+                            onChange={e => setNotifForm({ ...notifForm, webhook_url: e.target.value })}
+                            placeholder="https://hooks.example.com/..."
+                          />
+                        </div>
 
-                <div className="form-group">
-                  <label>Webhook secret reference (optional)</label>
-                  <input
-                    value={notifForm.webhook_secret_ref}
-                    onChange={e => setNotifForm({ ...notifForm, webhook_secret_ref: e.target.value })}
-                    placeholder="secret_ref name"
-                  />
+                        <div className="form-group">
+                          <label>Webhook secret reference</label>
+                          <input
+                            value={notifForm.webhook_secret_ref}
+                            onChange={e => setNotifForm({ ...notifForm, webhook_secret_ref: e.target.value })}
+                            placeholder="secret_ref name"
+                          />
+                        </div>
+                      </div>
+                      <div className="form-helper-text">Both fields are required together so OpenClause can sign outbound webhook payloads.</div>
+                    </div>
+                  </div>
                 </div>
-
-                <button className="btn btn-primary" disabled={savingNotif}>
-                  {savingNotif ? 'Saving…' : 'Save notification config'}
-                </button>
+                <div className="form-actions-row">
+                  <p className="form-helper-text">Changes affect newly created approvals and alert notifications for this tenant.</p>
+                  <button className="btn btn-primary" disabled={savingNotif}>
+                    {savingNotif ? 'Saving…' : 'Save notification config'}
+                  </button>
+                </div>
               </form>
             )}
           </div>
@@ -929,10 +955,13 @@ export default function TenantDetail() {
           {alertsError && <InlineErrorState message={alertsError} onRetry={() => void fetchAlerts()} />}
 
           <div className="form-card mt-16">
-            <h3>+ New deny_spike rule</h3>
+            <h3>Create deny_spike rule</h3>
+            <p className="form-helper-text">
+              Create a rule that fires when denies exceed a threshold inside a rolling time window.
+            </p>
             <form onSubmit={createAlertRule}>
-              <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
-                <div className="form-group" style={{ minWidth: 240 }}>
+              <div className="form-grid alert-rule-form-grid">
+                <div className="form-group">
                   <label>Rule name</label>
                   <input
                     value={alertRuleForm.name}
@@ -941,7 +970,7 @@ export default function TenantDetail() {
                     required
                   />
                 </div>
-                <div className="form-group" style={{ minWidth: 180 }}>
+                <div className="form-group">
                   <label>N (denies)</label>
                   <input
                     type="number"
@@ -951,7 +980,7 @@ export default function TenantDetail() {
                     required
                   />
                 </div>
-                <div className="form-group" style={{ minWidth: 220 }}>
+                <div className="form-group">
                   <label>M (window minutes)</label>
                   <input
                     type="number"
@@ -961,18 +990,18 @@ export default function TenantDetail() {
                     required
                   />
                 </div>
-                <div className="form-group" style={{ minWidth: 200 }}>
-                  <label>Enabled</label>
-                  <div style={{ marginTop: 6 }}>
+                <div className="form-group">
+                  <label>Activation</label>
+                  <label className="toggle-field">
                     <input
                       type="checkbox"
                       checked={alertRuleForm.enabled}
                       onChange={e => setAlertRuleForm(f => ({ ...f, enabled: e.target.checked }))}
-                    />{' '}
-                    <span style={{ fontSize: 13, color: '#334155' }}>{alertRuleForm.enabled ? 'On' : 'Off'}</span>
-                  </div>
+                    />
+                    <span>{alertRuleForm.enabled ? 'Enabled immediately' : 'Save as disabled'}</span>
+                  </label>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <div className="form-actions-row form-actions-row-end">
                   <button className="btn btn-primary" disabled={alertRuleSaving || alertsLoading}>
                     {alertRuleSaving ? 'Saving…' : 'Create'}
                   </button>
@@ -1002,11 +1031,7 @@ export default function TenantDetail() {
                     </td>
                   </tr>
                 ) : alertRules.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
-                      No alert rules configured
-                    </td>
-                  </tr>
+                  <tr><td colSpan={6} style={{ padding: 0 }}><EmptyState icon="⚠" title="No alert rules yet" description="Create a deny_spike rule to notify operators when a tenant starts hitting repeated policy denials." /></td></tr>
                 ) : (
                   alertRules.map(r => (
                     <tr key={r.id}>
@@ -1047,13 +1072,13 @@ export default function TenantDetail() {
                       </td>
                       <td>
                         {editingRuleId === r.id ? (
-                          <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                          <label className="toggle-field">
                             <input
                               type="checkbox"
                               checked={editRuleForm.enabled}
                               onChange={e => setEditRuleForm(f => ({ ...f, enabled: e.target.checked }))}
                             />
-                            <span style={{ fontSize: 13, color: '#334155' }}>{editRuleForm.enabled ? 'On' : 'Off'}</span>
+                            <span>{editRuleForm.enabled ? 'Enabled' : 'Disabled'}</span>
                           </label>
                         ) : r.enabled ? (
                           <span className="badge badge-green">Active</span>
@@ -1119,11 +1144,7 @@ export default function TenantDetail() {
                     </td>
                   </tr>
                 ) : alertEvents.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
-                      No alert events yet
-                    </td>
-                  </tr>
+                  <tr><td colSpan={7} style={{ padding: 0 }}><EmptyState icon="⌁" title="No alert events yet" description="Triggered alert deliveries will appear here with retry state and delivery outcomes." /></td></tr>
                 ) : (
                   alertEvents.map(ev => (
                     <tr key={ev.id}>
@@ -1196,6 +1217,7 @@ export default function TenantDetail() {
 
             const maxDecision = Math.max(...trend.flatMap(b => [b.allow_count, b.deny_count, b.approve_count]), 1)
             const riskMaxTotal = Math.max(...riskHeatmap.map(r => r.total), 1)
+            const hasMeaningfulTrendData = trend.length >= 2 && trend.some(bucket => bucket.total > 0)
 
             const badgeFor = (ok: boolean) => (ok ? <span className="badge badge-green">Done</span> : <span className="badge badge-gray">Pending</span>)
             const alphaFor = (count: number) => 0.08 + 0.92 * (riskMaxTotal > 0 ? count / riskMaxTotal : 0)
@@ -1224,54 +1246,64 @@ export default function TenantDetail() {
                 {trend.length > 0 && (
                   <div className="detail-panel">
                     <h3>Allow/Deny/Approve Trend</h3>
-                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 120, padding: '12px 0' }}>
-                      {trend.map((b, i) => (
-                        <div key={i} style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 2 }}>
-                          <div
-                            title={`allow: ${b.allow_count}`}
-                            style={{
-                              flex: 1,
-                              background: '#22c55e',
-                              borderRadius: '3px 3px 0 0',
-                              height: `${(b.allow_count / maxDecision) * 100}%`,
-                            }}
-                          />
-                          <div
-                            title={`deny: ${b.deny_count}`}
-                            style={{
-                              flex: 1,
-                              background: '#ef4444',
-                              borderRadius: '3px 3px 0 0',
-                              height: `${(b.deny_count / maxDecision) * 100}%`,
-                            }}
-                          />
-                          <div
-                            title={`approve: ${b.approve_count}`}
-                            style={{
-                              flex: 1,
-                              background: '#eab308',
-                              borderRadius: '3px 3px 0 0',
-                              height: `${(b.approve_count / maxDecision) * 100}%`,
-                            }}
-                          />
+                    {!hasMeaningfulTrendData ? (
+                      <EmptyState
+                        icon="◔"
+                        title="Not enough data yet"
+                        description="OpenClause needs a few tool calls in this range before the trend chart becomes useful."
+                      />
+                    ) : (
+                      <>
+                        <div className="trend-chart">
+                          {trend.map((b, i) => (
+                            <div key={i} className="trend-chart-bucket">
+                              <div
+                                title={`allow: ${b.allow_count}`}
+                                style={{
+                                  flex: 1,
+                                  background: '#22c55e',
+                                  borderRadius: '3px 3px 0 0',
+                                  height: `${(b.allow_count / maxDecision) * 100}%`,
+                                }}
+                              />
+                              <div
+                                title={`deny: ${b.deny_count}`}
+                                style={{
+                                  flex: 1,
+                                  background: '#ef4444',
+                                  borderRadius: '3px 3px 0 0',
+                                  height: `${(b.deny_count / maxDecision) * 100}%`,
+                                }}
+                              />
+                              <div
+                                title={`approve: ${b.approve_count}`}
+                                style={{
+                                  flex: 1,
+                                  background: '#eab308',
+                                  borderRadius: '3px 3px 0 0',
+                                  height: `${(b.approve_count / maxDecision) * 100}%`,
+                                }}
+                              />
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                    <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#64748b', marginTop: 8 }}>
-                      <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#22c55e', borderRadius: 2, marginRight: 6 }} />Allow</span>
-                      <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#ef4444', borderRadius: 2, marginRight: 6 }} />Deny</span>
-                      <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#eab308', borderRadius: 2, marginRight: 6 }} />Approve</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8', marginTop: 12 }}>
-                      <span>{formatDate(trend[0].bucket, 'date')}</span>
-                      <span>{formatDate(trend[trend.length - 1].bucket, 'date')}</span>
-                    </div>
+                        <div className="trend-legend">
+                          <span><span className="trend-legend-chip trend-legend-allow" />Allow</span>
+                          <span><span className="trend-legend-chip trend-legend-deny" />Deny</span>
+                          <span><span className="trend-legend-chip trend-legend-approve" />Approve</span>
+                        </div>
+                        <div className="trend-range-labels">
+                          <span>{formatDate(trend[0].bucket, 'date')}</span>
+                          <span>{formatDate(trend[trend.length - 1].bucket, 'date')}</span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 
                 <div className="detail-panel mt-16">
                   <h3>Risk Heatmap</h3>
-                  <div className="table-container" style={{ marginBottom: 0 }}>
+                  <div className="table-container risk-heatmap-table" style={{ marginBottom: 0 }}>
                     <table>
                       <thead>
                         <tr>
@@ -1286,10 +1318,10 @@ export default function TenantDetail() {
                         {riskHeatmap.map(r => (
                           <tr key={r.risk_score}>
                             <td style={{ fontFamily: 'monospace' }}>{r.risk_score}</td>
-                            <td style={{ background: `rgba(34,197,94,${alphaFor(r.allow_count)})` }}>{r.allow_count}</td>
-                            <td style={{ background: `rgba(239,68,68,${alphaFor(r.deny_count)})` }}>{r.deny_count}</td>
-                            <td style={{ background: `rgba(234,179,8,${alphaFor(r.approve_count)})` }}>{r.approve_count}</td>
-                            <td style={{ color: '#334155' }}>{r.total}</td>
+                            <td className={r.allow_count === 0 ? 'heatmap-zero' : ''} style={{ background: r.allow_count === 0 ? undefined : `rgba(34,197,94,${alphaFor(r.allow_count)})` }}>{r.allow_count === 0 ? '—' : r.allow_count}</td>
+                            <td className={r.deny_count === 0 ? 'heatmap-zero' : ''} style={{ background: r.deny_count === 0 ? undefined : `rgba(239,68,68,${alphaFor(r.deny_count)})` }}>{r.deny_count === 0 ? '—' : r.deny_count}</td>
+                            <td className={r.approve_count === 0 ? 'heatmap-zero' : ''} style={{ background: r.approve_count === 0 ? undefined : `rgba(234,179,8,${alphaFor(r.approve_count)})` }}>{r.approve_count === 0 ? '—' : r.approve_count}</td>
+                            <td style={{ color: '#334155' }}>{r.total === 0 ? '—' : r.total}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1369,9 +1401,9 @@ export default function TenantDetail() {
       {activeTab === 'approvers' && (
         <>
           { (allowlistSource === 'env' || allowlistSource === 'both') && (
-            <div className="warn-banner" style={{ marginTop: 16, border: '1px solid #f59e0b', padding: 12, borderRadius: 8, background: '#fffbeb' }}>
+            <div className="warn-banner" style={{ marginTop: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>Dev bootstrap allowlists enabled</div>
-              <div style={{ color: '#92400e', fontSize: 13 }}>Approver authorization may allow env allowlists in addition to DB roles.</div>
+              <div className="form-helper-text helper-text-warn">Approver authorization may allow env allowlists in addition to DB roles.</div>
             </div>
           )}
 
@@ -1380,24 +1412,26 @@ export default function TenantDetail() {
           <div className="form-card">
             <h3>Add Approver</h3>
             <form onSubmit={addApprover}>
-              <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
-                <div className="form-group" style={{ minWidth: 280 }}>
+              <div className="form-grid approver-form-grid">
+                <div className="form-group">
                   <label>Email</label>
                   <input value={approverEmail} onChange={e => setApproverEmail(e.target.value)} placeholder="name@company.com" />
                 </div>
-                <div className="form-group" style={{ minWidth: 280 }}>
+                <div className="form-group">
                   <label>Slack user id (optional)</label>
                   <input value={approverSlackUserID} onChange={e => setApproverSlackUserID(e.target.value)} placeholder="U1234567890" />
-                  <div style={{ marginTop: 4, color: '#64748b', fontSize: 12 }}>
+                  <div className="form-helper-text">
                     If provided without an email, this will only link to an existing user.
                     Provide an email to create the user + link Slack id.
                   </div>
                 </div>
-                <div className="form-group" style={{ minWidth: 220 }}>
+                <div className="form-group">
                   <label>Name (optional)</label>
                   <input value={approverName} onChange={e => setApproverName(e.target.value)} placeholder="Full name" />
                 </div>
-                <button className="btn btn-primary" disabled={creating}>Add</button>
+                <div className="form-actions-row form-actions-row-end">
+                  <button className="btn btn-primary" disabled={creating}>Add approver</button>
+                </div>
               </div>
             </form>
           </div>
@@ -1414,7 +1448,7 @@ export default function TenantDetail() {
               </thead>
               <tbody>
                 {approvers.length === 0 ? (
-                  <tr><td colSpan={4} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No approvers</td></tr>
+                  <tr><td colSpan={4} style={{ padding: 0 }}><EmptyState icon="✓" title="No approvers yet" description="Add at least one approver so high-risk actions can be reviewed in the console or via notifications." /></td></tr>
                 ) : (
                   approvers.map(a => (
                     <tr key={a.id}>

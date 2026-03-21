@@ -1,6 +1,7 @@
 import { useEffect, useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, clearStoredAuth, formatDate, getStoredAuthClaims, getStoredSessionID } from '../api'
+import { EmptyState, InlineErrorState, PageHeaderBlock } from '../ui'
 
 type UserRole = {
   id: string
@@ -232,14 +233,12 @@ export default function Users() {
 
   return (
     <div>
-      <div className="flex-between">
-        <div className="page-header">
-          <h2>Users</h2>
-          <p>Manage console users, roles, invites, and active login sessions</p>
-        </div>
-      </div>
+      <PageHeaderBlock
+        title="Users"
+        description="Manage console users, invite access, role assignments, and active login sessions without leaving the console."
+      />
 
-      {error && <div className="error-msg">{error}</div>}
+      {error ? <InlineErrorState message={error} onRetry={() => void fetchUsers()} /> : null}
       {loading ? <div className="loading">Loading…</div> : null}
 
       {canManageUsers ? (
@@ -288,105 +287,97 @@ export default function Users() {
             <div className="form-card">
               <h3>Invite User</h3>
               <form onSubmit={handleCreateInvite}>
-                <div className="form-group">
-                  <label>Email</label>
-                  <input value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} required />
+                <div className="form-grid form-grid-2">
+                  <div className="form-group">
+                    <label>Email</label>
+                    <input value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Tenant ID</label>
+                    <input
+                      value={inviteForm.tenant_id}
+                      onChange={e => setInviteForm({ ...inviteForm, tenant_id: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Role</label>
+                    <select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value as any })}>
+                      <option value="tenant_admin">tenant_admin</option>
+                      <option value="approver">approver</option>
+                      <option value="viewer">viewer</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Name (optional)</label>
+                    <input value={inviteForm.name} onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })} />
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label>Tenant ID</label>
-                  <input
-                    value={inviteForm.tenant_id}
-                    onChange={e => setInviteForm({ ...inviteForm, tenant_id: e.target.value })}
-                    required
-                  />
+                <div className="form-actions-row">
+                  <p className="form-helper-text">
+                    Invites create a time-limited accept link. If email delivery fails, admins can still copy the link below.
+                  </p>
+                  <button className="btn btn-primary" type="submit">
+                    Create invite
+                  </button>
                 </div>
-                <div className="form-group">
-                  <label>Role</label>
-                  <select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value as any })}>
-                    <option value="tenant_admin">tenant_admin</option>
-                    <option value="approver">approver</option>
-                    <option value="viewer">viewer</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label>Name (optional)</label>
-                  <input value={inviteForm.name} onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })} />
-                </div>
-                <button className="btn btn-primary mt-8" type="submit">
-                  Create invite
-                </button>
               </form>
               {inviteCreated && (
-                <div style={{ marginTop: 14 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
-                    Invite created
+                <div className="detail-panel invite-result-panel">
+                  <div className="invite-result-header">
+                    <div>
+                      <div className="meta-label">Invite status</div>
+                      <div className="invite-result-title">Invite created</div>
+                    </div>
+                    <div className={`invite-status-pill invite-status-${inviteCreated.email_status || 'ready'}`}>
+                      {inviteCreated.email_status === 'sent' ? 'Email sent' : null}
+                      {inviteCreated.email_status === 'failed' ? 'Email failed' : null}
+                      {inviteCreated.email_status === 'logged' ? 'Logged for dev' : null}
+                      {!inviteCreated.email_status ? 'Link ready' : null}
+                    </div>
                   </div>
-                  <div
-                    style={{
-                      marginBottom: 8,
-                      color:
-                        inviteCreated.email_status === 'sent'
-                          ? '#166534'
-                          : inviteCreated.email_status === 'failed'
-                            ? '#b91c1c'
-                            : '#92400e',
-                      fontSize: 12,
-                      fontWeight: 700,
-                    }}
-                  >
+                  <div className="table-subtext">
                     {inviteCreated.email_status === 'sent' ? 'Email sent' : null}
                     {inviteCreated.email_status === 'failed' ? `Email failed (copy link instead)${inviteCreated.email_error ? `: ${inviteCreated.email_error}` : ''}` : null}
                     {inviteCreated.email_status === 'logged' ? 'Invite link logged for dev; copy it below or check console-api logs.' : null}
                     {!inviteCreated.email_status ? 'Invite link ready to copy.' : null}
                   </div>
-                  <div className="detail-row" style={{ display: 'block', marginBottom: 8 }}>
-                    <div style={{ fontSize: 12, color: '#64748b' }}>Accept link</div>
+                  <div className="detail-row detail-row-block">
+                    <div className="meta-label">Accept link</div>
                     {(() => {
                       const acceptUrl = inviteCreated.accept_url || new URL(`/invite/accept?token=${encodeURIComponent(inviteCreated.token)}`, window.location.origin).toString()
                       return (
-                        <>
-                          <a href={acceptUrl} target="_blank" rel="noreferrer">
+                        <div className="invite-link-actions">
+                          <a href={acceptUrl} target="_blank" rel="noreferrer" className="link-button">
                             Open accept page
                           </a>
-                          <div style={{ marginTop: 6 }}>
-                            <button
-                              className="btn btn-outline btn-sm"
-                              type="button"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(acceptUrl)
-                                  setCopyStatus('Link copied')
-                                  setTimeout(() => setCopyStatus(''), 1500)
-                                } catch {
-                                  setCopyStatus('Copy failed')
-                                  setTimeout(() => setCopyStatus(''), 1500)
-                                }
-                              }}
-                            >
-                              Copy link
-                            </button>
-                          </div>
-                        </>
+                          <button
+                            className="btn btn-outline btn-sm"
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(acceptUrl)
+                                setCopyStatus('Link copied')
+                                setTimeout(() => setCopyStatus(''), 1500)
+                              } catch {
+                                setCopyStatus('Copy failed')
+                                setTimeout(() => setCopyStatus(''), 1500)
+                              }
+                            }}
+                          >
+                            Copy link
+                          </button>
+                        </div>
                       )
                     })()}
                   </div>
                   {copyStatus && (
-                    <div style={{ marginTop: 8, color: '#16a34a', fontSize: 12, fontWeight: 700 }}>
+                    <div className="success-inline">
                       {copyStatus}
                     </div>
                   )}
-                  <div style={{ fontSize: 12, color: '#64748b' }}>Token</div>
-                  <div
-                    style={{
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      background: '#f1f5f9',
-                      padding: 10,
-                      borderRadius: 6,
-                      wordBreak: 'break-all',
-                      marginTop: 6,
-                    }}
-                  >
+                  <div className="meta-label">Token</div>
+                  <div className="invite-token-block">
                     {inviteCreated.token}
                   </div>
                 </div>
@@ -472,17 +463,17 @@ export default function Users() {
                       {u.roles.length === 0 ? (
                         '—'
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div className="role-list">
                           {u.roles.map(rr => (
-                            <div key={rr.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                              <span className="badge badge-green" style={{ textTransform: 'none' }}>
+                            <div key={rr.id} className="role-item">
+                              <span className="badge badge-green badge-lower">
                                 {rr.role}
                               </span>
-                              <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#64748b' }}>
+                              <span className="role-scope mono">
                                 {rr.tenant_id ?? 'platform'}
                               </span>
                               {canManageUsers ? (
-                                <button className="btn btn-danger btn-sm" onClick={() => handleRemoveRole(u.id, rr.id)}>
+                                <button className="btn btn-danger btn-sm role-action-button" onClick={() => handleRemoveRole(u.id, rr.id)}>
                                   Remove
                                 </button>
                               ) : null}
@@ -493,21 +484,17 @@ export default function Users() {
                     </td>
                     {canManageSessions ? (
                       <td style={{ minWidth: 180 }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          <div>
-                            <span className={`badge ${(u.active_session_count || 0) > 0 ? 'badge-green' : 'badge-gray'}`}>
-                              {u.active_session_count || 0} active
-                            </span>
-                          </div>
-                          <div>
-                            <button
-                              className="btn btn-outline btn-sm"
-                              onClick={() => void toggleUserSessions(u.id)}
-                              disabled={sessionsLoadingUserID === u.id}
-                            >
-                              {isExpanded ? 'Hide sessions' : 'Manage sessions'}
-                            </button>
-                          </div>
+                        <div className="session-summary-cell">
+                          <span className={`badge ${(u.active_session_count || 0) > 0 ? 'badge-green' : 'badge-gray'}`}>
+                            {u.active_session_count || 0} active
+                          </span>
+                          <button
+                            className="btn btn-outline btn-sm"
+                            onClick={() => void toggleUserSessions(u.id)}
+                            disabled={sessionsLoadingUserID === u.id}
+                          >
+                            {isExpanded ? 'Hide' : 'Review'}
+                          </button>
                         </div>
                       </td>
                     ) : null}
@@ -520,7 +507,11 @@ export default function Users() {
                           {sessionsLoadingUserID === u.id ? (
                             <div className="loading">Loading sessions…</div>
                           ) : sessions.length === 0 ? (
-                            <p style={{ margin: 0, color: '#64748b' }}>No active login sessions for this user.</p>
+                            <EmptyState
+                              icon="↻"
+                              title="No active login sessions"
+                              description="This user does not have any active console sessions to revoke right now."
+                            />
                           ) : (
                             <div className="table-container" style={{ marginBottom: 0 }}>
                               <table>

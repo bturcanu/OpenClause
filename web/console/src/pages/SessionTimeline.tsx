@@ -193,6 +193,17 @@ export default function SessionTimeline() {
     }
   }
 
+  async function handleCopyValue(label: string, value: string) {
+    try {
+      await copyText(value)
+      setCopyStatus(`${label} copied`)
+      window.setTimeout(() => setCopyStatus(''), 1800)
+    } catch {
+      setCopyStatus('Copy failed')
+      window.setTimeout(() => setCopyStatus(''), 1800)
+    }
+  }
+
   async function exportSession(kind: 'csv' | 'json') {
     try {
       const query = buildQuery({ tenant_id: tenantID })
@@ -224,12 +235,19 @@ export default function SessionTimeline() {
             <Link to="/sessions" className="btn btn-outline">
               Back to sessions
             </Link>
-            <button className="btn btn-outline" type="button" onClick={() => void exportSession('csv')} disabled={loading || !session || tenantCandidates.length > 0}>
-              Export CSV
-            </button>
-            <button className="btn btn-outline" type="button" onClick={() => void exportSession('json')} disabled={loading || !session || tenantCandidates.length > 0}>
-              Export JSON
-            </button>
+            <details className="action-menu">
+              <summary className="btn btn-outline" aria-disabled={loading || !session || tenantCandidates.length > 0}>
+                Export ▾
+              </summary>
+              <div className="action-menu-list">
+                <button className="action-menu-item" type="button" onClick={() => void exportSession('csv')} disabled={loading || !session || tenantCandidates.length > 0}>
+                  Export CSV
+                </button>
+                <button className="action-menu-item" type="button" onClick={() => void exportSession('json')} disabled={loading || !session || tenantCandidates.length > 0}>
+                  Export JSON
+                </button>
+              </div>
+            </details>
             <button className="btn btn-primary" type="button" onClick={() => void handleCopySummary()} disabled={loading || !session || tenantCandidates.length > 0}>
               Copy shareable summary
             </button>
@@ -262,7 +280,7 @@ export default function SessionTimeline() {
 
       {session ? (
         <div className="stats-grid">
-          <StatCard label="Requested by" value={formatRequester(session.user_id, session.user_name, session.user_email, session.agent_id)} hint={`Trace ${noneText(session.trace_id)}`} />
+          <StatCard label="Events" value={session.event_count} hint="Events attached to this run" />
           <StatCard label="Started" value={formatDate(session.started_at)} />
           <StatCard label="Last event" value={formatDate(session.last_event_at)} />
           <StatCard label="Decision mix" value={`${session.allow_count || 0}/${session.deny_count || 0}/${session.approve_count || 0}`} hint="allow / deny / approve" />
@@ -270,7 +288,66 @@ export default function SessionTimeline() {
       ) : null}
 
       {session && tenantCandidates.length === 0 ? (
+        <div className="detail-panel">
+          <h3>Run context</h3>
+          <div className="identity-grid">
+            <div className="identity-card">
+              <span className="meta-label">Requested by</span>
+              <div className="identity-primary">{formatRequester(session.user_id, session.user_name, session.user_email, session.agent_id)}</div>
+              <div className="identity-secondary">Use these IDs to line up approvals, analytics, and downstream traces.</div>
+            </div>
+            <div className="identity-card">
+              <span className="meta-label">Session</span>
+              <div className="identity-copy-row">
+                <code className="mono">{noneText(session.id)}</code>
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Session ID', session.id)}>
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div className="identity-card">
+              <span className="meta-label">Tenant</span>
+              <div className="identity-copy-row">
+                <code className="mono">{noneText(session.tenant_id)}</code>
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Tenant ID', session.tenant_id)}>
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div className="identity-card">
+              <span className="meta-label">Agent</span>
+              <div className="identity-copy-row">
+                <code className="mono">{noneText(session.agent_id)}</code>
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Agent ID', session.agent_id)}>
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div className="identity-card">
+              <span className="meta-label">User ID</span>
+              <div className="identity-copy-row">
+                <code className="mono">{noneText(session.user_id)}</code>
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('User ID', noneText(session.user_id))} disabled={!session.user_id}>
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div className="identity-card">
+              <span className="meta-label">Trace</span>
+              <div className="identity-copy-row">
+                <code className="mono">{noneText(session.trace_id)}</code>
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Trace ID', noneText(session.trace_id))} disabled={!session.trace_id}>
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {session && tenantCandidates.length === 0 ? (
         <div className="filters-panel">
+          <div className="filters-panel-note">Timeline filters use your local browser time.</div>
           <div className="filters-bar filters-bar-dense">
             <div className="form-group">
               <label>Decision</label>
@@ -291,18 +368,18 @@ export default function SessionTimeline() {
             </div>
             <div className="form-group form-group-small">
               <label>Risk min</label>
-              <input value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
+              <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
             </div>
             <div className="form-group form-group-small">
               <label>Risk max</label>
-              <input value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+              <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
             </div>
             <div className="form-group">
-              <label>Since</label>
+              <label>Since (local time)</label>
               <input value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
             </div>
             <div className="form-group">
-              <label>Until</label>
+              <label>Until (local time)</label>
               <input value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
             </div>
             <div className="form-group">
@@ -380,8 +457,14 @@ export default function SessionTimeline() {
                 </div>
 
                 <div className="session-callout">
-                  <strong>Why this happened</strong>
-                  <p>{event.policy_reason || 'Policy reason was not recorded for this event.'}</p>
+                  <strong>Why OpenClause decided this way</strong>
+                  <p>{event.explain}</p>
+                  <p className="table-subtext">{event.policy_reason || 'A detailed policy reason was not recorded for this event.'}</p>
+                  <div className="session-callout-actions">
+                    <Link to={`/policies?tenant_id=${encodeURIComponent(event.tenant_id)}`} className="btn btn-outline btn-sm">
+                      Review tenant policy
+                    </Link>
+                  </div>
                 </div>
 
                 {event.risk_factors && event.risk_factors.length > 0 ? (
@@ -405,11 +488,33 @@ export default function SessionTimeline() {
                         Open approval
                       </Link>
                     </div>
-                    <p>
-                      Approval <code>{event.approval.id}</code> is <strong>{event.approval.status}</strong>.
-                    </p>
-                    {event.approval.reason ? <p className="table-subtext">Reason: {event.approval.reason}</p> : null}
-                    {event.approval.deny_reason ? <p className="table-subtext">Deny reason: {event.approval.deny_reason}</p> : null}
+                    <div className="mini-detail-list">
+                      <div className="mini-detail-row">
+                        <span className="meta-label">Approval ID</span>
+                        <div className="identity-copy-row">
+                          <code className="mono">{event.approval.id}</code>
+                          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Approval ID', event.approval!.id)}>
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mini-detail-row">
+                        <span className="meta-label">Status</span>
+                        <span className={`badge badge-${decisionTone(event.approval.status)}`}>{event.approval.status}</span>
+                      </div>
+                      {event.approval.reason ? (
+                        <div className="mini-detail-row">
+                          <span className="meta-label">Approver note</span>
+                          <div>{event.approval.reason}</div>
+                        </div>
+                      ) : null}
+                      {event.approval.deny_reason ? (
+                        <div className="mini-detail-row">
+                          <span className="meta-label">Deny reason</span>
+                          <div>{event.approval.deny_reason}</div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
 
@@ -421,11 +526,33 @@ export default function SessionTimeline() {
                         Open execution event
                       </Link>
                     </div>
-                    <p>
-                      Execution finished with <strong>{event.execution.status}</strong>
-                      {typeof event.execution.duration_ms === 'number' ? ` in ${event.execution.duration_ms}ms.` : '.'}
-                    </p>
-                    {event.execution.error_msg ? <p className="table-subtext">Error: {event.execution.error_msg}</p> : null}
+                    <div className="mini-detail-list">
+                      <div className="mini-detail-row">
+                        <span className="meta-label">Execution event</span>
+                        <div className="identity-copy-row">
+                          <code className="mono">{event.execution.event_id}</code>
+                          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Execution event ID', event.execution!.event_id)}>
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mini-detail-row">
+                        <span className="meta-label">Status</span>
+                        <span className={`badge badge-${decisionTone(event.execution.status)}`}>{event.execution.status}</span>
+                      </div>
+                      {typeof event.execution.duration_ms === 'number' ? (
+                        <div className="mini-detail-row">
+                          <span className="meta-label">Duration</span>
+                          <div>{event.execution.duration_ms}ms</div>
+                        </div>
+                      ) : null}
+                      {event.execution.error_msg ? (
+                        <div className="mini-detail-row">
+                          <span className="meta-label">Error</span>
+                          <div>{event.execution.error_msg}</div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
 

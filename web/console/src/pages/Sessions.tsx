@@ -130,8 +130,13 @@ export default function Sessions() {
         }
       />
 
-      <div className="banner-note mb-16">
-        Sessions are derived from observed `session_id` values on tool calls. Events without a session id still appear in Audit Trail as <strong>(none)</strong>. If the same session id exists in multiple tenants, platform admins will be prompted to pick the tenant when opening it.
+      <div className="banner-note banner-note-compact mb-16">
+        <div>
+          <strong>Runs are grouped by tool-call `session_id`.</strong> Events without one still appear in Audit Trail as <strong>(none)</strong>. Platform admins will be asked to pick a tenant only when the same session id exists in multiple tenants.
+        </div>
+        <Link to="/events" className="link-button">
+          Open Audit Trail
+        </Link>
       </div>
 
       <div className="stats-grid">
@@ -144,6 +149,7 @@ export default function Sessions() {
       {error ? <InlineErrorState message={error} onRetry={() => void fetchSessions()} /> : null}
 
       <div className="filters-panel">
+        <div className="filters-panel-note">Date filters use your local browser time.</div>
         <div className="filters-bar filters-bar-dense">
           <div className="form-group">
             <label>Tenant</label>
@@ -184,18 +190,34 @@ export default function Sessions() {
           </div>
           <div className="form-group form-group-small">
             <label>Risk min</label>
-            <input value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
+            <input
+              type="number"
+              min={0}
+              max={10}
+              inputMode="numeric"
+              value={filters.risk_min}
+              onChange={e => updateFilter('risk_min', e.target.value)}
+              placeholder="0"
+            />
           </div>
           <div className="form-group form-group-small">
             <label>Risk max</label>
-            <input value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+            <input
+              type="number"
+              min={0}
+              max={10}
+              inputMode="numeric"
+              value={filters.risk_max}
+              onChange={e => updateFilter('risk_max', e.target.value)}
+              placeholder="10"
+            />
           </div>
           <div className="form-group">
-            <label>Since</label>
+            <label>Since (local time)</label>
             <input value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
           </div>
           <div className="form-group">
-            <label>Until</label>
+            <label>Until (local time)</label>
             <input value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
           </div>
         </div>

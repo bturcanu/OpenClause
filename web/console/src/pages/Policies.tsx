@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
 import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton } from '../ui'
 
@@ -46,6 +47,7 @@ function parseActions(raw: string): string[] {
 }
 
 export default function Policies() {
+  const [searchParams] = useSearchParams()
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [selectedTenantID, setSelectedTenantID] = useState('')
   const [versions, setVersions] = useState<PolicyVersion[]>([])
@@ -79,7 +81,11 @@ export default function Policies() {
       const data = await api.get('/admin/tenants')
       const items = Array.isArray(data) ? (data as Tenant[]) : []
       setTenants(items)
-      if (!selectedTenantID && items.length > 0) setSelectedTenantID(items[0].id)
+      if (!selectedTenantID && items.length > 0) {
+        const requestedTenantID = searchParams.get('tenant_id') || ''
+        const matchedTenant = requestedTenantID ? items.find(item => item.id === requestedTenantID) : null
+        setSelectedTenantID(matchedTenant?.id || items[0].id)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load tenants')
       setLoading(false)
@@ -112,7 +118,7 @@ export default function Policies() {
 
   useEffect(() => {
     void fetchTenants()
-  }, [])
+  }, [searchParams])
 
   useEffect(() => {
     if (!selectedTenantID) return
