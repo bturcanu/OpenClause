@@ -579,3 +579,61 @@ Status: Complete
   - Pass
   - Key output: `✓ built in 575ms`
 - No Go tests were required for this pass because the changes were limited to console UI behavior and styling.
+
+## Final Sweep: API Client + Console Consistency
+
+Date: 2026-03-20
+Branch: `feature/console-sessions-polish`
+Status: Complete
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-032 | Medium | Policies UI | Policy Builder still loaded config + version history as all-or-nothing, so a partial outage looked like a full-page failure and hid whichever half still worked | `fetchPolicyState` used `Promise.all(...)` and a single catch path instead of explicit partial-load handling | Switched the load to `Promise.allSettled(...)`, surfaced a single actionable error banner naming the failed sections, reset only the failed slices, and upgraded the empty version-history row to a real `EmptyState` | `web/console/src/pages/Policies.tsx` | Fixed |
+| LF-033 | Low | Overview UI | The dashboard still had older “plain row” empty states, which looked inconsistent next to the newer operator surfaces and made no-data conditions feel accidental | `Overview` had earlier error handling improvements but had not been updated to the shared empty-state pattern | Replaced the remaining empty placeholders with `EmptyState` blocks for both event-volume and recent-event no-data cases | `web/console/src/pages/Overview.tsx` | Fixed |
+
+### API Client Invariant
+
+- Confirmed and kept the existing invariant in `web/console/src/api.ts`:
+  - `apiFetch(...)` returns a raw `Response`
+  - `api.get/post/put/delete` are responsible for JSON parsing
+  - `api.delete(...)` returns `{}` for `204 No Content` and does not attempt JSON parsing
+- This avoided a double-parse runtime break after the recent `readJSONResponse(...)` changes, so no further `api.ts` refactor was needed in this pass.
+
+### Files Changed
+
+- `web/console/src/pages/Overview.tsx`
+- `web/console/src/pages/Policies.tsx`
+
+### Verification
+
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built in 784ms`
+- Route-shell smoke after final sweep
+  - Pass
+  - Key output:
+    - Overview is mounted at `/` and returned `200`
+    - `/policies` and `/connectors` returned `200`
+    - `/events` and `/events/20fb65a2-484c-4fcc-9109-da37a9da8689` returned `200`
+    - `/approvals`, `/alerts`, `/tenants`, `/tenants/9550e31d-4f23-4da3-b206-55b5ec61ff5e?tab=agents`, `/users`, `/sessions`, `/sessions/demo-session-1774067410`, `/login`, `/invite/accept?token=demo-token`, and `/reset?token=demo-token` all returned `200`
+- Operator-path API smoke
+  - Pass
+  - Key output:
+    - login succeeded for `admin@openclause.dev`
+    - current tenant `9550e31d-4f23-4da3-b206-55b5ec61ff5e`
+    - current event `20fb65a2-484c-4fcc-9109-da37a9da8689`
+    - current session `demo-session-1774067410`
+    - invite creation returned `{"email_status":"logged","has_accept_url":true}`
+- Outage simulation
+  - Pass
+  - Key output:
+    - while `console-api` was stopped, `http://localhost:3000/` still returned `200`
+    - proxied API routes `http://localhost:3000/api/setup/status` and `http://localhost:3000/api/admin/events?limit=1` returned `502`
+    - after restart, `http://localhost:8090/healthz` returned `200`
+
+### Notes
+
+- No backend/API contract changes were made in this final sweep.
+- The outage simulation evidence aligns with the current page code paths: auth/bootstrap pages and the remaining data-heavy pages now route request failures into explicit `InlineErrorState` handling instead of rendering misleading empty states.

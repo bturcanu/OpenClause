@@ -39,6 +39,14 @@ interface SimulationResponse {
   }
 }
 
+const DEFAULT_POLICY_CONFIG: TenantPolicyConfig = {
+  max_risk_auto_approve: 7,
+  read_actions: [],
+  write_actions: [],
+  destructive_actions: [],
+  require_destructive_approval: true,
+}
+
 function parseActions(raw: string): string[] {
   return raw
     .split(',')
@@ -59,13 +67,7 @@ export default function Policies() {
   const [simLoading, setSimLoading] = useState(false)
   const [simResult, setSimResult] = useState<SimulationResponse | null>(null)
 
-  const [builder, setBuilder] = useState<TenantPolicyConfig>({
-    max_risk_auto_approve: 7,
-    read_actions: [],
-    write_actions: [],
-    destructive_actions: [],
-    require_destructive_approval: true,
-  })
+  const [builder, setBuilder] = useState<TenantPolicyConfig>(DEFAULT_POLICY_CONFIG)
   const [readActionsText, setReadActionsText] = useState('')
   const [writeActionsText, setWriteActionsText] = useState('')
   const [destructiveActionsText, setDestructiveActionsText] = useState('')
@@ -95,25 +97,42 @@ export default function Policies() {
   async function fetchPolicyState(tenantID: string) {
     setLoading(true)
     setError('')
-    try {
-      const [cfgResp, versionsResp] = await Promise.all([
-        api.get(`/admin/tenants/${tenantID}/policy/config`),
-        api.get(`/admin/tenants/${tenantID}/policy/versions`),
-      ])
-      const cfg = cfgResp as TenantPolicyConfig
+    const [cfgResp, versionsResp] = await Promise.allSettled([
+      api.get(`/admin/tenants/${tenantID}/policy/config`),
+      api.get(`/admin/tenants/${tenantID}/policy/versions`),
+    ])
+
+    const failures: string[] = []
+
+    if (cfgResp.status === 'fulfilled') {
+      const cfg = cfgResp.value as TenantPolicyConfig
       setBuilder(cfg)
       setReadActionsText((cfg.read_actions || []).join(', '))
       setWriteActionsText((cfg.write_actions || []).join(', '))
       setDestructiveActionsText((cfg.destructive_actions || []).join(', '))
+    } else {
+      setBuilder(DEFAULT_POLICY_CONFIG)
+      setReadActionsText('')
+      setWriteActionsText('')
+      setDestructiveActionsText('')
+      failures.push('policy config')
+    }
 
-      const vs = Array.isArray(versionsResp) ? (versionsResp as PolicyVersion[]) : []
+    if (versionsResp.status === 'fulfilled') {
+      const vs = Array.isArray(versionsResp.value) ? (versionsResp.value as PolicyVersion[]) : []
       setVersions(vs)
       setSelectedVersionID(vs.length > 0 ? vs[0].id : null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load policy state')
-    } finally {
-      setLoading(false)
+    } else {
+      setVersions([])
+      setSelectedVersionID(null)
+      failures.push('version history')
     }
+
+    if (failures.length > 0) {
+      setError(`Some policy data could not be loaded: ${failures.join(', ')}.`)
+    }
+
+    setLoading(false)
   }
 
   useEffect(() => {
@@ -332,7 +351,15 @@ export default function Policies() {
             {loading ? (
               <TableSkeleton columns={5} rows={5} />
             ) : versions.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No policy versions</td></tr>
+              <tr>
+                <td colSpan={5}>
+                  <EmptyState
+                    icon="↺"
+                    title="No saved policy versions yet"
+                    description="Save a version snapshot when you want a rollback point or a reviewable change history for this tenant."
+                  />
+                </td>
+              </tr>
             ) : (
               versions.map(v => (
                 <tr

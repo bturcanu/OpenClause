@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { InlineErrorState, PageHeaderBlock, StatCard, TableSkeleton } from '../ui'
+import { EmptyState, InlineErrorState, PageHeaderBlock, StatCard, TableSkeleton } from '../ui'
 
 interface OverviewData {
   total_events: number
@@ -137,6 +137,14 @@ export default function Overview() {
             <span>{formatDate(timeseries[timeseries.length - 1].bucket, 'date')}</span>
           </div>
         </div>
+      ) : !loading ? (
+        <div className="detail-panel">
+          <EmptyState
+            icon="◔"
+            title="Not enough activity yet"
+            description="The event volume chart will appear after governed tool calls start flowing through the gateway."
+          />
+        </div>
       ) : null}
 
       <div className="section-title">Recent Events</div>
@@ -156,8 +164,12 @@ export default function Overview() {
               <TableSkeleton columns={5} rows={6} />
             ) : events.length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: '#746250', padding: 28 }}>
-                  No events yet. Run the demo or submit a tool call to populate the dashboard.
+                <td colSpan={5}>
+                  <EmptyState
+                    icon="◎"
+                    title="No recent events yet"
+                    description="Run the demo or submit a governed tool call to populate the dashboard and recent activity feed."
+                  />
                 </td>
               </tr>
             ) : (
