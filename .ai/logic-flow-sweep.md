@@ -116,6 +116,87 @@ Status: Complete
 
 - No new environment limitations surfaced in this pass. The approved Docker-based OPA run, full Go matrix, web build, dev stack, and live demo all completed successfully on this machine.
 
+## Follow-up: Targeted Bug Sweep
+
+Date: 2026-03-20
+Branch: `feature/console-sessions-polish`
+Status: Complete
+
+### Candidate Issues
+
+| ID | Sev | Repro | Likely root cause | Priority |
+|---|---|---|---|---|
+| LF-024 | High | `GET /admin/sessions?...&since=2099-01-01T00:00` still returned the session when using the same `datetime-local` shape the UI emits | Sessions UI sent `datetime-local` strings without timezone, while the API only parsed RFC3339 timestamps, so time filters were silently ignored | Fixed |
+| LF-025 | High | Unit repro: login a non-platform user with roles in `tenant-1` and `tenant-2`; JWT scope depended on whichever tenant role was seen last | Auth provider collapsed tenant scope by iterating role rows without enforcing a single non-platform tenant | Fixed |
+| LF-026 | Medium | Unit repro: platform admin with an extra tenant-scoped role got a tenant claim/session tenant, which could prefill UI forms unexpectedly | Auth provider did not clear tenant scope for platform admins when tenant roles were also present | Fixed |
+| LF-027 | Medium | UI repro: go to page 2+ in Sessions, click `Clear filters`, and pagination stayed offset so “cleared” results could still look empty or partial | Clear/reset actions only reset filter fields, not pagination state | Fixed |
+| LF-028 | Low | UI repro: copy an invite link from Users and paste it into chat/email; it was a relative path, not a usable standalone URL | Users page copied `/invite/accept?...` instead of an absolute URL with origin | Fixed |
+
+### Files Changed
+
+- `cmd/console-api/auth_provider.go`
+- `cmd/console-api/auth_provider_test.go`
+- `cmd/console-api/main.go`
+- `cmd/console-api/session_handlers_test.go`
+- `web/console/src/api.ts`
+- `web/console/src/pages/Sessions.tsx`
+- `web/console/src/pages/Users.tsx`
+- `readme.md`
+
+### Minimal Repros
+
+- LF-024 before fix:
+  - `TOKEN=$(curl -sS -X POST http://localhost:8090/auth/login -H 'Content-Type: application/json' -d '{"email":"admin@openclause.dev","password":"Admin123!"}' | jq -r '.token')`
+  - `curl -sS "http://localhost:8090/admin/sessions?tenant_id=74084408-873e-40a7-af0d-ae4e79c88a7f&session_id=demo-session-1774060201&since=2099-01-01T00:00" -H "Authorization: Bearer $TOKEN" | jq 'length'`
+  - Before: `1`
+  - After: `0`
+- LF-025 before fix:
+  - Unit repro in `Test_EmailPasswordAuthProvider_Login_rejectsMultipleTenantAssignments`
+  - Before: login succeeded with an arbitrary tenant claim
+  - After: login returns `409` with `user has multiple tenant assignments`
+- LF-026 before fix:
+  - Unit repro in `Test_EmailPasswordAuthProvider_Login_platformAdminIgnoresTenantScopedRoles`
+  - Before: platform-admin token/session inherited a tenant claim from unrelated tenant-scoped roles
+  - After: platform-admin token/session keeps empty tenant scope
+- LF-027 before fix:
+  - UI steps: open Sessions, paginate forward, click `Clear filters`
+  - Before: page offset stayed unchanged
+  - After: filters and page reset together
+- LF-028 before fix:
+  - UI steps: create invite from Users, click `Copy link`, paste outside the browser context
+  - Before: copied value was a relative path
+  - After: copied value is a full absolute URL
+
+### Verification
+
+- `go test ./cmd/console-api -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built in 585ms`
+- `go test ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`
+- `go test -race ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`
+- `docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v`
+  - Pass
+  - Key output: `PASS: 19/19`
+- `npm --prefix sdk/typescript run build`
+  - Pass
+  - Key output: `tsc`
+- `./scripts/dev.sh`
+  - Pass
+  - Key output: stack rebuilt and migrations reapplied cleanly
+- `./scripts/demo.sh`
+  - Pass
+  - Key output: session confirmation `Session visible in console API: demo-session-1774061260`
+- Live LF-024 curl repro after rebuild
+  - Pass
+  - Key output: future `since=2099-01-01T00:00` query returned `0` sessions instead of `1`
+
 ## Flow Map
 
 ### A. Console bootstrap and auth flows

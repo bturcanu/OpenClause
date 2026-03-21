@@ -123,6 +123,21 @@ export const api = {
   unauthPost: unauthFetch,
 };
 
+export function toQueryTimestamp(value: string | undefined | null): string {
+  const text = (value || '').trim()
+  if (!text) return ''
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(text)) {
+    const normalized = text.length === 16 ? `${text}:00` : text
+    const localDate = new Date(normalized)
+    if (!Number.isNaN(localDate.getTime())) {
+      return localDate.toISOString()
+    }
+  }
+
+  return text
+}
+
 export function formatDate(value: string | undefined | null, style: 'full' | 'date' = 'full'): string {
   if (!value) return '—';
   const d = new Date(value);

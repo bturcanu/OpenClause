@@ -2632,6 +2632,12 @@ func parseOptionalTimestamp(raw string) *time.Time {
 	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
 		return &t
 	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04", raw, time.Local); err == nil {
+		return &t
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04:05", raw, time.Local); err == nil {
+		return &t
+	}
 	return nil
 }
 

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -59,6 +61,11 @@ func authProviderError(status int, message string) error {
 	return &AuthProviderError{Status: status, Message: message}
 }
 
+var (
+	errAuthTenantAssignmentMissing   = errors.New("tenant assignment missing")
+	errAuthTenantAssignmentAmbiguous = errors.New("tenant assignment ambiguous")
+)
+
 type UserAuthenticator interface {
 	AuthenticateUser(ctx context.Context, email, password string) (*console.User, []console.UserRole, error)
 }
@@ -89,19 +96,24 @@ func (p *EmailPasswordAuthProvider) Login(ctx context.Context, in AuthLoginInput
 	}
 
 	roleNames := make([]string, len(roles))
-	var scopedTenant string
 	for i, role := range roles {
 		roleNames[i] = role.Role
-		if role.TenantID != nil {
-			scopedTenant = *role.TenantID
+	}
+
+	scopedTenant, err := resolveScopedTenant(roleNames, roles)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAuthTenantAssignmentMissing):
+			return nil, authProviderError(http.StatusForbidden, "user has no tenant assignment")
+		case errors.Is(err, errAuthTenantAssignmentAmbiguous):
+			return nil, authProviderError(http.StatusConflict, "user has multiple tenant assignments")
+		default:
+			return nil, authProviderError(http.StatusInternalServerError, "failed to resolve tenant assignment")
 		}
 	}
 
 	// Preserve existing behavior:
 	// - Reject non-platform_admin users without tenant assignment.
-	if scopedTenant == "" && !containsRole(roleNames, "platform_admin") {
-		return nil, authProviderError(http.StatusForbidden, "user has no tenant assignment")
-	}
 	if p.sessions == nil {
 		return nil, authProviderError(http.StatusInternalServerError, "auth session store not configured")
 	}
@@ -149,6 +161,40 @@ func (p *EmailPasswordAuthProvider) Login(ctx context.Context, in AuthLoginInput
 			Roles: roleNames,
 		},
 	}, nil
+}
+
+func resolveScopedTenant(roleNames []string, roles []console.UserRole) (string, error) {
+	if containsRole(roleNames, "platform_admin") {
+		return "", nil
+	}
+
+	tenantSet := map[string]struct{}{}
+	for _, role := range roles {
+		if role.TenantID == nil {
+			continue
+		}
+		tenantID := strings.TrimSpace(*role.TenantID)
+		if tenantID == "" {
+			continue
+		}
+		tenantSet[tenantID] = struct{}{}
+	}
+
+	switch len(tenantSet) {
+	case 0:
+		return "", errAuthTenantAssignmentMissing
+	case 1:
+		for tenantID := range tenantSet {
+			return tenantID, nil
+		}
+	}
+
+	tenants := make([]string, 0, len(tenantSet))
+	for tenantID := range tenantSet {
+		tenants = append(tenants, tenantID)
+	}
+	sort.Strings(tenants)
+	return "", fmt.Errorf("%w: %s", errAuthTenantAssignmentAmbiguous, strings.Join(tenants, ","))
 }
 
 type AuthProviderDeps struct {

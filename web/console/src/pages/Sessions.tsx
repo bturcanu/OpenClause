@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, formatDate } from '../api'
+import { api, formatDate, toQueryTimestamp } from '../api'
 import { TableSkeleton, EmptyState, InlineErrorState, PageHeaderBlock, StatCard, buildQuery, decisionTone, formatRequester, noneText, shortID } from '../ui'
 
 type Session = {
@@ -71,6 +71,8 @@ export default function Sessions() {
     try {
       const query = buildQuery({
         ...filters,
+        since: toQueryTimestamp(filters.since),
+        until: toQueryTimestamp(filters.until),
         limit,
         offset: page * limit,
       })
@@ -90,6 +92,11 @@ export default function Sessions() {
 
   function updateFilter(key: keyof SessionFilters, value: string) {
     setFilters(current => ({ ...current, [key]: value }))
+    setPage(0)
+  }
+
+  function resetFilters() {
+    setFilters({ ...defaultFilters })
     setPage(0)
   }
 
@@ -113,7 +120,7 @@ export default function Sessions() {
         description="Trace a single agent run from request to decision, approval, and execution without leaving the console."
         actions={
           <div className="btn-group">
-            <button className="btn btn-outline" type="button" onClick={() => setFilters(defaultFilters)}>
+            <button className="btn btn-outline" type="button" onClick={resetFilters}>
               Clear filters
             </button>
             <button className="btn btn-primary" type="button" onClick={() => void fetchSessions()}>
@@ -220,7 +227,7 @@ export default function Sessions() {
                     title="No matching sessions"
                     description="Try widening the time range or filtering by agent, user, or trace instead of an exact session id."
                     action={
-                      <button className="btn btn-outline btn-sm" type="button" onClick={() => setFilters(defaultFilters)}>
+                      <button className="btn btn-outline btn-sm" type="button" onClick={resetFilters}>
                         Reset filters
                       </button>
                     }

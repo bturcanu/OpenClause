@@ -106,6 +106,35 @@ func TestHandleListSessionsScopesTenantAdminAndPassesFilters(t *testing.T) {
 	}
 }
 
+func TestHandleListSessionsAcceptsDateTimeLocalFilters(t *testing.T) {
+	store := &fakeSessionsStore{
+		listSessions: []console.Session{{ID: "sess-1"}},
+	}
+	api := newTestSessionsAPI(store)
+	claims := &console.JWTClaims{
+		Sub:   "admin-1",
+		Roles: []string{"platform_admin"},
+	}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(http.MethodGet, "/admin/sessions?since=2026-03-20T12:34&until=2026-03-20T13:45:56", nil).WithContext(ctx)
+	rr := httptest.NewRecorder()
+
+	api.handleListSessions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if store.listFilters.Since == nil || store.listFilters.Until == nil {
+		t.Fatalf("expected since/until filters to be parsed, got %+v", store.listFilters)
+	}
+	if got := store.listFilters.Since.In(time.Local).Format("2006-01-02T15:04"); got != "2026-03-20T12:34" {
+		t.Fatalf("unexpected since filter: %s", got)
+	}
+	if got := store.listFilters.Until.In(time.Local).Format("2006-01-02T15:04:05"); got != "2026-03-20T13:45:56" {
+		t.Fatalf("unexpected until filter: %s", got)
+	}
+}
+
 func TestHandleGetSessionRequiresTenantHintForAmbiguousPlatformSession(t *testing.T) {
 	store := &fakeSessionsStore{getErr: &console.SessionTenantAmbiguityError{Candidates: []string{"tenant-a", "tenant-b"}}}
 	api := newTestSessionsAPI(store)

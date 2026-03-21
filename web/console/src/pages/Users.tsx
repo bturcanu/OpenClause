@@ -315,7 +315,7 @@ export default function Users() {
                   <div className="detail-row" style={{ display: 'block', marginBottom: 8 }}>
                     <div style={{ fontSize: 12, color: '#64748b' }}>Accept link</div>
                     {(() => {
-                      const acceptUrl = `/invite/accept?token=${encodeURIComponent(inviteCreated.token)}`
+                      const acceptUrl = new URL(`/invite/accept?token=${encodeURIComponent(inviteCreated.token)}`, window.location.origin).toString()
                       return (
                         <>
                           <a href={acceptUrl} target="_blank" rel="noreferrer">

@@ -155,6 +155,71 @@ func Test_EmailPasswordAuthProvider_Login_allowsPlatformAdminWithoutTenant(t *te
 	}
 }
 
+func Test_EmailPasswordAuthProvider_Login_platformAdminIgnoresTenantScopedRoles(t *testing.T) {
+	u := &console.User{ID: "u1", Email: "a@b.c", Name: "A", Status: "active"}
+	tenantID := "tenant-1"
+	roles := []console.UserRole{
+		{Role: "tenant_admin", TenantID: &tenantID},
+		{Role: "platform_admin", TenantID: nil},
+	}
+	sessions := &fakeAuthSessionIssuer{session: &console.AuthSession{ID: "sess-platform"}}
+
+	p := &EmailPasswordAuthProvider{
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{u: u, roles: roles},
+		sessions: sessions,
+		jwtCfg:   testJWTConfig(),
+	}
+
+	res, err := p.Login(context.Background(), AuthLoginInput{Email: "x", Password: "y"})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if sessions.gotIn.TenantID != "" {
+		t.Fatalf("expected auth session tenant scope to stay empty for platform admin, got %q", sessions.gotIn.TenantID)
+	}
+
+	claims, err := console.ValidateToken(testJWTConfig(), res.Token)
+	if err != nil {
+		t.Fatalf("token validation failed: %v", err)
+	}
+	if claims.Tenant != "" {
+		t.Fatalf("expected empty tenant claim for platform admin, got %q", claims.Tenant)
+	}
+}
+
+func Test_EmailPasswordAuthProvider_Login_rejectsMultipleTenantAssignments(t *testing.T) {
+	u := &console.User{ID: "u1", Email: "a@b.c", Name: "A", Status: "active"}
+	tenantOne := "tenant-1"
+	tenantTwo := "tenant-2"
+	roles := []console.UserRole{
+		{Role: "tenant_admin", TenantID: &tenantOne},
+		{Role: "approver", TenantID: &tenantTwo},
+	}
+
+	p := &EmailPasswordAuthProvider{
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{u: u, roles: roles},
+		sessions: &fakeAuthSessionIssuer{},
+		jwtCfg:   testJWTConfig(),
+	}
+
+	_, err := p.Login(context.Background(), AuthLoginInput{Email: "x", Password: "y"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	ae, ok := err.(*AuthProviderError)
+	if !ok {
+		t.Fatalf("expected AuthProviderError, got %T", err)
+	}
+	if ae.Status != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", ae.Status)
+	}
+	if ae.Message != "user has multiple tenant assignments" {
+		t.Fatalf("unexpected message: %q", ae.Message)
+	}
+}
+
 func Test_handleLogin_dispatchesToAuthProvider(t *testing.T) {
 	rec := &recordingProvider{
 		res: &AuthLoginResponse{

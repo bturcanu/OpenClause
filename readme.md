@@ -699,6 +699,8 @@ The Console API uses JWT (HS256) tokens issued via `POST /auth/login`. Tokens in
 
 Console login sessions are tracked in Postgres. Admins can inspect and revoke active sessions from the Users page or via `GET /admin/auth-sessions` and `POST /admin/auth-sessions/{session_id}/revoke`. The UI sign-out action calls `POST /auth/logout`, which revokes the current session instead of only clearing browser storage.
 
+Current login behavior issues a single tenant-scoped JWT for non-platform users. If an account has roles across multiple tenants, login is rejected with a clear error instead of picking an arbitrary tenant scope.
+
 ### RBAC Roles
 
 | Role | Scope | Permissions |
