@@ -136,3 +136,39 @@ func TestAPIKeyAuth_TenantEnabled(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
+
+func TestAPIKeyAuth_BearerToken_CaseInsensitiveAndTrimmed(t *testing.T) {
+	ks := NewKeyStore("tenant1:sk-abc")
+	handler := APIKeyAuth(ks, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenant := TenantFromContext(r.Context())
+		if tenant != "tenant1" {
+			t.Errorf("expected tenant1, got %q", tenant)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v1/test", nil)
+	req.Header.Set("Authorization", "   bearer    sk-abc   ")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestAPIKeyAuth_XAPIKeyTrimmed(t *testing.T) {
+	ks := NewKeyStore("tenant1:sk-abc")
+	handler := APIKeyAuth(ks, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v1/test", nil)
+	req.Header.Set("X-API-Key", "  sk-abc  ")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}

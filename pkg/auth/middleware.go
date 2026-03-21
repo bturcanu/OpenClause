@@ -31,6 +31,14 @@ type TenantStatusChecker interface {
 	IsTenantActive(ctx context.Context, tenantID string) bool
 }
 
+func bearerAPIKey(authHeader string) string {
+	fields := strings.Fields(authHeader)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(fields[1])
+}
+
 // APIKeyAuth returns middleware that validates API keys and sets tenant context.
 // If tenantChecker is non-nil, the middleware also verifies the tenant is active
 // after a successful key lookup, ensuring disabled tenants are rejected even
@@ -48,12 +56,9 @@ func APIKeyAuth(keys KeyLookup, tenantChecker TenantStatusChecker) func(http.Han
 				return
 			}
 
-			apiKey := r.Header.Get("X-API-Key")
+			apiKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
 			if apiKey == "" {
-				auth := r.Header.Get("Authorization")
-				if strings.HasPrefix(auth, "Bearer ") {
-					apiKey = strings.TrimPrefix(auth, "Bearer ")
-				}
+				apiKey = bearerAPIKey(r.Header.Get("Authorization"))
 			}
 
 			if apiKey == "" {
