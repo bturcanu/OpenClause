@@ -169,13 +169,20 @@ func (s *Store) CreateRequest(ctx context.Context, in CreateApprovalInput) (*App
 // GetRequest fetches a single approval request.
 func (s *Store) GetRequest(ctx context.Context, id string) (*ApprovalRequest, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, event_id, tenant_id, agent_id, tool, action, resource,
-		       risk_score, reason, deny_reason, status, created_at, expires_at
-		FROM approval_requests WHERE id = $1`, id)
+		SELECT ar.id, ar.event_id, ar.tenant_id, ar.agent_id,
+		       COALESCE(e.user_id, ''), COALESCE(e.payload_json->'labels'->>'user_name', ''),
+		       COALESCE(e.payload_json->'labels'->>'user_email', ''), COALESCE(e.session_id, ''),
+		       COALESCE(e.trace_id, ''),
+		       ar.tool, ar.action, ar.resource,
+		       ar.risk_score, ar.reason, ar.deny_reason, ar.status, ar.created_at, ar.expires_at
+		FROM approval_requests ar
+		LEFT JOIN tool_events e ON e.event_id = ar.event_id
+		WHERE ar.id = $1`, id)
 
 	r := &ApprovalRequest{}
 	err := row.Scan(
 		&r.ID, &r.EventID, &r.TenantID, &r.AgentID,
+		&r.UserID, &r.UserName, &r.UserEmail, &r.SessionID, &r.TraceID,
 		&r.Tool, &r.Action, &r.Resource,
 		&r.RiskScore, &r.Reason, &r.DenyReason, &r.Status,
 		&r.CreatedAt, &r.ExpiresAt,
@@ -206,19 +213,29 @@ func (s *Store) ListPending(ctx context.Context, tenantID string, limit, offset 
 	var err error
 	if tenantID != "" {
 		rows, err = s.pool.Query(ctx, `
-			SELECT id, event_id, tenant_id, agent_id, tool, action, resource,
-			       risk_score, reason, deny_reason, status, created_at, expires_at
-			FROM approval_requests
-			WHERE tenant_id = $1 AND status = 'pending' AND expires_at > NOW()
-			ORDER BY created_at DESC
+			SELECT ar.id, ar.event_id, ar.tenant_id, ar.agent_id,
+			       COALESCE(e.user_id, ''), COALESCE(e.payload_json->'labels'->>'user_name', ''),
+			       COALESCE(e.payload_json->'labels'->>'user_email', ''), COALESCE(e.session_id, ''),
+			       COALESCE(e.trace_id, ''),
+			       ar.tool, ar.action, ar.resource,
+			       ar.risk_score, ar.reason, ar.deny_reason, ar.status, ar.created_at, ar.expires_at
+			FROM approval_requests ar
+			LEFT JOIN tool_events e ON e.event_id = ar.event_id
+			WHERE ar.tenant_id = $1 AND ar.status = 'pending' AND ar.expires_at > NOW()
+			ORDER BY ar.created_at DESC
 			LIMIT $2 OFFSET $3`, tenantID, limit, offset)
 	} else {
 		rows, err = s.pool.Query(ctx, `
-			SELECT id, event_id, tenant_id, agent_id, tool, action, resource,
-			       risk_score, reason, deny_reason, status, created_at, expires_at
-			FROM approval_requests
-			WHERE status = 'pending' AND expires_at > NOW()
-			ORDER BY created_at DESC
+			SELECT ar.id, ar.event_id, ar.tenant_id, ar.agent_id,
+			       COALESCE(e.user_id, ''), COALESCE(e.payload_json->'labels'->>'user_name', ''),
+			       COALESCE(e.payload_json->'labels'->>'user_email', ''), COALESCE(e.session_id, ''),
+			       COALESCE(e.trace_id, ''),
+			       ar.tool, ar.action, ar.resource,
+			       ar.risk_score, ar.reason, ar.deny_reason, ar.status, ar.created_at, ar.expires_at
+			FROM approval_requests ar
+			LEFT JOIN tool_events e ON e.event_id = ar.event_id
+			WHERE ar.status = 'pending' AND ar.expires_at > NOW()
+			ORDER BY ar.created_at DESC
 			LIMIT $1 OFFSET $2`, limit, offset)
 	}
 	if err != nil {
@@ -231,6 +248,7 @@ func (s *Store) ListPending(ctx context.Context, tenantID string, limit, offset 
 		var r ApprovalRequest
 		if err := rows.Scan(
 			&r.ID, &r.EventID, &r.TenantID, &r.AgentID,
+			&r.UserID, &r.UserName, &r.UserEmail, &r.SessionID, &r.TraceID,
 			&r.Tool, &r.Action, &r.Resource,
 			&r.RiskScore, &r.Reason, &r.DenyReason, &r.Status,
 			&r.CreatedAt, &r.ExpiresAt,

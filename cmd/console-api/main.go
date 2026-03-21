@@ -113,6 +113,7 @@ func main() {
 	api := &ConsoleAPI{
 		log:                     log,
 		store:                   store,
+		sessionsStore:           store,
 		analyticsStore:          store,
 		alertsStore:             store,
 		notificationConfigStore: store,
@@ -218,7 +219,10 @@ func main() {
 		r.Get("/admin/events/export/csv", api.handleExportEventsCSV)
 
 		r.Get("/admin/sessions", api.handleListSessions)
+		r.Get("/admin/sessions/{session_id}", api.handleGetSession)
 		r.Get("/admin/sessions/{session_id}/timeline", api.handleSessionTimeline)
+		r.Get("/admin/sessions/{session_id}/export/csv", api.handleExportSessionCSV)
+		r.Get("/admin/sessions/{session_id}/export/json", api.handleExportSessionJSON)
 
 		r.Get("/admin/policy/versions", api.handleListPolicyVersions)
 		r.Post("/admin/policy/versions", api.requireRole("tenant_admin", api.handleCreatePolicyVersion))
@@ -280,6 +284,7 @@ func main() {
 type ConsoleAPI struct {
 	log                     *slog.Logger
 	store                   *console.Store
+	sessionsStore           sessionsStore
 	analyticsStore          analyticsStore
 	alertsStore             alertsStore
 	notificationConfigStore notificationConfigStore
@@ -299,6 +304,13 @@ type ConsoleAPI struct {
 type exportEventsStore interface {
 	ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error
 	ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventListItem, error)
+}
+
+type sessionsStore interface {
+	ListSessions(ctx context.Context, filters console.SessionFilters) ([]console.Session, error)
+	GetSession(ctx context.Context, sessionID, tenantScope, tenantHint string) (*console.Session, error)
+	GetSessionTimeline(ctx context.Context, sessionID, tenantScope, tenantHint string) ([]console.SessionTimelineEvent, error)
+	ExportSessionCSV(ctx context.Context, sessionID, tenantScope, tenantHint string, w io.Writer) error
 }
 
 type notificationConfigStore interface {
@@ -1898,9 +1910,22 @@ func (api *ConsoleAPI) handleListEvents(w http.ResponseWriter, r *http.Request) 
 		tenant = q.Get("tenant_id")
 	}
 	limit, offset := parsePagination(r)
-	events, err := api.store.ListEvents(r.Context(),
-		tenant, q.Get("agent_id"), q.Get("tool"), q.Get("action"),
-		q.Get("decision"), q.Get("session_id"), limit, offset)
+	events, err := api.store.ListEvents(r.Context(), console.EventListFilters{
+		TenantID:  strings.TrimSpace(tenant),
+		AgentID:   strings.TrimSpace(q.Get("agent_id")),
+		UserID:    strings.TrimSpace(q.Get("user_id")),
+		TraceID:   strings.TrimSpace(q.Get("trace_id")),
+		Tool:      strings.TrimSpace(q.Get("tool")),
+		Action:    strings.TrimSpace(q.Get("action")),
+		Decision:  strings.TrimSpace(q.Get("decision")),
+		SessionID: strings.TrimSpace(q.Get("session_id")),
+		RiskMin:   parseOptionalInt(q.Get("risk_min")),
+		RiskMax:   parseOptionalInt(q.Get("risk_max")),
+		Since:     parseOptionalTimestamp(q.Get("since")),
+		Until:     parseOptionalTimestamp(q.Get("until")),
+		Limit:     limit,
+		Offset:    offset,
+	})
 	if err != nil {
 		api.log.Error("list events failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list events")
@@ -2042,22 +2067,64 @@ func encodeBundleJSON(w io.Writer, bundle map[string]any) error {
 
 func (api *ConsoleAPI) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromCtx(r.Context())
+	q := r.URL.Query()
 	tenant := tenantScope(claims)
 	if tenant == tenantDenySentinel {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 	if tenant == "" {
-		tenant = r.URL.Query().Get("tenant_id")
+		tenant = q.Get("tenant_id")
 	}
 	limit, offset := parsePagination(r)
-	sessions, err := api.store.ListSessions(r.Context(), tenant, limit, offset)
+	sessions, err := api.sessionsStore.ListSessions(r.Context(), console.SessionFilters{
+		TenantID:  strings.TrimSpace(tenant),
+		SessionID: strings.TrimSpace(q.Get("session_id")),
+		AgentID:   strings.TrimSpace(q.Get("agent_id")),
+		UserID:    strings.TrimSpace(q.Get("user_id")),
+		TraceID:   strings.TrimSpace(q.Get("trace_id")),
+		Tool:      strings.TrimSpace(q.Get("tool")),
+		Action:    strings.TrimSpace(q.Get("action")),
+		Decision:  strings.TrimSpace(q.Get("decision")),
+		RiskMin:   parseOptionalInt(q.Get("risk_min")),
+		RiskMax:   parseOptionalInt(q.Get("risk_max")),
+		Since:     parseOptionalTimestamp(q.Get("since")),
+		Until:     parseOptionalTimestamp(q.Get("until")),
+		Limit:     limit,
+		Offset:    offset,
+	})
 	if err != nil {
 		api.log.Error("list sessions failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list sessions")
 		return
 	}
 	writeJSON(w, http.StatusOK, sessions)
+}
+
+func (api *ConsoleAPI) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "session_id")
+	claims := claimsFromCtx(r.Context())
+	scope := tenantScope(claims)
+	if scope == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+	tenantHint := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	session, err := api.sessionsStore.GetSession(r.Context(), sessionID, scope, tenantHint)
+	if err != nil {
+		if errors.Is(err, console.ErrSessionTenantRequired) {
+			writeError(w, http.StatusBadRequest, "tenant_id required for ambiguous session_id")
+			return
+		}
+		api.log.Error("get session failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
+		writeError(w, http.StatusInternalServerError, "failed to get session")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
 }
 
 func (api *ConsoleAPI) handleListAuthSessions(w http.ResponseWriter, r *http.Request) {
@@ -2134,13 +2201,90 @@ func (api *ConsoleAPI) handleSessionTimeline(w http.ResponseWriter, r *http.Requ
 	sessionID := chi.URLParam(r, "session_id")
 	claims := claimsFromCtx(r.Context())
 	scope := tenantScope(claims)
-	events, err := api.store.GetSessionTimeline(r.Context(), sessionID, scope)
+	if scope == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+	tenantHint := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	events, err := api.sessionsStore.GetSessionTimeline(r.Context(), sessionID, scope, tenantHint)
 	if err != nil {
-		api.log.Error("session timeline failed", "error", err)
+		if errors.Is(err, console.ErrSessionTenantRequired) {
+			writeError(w, http.StatusBadRequest, "tenant_id required for ambiguous session_id")
+			return
+		}
+		api.log.Error("session timeline failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
 		writeError(w, http.StatusInternalServerError, "failed to get session timeline")
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+func (api *ConsoleAPI) handleExportSessionCSV(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "session_id")
+	claims := claimsFromCtx(r.Context())
+	scope := tenantScope(claims)
+	if scope == tenantDenySentinel {
+		types.ErrForbidden("insufficient permissions").WriteJSON(w)
+		return
+	}
+	tenantHint := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	buf := bytes.NewBuffer(nil)
+	if err := api.sessionsStore.ExportSessionCSV(r.Context(), sessionID, scope, tenantHint, buf); err != nil {
+		if errors.Is(err, console.ErrSessionTenantRequired) {
+			types.ErrBadRequest("tenant_id required for ambiguous session_id").WriteJSON(w)
+			return
+		}
+		api.log.Error("export session csv failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
+		types.ErrInternal("failed to export session").WriteJSON(w)
+		return
+	}
+	filename := fmt.Sprintf("session-%s.csv", sessionID)
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, buf)
+}
+
+func (api *ConsoleAPI) handleExportSessionJSON(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "session_id")
+	claims := claimsFromCtx(r.Context())
+	scope := tenantScope(claims)
+	if scope == tenantDenySentinel {
+		types.ErrForbidden("insufficient permissions").WriteJSON(w)
+		return
+	}
+	tenantHint := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	session, err := api.sessionsStore.GetSession(r.Context(), sessionID, scope, tenantHint)
+	if err != nil {
+		if errors.Is(err, console.ErrSessionTenantRequired) {
+			types.ErrBadRequest("tenant_id required for ambiguous session_id").WriteJSON(w)
+			return
+		}
+		api.log.Error("get session for json export failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
+		types.ErrInternal("failed to export session").WriteJSON(w)
+		return
+	}
+	if session == nil {
+		types.ErrNotFound("session not found").WriteJSON(w)
+		return
+	}
+	events, err := api.sessionsStore.GetSessionTimeline(r.Context(), sessionID, scope, tenantHint)
+	if err != nil {
+		if errors.Is(err, console.ErrSessionTenantRequired) {
+			types.ErrBadRequest("tenant_id required for ambiguous session_id").WriteJSON(w)
+			return
+		}
+		api.log.Error("get session timeline for json export failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
+		types.ErrInternal("failed to export session").WriteJSON(w)
+		return
+	}
+	filename := fmt.Sprintf("session-%s.json", sessionID)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": session,
+		"events":  events,
+	})
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2461,6 +2605,32 @@ func parseSince(r *http.Request, defaultDuration time.Duration) time.Time {
 		}
 	}
 	return time.Now().UTC().Add(-defaultDuration)
+}
+
+func parseOptionalTimestamp(raw string) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return &t
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return &t
+	}
+	return nil
+}
+
+func parseOptionalInt(raw string) *int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return nil
+	}
+	return &n
 }
 
 // CRIT-01: Configurable CORS origin allowlist.

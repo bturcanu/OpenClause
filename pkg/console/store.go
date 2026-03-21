@@ -27,9 +27,10 @@ import (
 )
 
 var (
-	ErrTenantNotFound       = errors.New("tenant not found")
-	ErrAPIKeyNotFound       = errors.New("api key not found")
-	ErrAPIKeyAlreadyRevoked = errors.New("api key already revoked")
+	ErrTenantNotFound        = errors.New("tenant not found")
+	ErrAPIKeyNotFound        = errors.New("api key not found")
+	ErrAPIKeyAlreadyRevoked  = errors.New("api key already revoked")
+	ErrSessionTenantRequired = errors.New("tenant_id required for ambiguous session_id")
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -184,6 +185,9 @@ type EventListItem struct {
 	EventID    string    `json:"event_id"`
 	TenantID   string    `json:"tenant_id"`
 	AgentID    string    `json:"agent_id"`
+	UserID     string    `json:"user_id,omitempty"`
+	UserName   string    `json:"user_name,omitempty"`
+	UserEmail  string    `json:"user_email,omitempty"`
 	Tool       string    `json:"tool"`
 	Action     string    `json:"action"`
 	Resource   string    `json:"resource"`
@@ -192,6 +196,23 @@ type EventListItem struct {
 	SessionID  string    `json:"session_id"`
 	TraceID    string    `json:"trace_id"`
 	ReceivedAt time.Time `json:"received_at"`
+}
+
+type EventListFilters struct {
+	TenantID  string
+	AgentID   string
+	UserID    string
+	TraceID   string
+	Tool      string
+	Action    string
+	Decision  string
+	SessionID string
+	RiskMin   *int
+	RiskMax   *int
+	Since     *time.Time
+	Until     *time.Time
+	Limit     int
+	Offset    int
 }
 
 type EventDetail struct {
@@ -211,12 +232,71 @@ type EventResult struct {
 }
 
 type Session struct {
-	ID         string     `json:"id"`
-	TenantID   string     `json:"tenant_id"`
-	AgentID    string     `json:"agent_id"`
-	StartedAt  time.Time  `json:"started_at"`
-	EndedAt    *time.Time `json:"ended_at,omitempty"`
-	EventCount int64      `json:"event_count,omitempty"`
+	ID            string     `json:"id"`
+	TenantID      string     `json:"tenant_id"`
+	AgentID       string     `json:"agent_id"`
+	UserID        string     `json:"user_id,omitempty"`
+	UserName      string     `json:"user_name,omitempty"`
+	UserEmail     string     `json:"user_email,omitempty"`
+	TraceID       string     `json:"trace_id,omitempty"`
+	StartedAt     time.Time  `json:"started_at"`
+	LastEventAt   time.Time  `json:"last_event_at"`
+	EndedAt       *time.Time `json:"ended_at,omitempty"`
+	EventCount    int64      `json:"event_count"`
+	AllowCount    int64      `json:"allow_count"`
+	DenyCount     int64      `json:"deny_count"`
+	ApproveCount  int64      `json:"approve_count"`
+	LastEventID   string     `json:"last_event_id,omitempty"`
+	LastTool      string     `json:"last_tool,omitempty"`
+	LastAction    string     `json:"last_action,omitempty"`
+	LastDecision  string     `json:"last_decision,omitempty"`
+	LastResource  string     `json:"last_resource,omitempty"`
+	LastRiskScore int        `json:"last_risk_score,omitempty"`
+}
+
+type SessionFilters struct {
+	TenantID  string
+	SessionID string
+	AgentID   string
+	UserID    string
+	TraceID   string
+	Tool      string
+	Action    string
+	Decision  string
+	RiskMin   *int
+	RiskMax   *int
+	Since     *time.Time
+	Until     *time.Time
+	Limit     int
+	Offset    int
+}
+
+type SessionApprovalSummary struct {
+	ID         string    `json:"id"`
+	Status     string    `json:"status"`
+	Reason     string    `json:"reason,omitempty"`
+	DenyReason string    `json:"deny_reason,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+type SessionExecutionSummary struct {
+	EventID      string          `json:"event_id"`
+	ReceivedAt   time.Time       `json:"received_at"`
+	Status       string          `json:"status"`
+	OutputJSON   json.RawMessage `json:"output_json,omitempty"`
+	ErrorMsg     string          `json:"error_msg,omitempty"`
+	DurationMS   int64           `json:"duration_ms"`
+	PolicyReason string          `json:"policy_reason,omitempty"`
+}
+
+type SessionTimelineEvent struct {
+	EventListItem
+	PolicyReason string                   `json:"policy_reason,omitempty"`
+	RiskFactors  []string                 `json:"risk_factors,omitempty"`
+	Approval     *SessionApprovalSummary  `json:"approval,omitempty"`
+	Execution    *SessionExecutionSummary `json:"execution,omitempty"`
+	Explain      string                   `json:"explain"`
 }
 
 type PolicyVersion struct {
@@ -1805,9 +1885,9 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 // Events / Audit Trail
 // ──────────────────────────────────────────────────────────────────────────────
 
-func (s *Store) ListEvents(ctx context.Context, tenantID, agentID, tool, action, decision, sessionID string, limit, offset int) ([]EventListItem, error) {
-	limit = clampLimit(limit)
-	offset = clampOffset(offset)
+func (s *Store) ListEvents(ctx context.Context, filters EventListFilters) ([]EventListItem, error) {
+	limit := clampLimit(filters.Limit)
+	offset := clampOffset(filters.Offset)
 
 	var clauses []string
 	var args []any
@@ -1821,12 +1901,34 @@ func (s *Store) ListEvents(ctx context.Context, tenantID, agentID, tool, action,
 		}
 	}
 
-	addFilter("tenant_id", tenantID)
-	addFilter("agent_id", agentID)
-	addFilter("tool", tool)
-	addFilter("action", action)
-	addFilter("decision", decision)
-	addFilter("session_id", sessionID)
+	addFilter("e.tenant_id", filters.TenantID)
+	addFilter("e.agent_id", filters.AgentID)
+	addFilter("e.user_id", filters.UserID)
+	addFilter("e.trace_id", filters.TraceID)
+	addFilter("e.tool", filters.Tool)
+	addFilter("e.action", filters.Action)
+	addFilter("e.decision", filters.Decision)
+	addFilter("e.session_id", filters.SessionID)
+	if filters.RiskMin != nil {
+		clauses = append(clauses, fmt.Sprintf("e.risk_score >= $%d", argIdx))
+		args = append(args, *filters.RiskMin)
+		argIdx++
+	}
+	if filters.RiskMax != nil {
+		clauses = append(clauses, fmt.Sprintf("e.risk_score <= $%d", argIdx))
+		args = append(args, *filters.RiskMax)
+		argIdx++
+	}
+	if filters.Since != nil {
+		clauses = append(clauses, fmt.Sprintf("e.received_at >= $%d", argIdx))
+		args = append(args, *filters.Since)
+		argIdx++
+	}
+	if filters.Until != nil {
+		clauses = append(clauses, fmt.Sprintf("e.received_at <= $%d", argIdx))
+		args = append(args, *filters.Until)
+		argIdx++
+	}
 
 	where := ""
 	if len(clauses) > 0 {
@@ -1834,12 +1936,16 @@ func (s *Store) ListEvents(ctx context.Context, tenantID, agentID, tool, action,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT event_id, tenant_id, agent_id, tool, action,
-		       COALESCE(payload_json->>'resource', ''), risk_score,
-		       decision, session_id, trace_id, received_at
-		FROM tool_events
+		SELECT e.event_id, e.tenant_id, e.agent_id,
+		       COALESCE(e.user_id, ''),
+		       COALESCE(e.payload_json->'labels'->>'user_name', ''),
+		       COALESCE(e.payload_json->'labels'->>'user_email', ''),
+		       e.tool, e.action,
+		       COALESCE(e.payload_json->>'resource', ''), e.risk_score,
+		       e.decision, e.session_id, e.trace_id, e.received_at
+		FROM tool_events e
 		%s
-		ORDER BY received_at DESC
+		ORDER BY e.received_at DESC, e.event_seq DESC
 		LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
@@ -1852,9 +1958,12 @@ func (s *Store) ListEvents(ctx context.Context, tenantID, agentID, tool, action,
 	out := make([]EventListItem, 0)
 	for rows.Next() {
 		var e EventListItem
-		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
-			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
-			&e.ReceivedAt); err != nil {
+		if err := rows.Scan(
+			&e.EventID, &e.TenantID, &e.AgentID,
+			&e.UserID, &e.UserName, &e.UserEmail,
+			&e.Tool, &e.Action, &e.Resource, &e.RiskScore,
+			&e.Decision, &e.SessionID, &e.TraceID, &e.ReceivedAt,
+		); err != nil {
 			return nil, fmt.Errorf("console.ListEvents scan: %w", err)
 		}
 		out = append(out, e)
@@ -1871,12 +1980,16 @@ func (s *Store) ListEventsInRange(ctx context.Context, tenantID string, since, u
 		limit = 10000
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT event_id, tenant_id, agent_id, tool, action,
+		SELECT event_id, tenant_id, agent_id,
+		       COALESCE(user_id, ''),
+		       COALESCE(payload_json->'labels'->>'user_name', ''),
+		       COALESCE(payload_json->'labels'->>'user_email', ''),
+		       tool, action,
 		       COALESCE(payload_json->>'resource', ''), risk_score,
 		       decision, session_id, trace_id, received_at
 		FROM tool_events
 		WHERE tenant_id = $1 AND received_at >= $2 AND received_at <= $3
-		ORDER BY received_at ASC
+		ORDER BY received_at ASC, event_seq ASC
 		LIMIT $4`, tenantID, since, until, limit)
 	if err != nil {
 		return nil, fmt.Errorf("console.ListEventsInRange: %w", err)
@@ -1886,9 +1999,12 @@ func (s *Store) ListEventsInRange(ctx context.Context, tenantID string, since, u
 	out := make([]EventListItem, 0)
 	for rows.Next() {
 		var e EventListItem
-		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
-			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
-			&e.ReceivedAt); err != nil {
+		if err := rows.Scan(
+			&e.EventID, &e.TenantID, &e.AgentID,
+			&e.UserID, &e.UserName, &e.UserEmail,
+			&e.Tool, &e.Action, &e.Resource, &e.RiskScore,
+			&e.Decision, &e.SessionID, &e.TraceID, &e.ReceivedAt,
+		); err != nil {
 			return nil, fmt.Errorf("console.ListEventsInRange scan: %w", err)
 		}
 		out = append(out, e)
@@ -1908,7 +2024,11 @@ func (s *Store) GetEventDetail(ctx context.Context, eventID string) (*EventDetai
 	var resultDuration *int64
 
 	err := s.pool.QueryRow(ctx, `
-		SELECT e.event_id, e.tenant_id, e.agent_id, e.tool, e.action,
+		SELECT e.event_id, e.tenant_id, e.agent_id,
+		       COALESCE(e.user_id, ''),
+		       COALESCE(e.payload_json->'labels'->>'user_name', ''),
+		       COALESCE(e.payload_json->'labels'->>'user_email', ''),
+		       e.tool, e.action,
 		       COALESCE(e.payload_json->>'resource', ''), e.risk_score,
 		       e.decision, e.session_id, e.trace_id, e.received_at,
 		       e.payload_json, e.policy_result, e.hash, e.prev_hash,
@@ -1917,8 +2037,9 @@ func (s *Store) GetEventDetail(ctx context.Context, eventID string) (*EventDetai
 		LEFT JOIN tool_results r ON r.event_id = e.event_id
 		WHERE e.event_id = $1`, eventID,
 	).Scan(
-		&d.EventID, &d.TenantID, &d.AgentID, &d.Tool, &d.Action,
-		&d.Resource, &d.RiskScore,
+		&d.EventID, &d.TenantID, &d.AgentID,
+		&d.UserID, &d.UserName, &d.UserEmail,
+		&d.Tool, &d.Action, &d.Resource, &d.RiskScore,
 		&d.Decision, &d.SessionID, &d.TraceID, &d.ReceivedAt,
 		&d.PayloadJSON, &policyResult, &d.Hash, &d.PrevHash,
 		&resultStatus, &resultOutput, &resultError, &resultDuration,
@@ -1954,12 +2075,16 @@ func (s *Store) GetEventDetail(ctx context.Context, eventID string) (*EventDetai
 
 func (s *Store) ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error {
 	rows, err := s.pool.Query(ctx, `
-		SELECT event_id, tenant_id, agent_id, tool, action,
+		SELECT event_id, tenant_id, agent_id,
+		       COALESCE(user_id, ''),
+		       COALESCE(payload_json->'labels'->>'user_name', ''),
+		       COALESCE(payload_json->'labels'->>'user_email', ''),
+		       tool, action,
 		       COALESCE(payload_json->>'resource', ''), risk_score,
 		       decision, session_id, trace_id, received_at
 		FROM tool_events
 		WHERE tenant_id = $1 AND received_at >= $2 AND received_at <= $3
-		ORDER BY received_at ASC`, tenantID, since, until)
+		ORDER BY received_at ASC, event_seq ASC`, tenantID, since, until)
 	if err != nil {
 		return fmt.Errorf("console.ExportEventsCSV: %w", err)
 	}
@@ -1968,7 +2093,7 @@ func (s *Store) ExportEventsCSV(ctx context.Context, tenantID string, since, unt
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
 
-	header := []string{"event_id", "tenant_id", "agent_id", "tool", "action",
+	header := []string{"event_id", "tenant_id", "agent_id", "user_id", "user_name", "user_email", "tool", "action",
 		"resource", "risk_score", "decision", "session_id", "trace_id", "received_at"}
 	if err := cw.Write(header); err != nil {
 		return fmt.Errorf("console.ExportEventsCSV write header: %w", err)
@@ -1976,14 +2101,17 @@ func (s *Store) ExportEventsCSV(ctx context.Context, tenantID string, since, unt
 
 	for rows.Next() {
 		var e EventListItem
-		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
-			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
-			&e.ReceivedAt); err != nil {
+		if err := rows.Scan(
+			&e.EventID, &e.TenantID, &e.AgentID,
+			&e.UserID, &e.UserName, &e.UserEmail,
+			&e.Tool, &e.Action, &e.Resource, &e.RiskScore,
+			&e.Decision, &e.SessionID, &e.TraceID, &e.ReceivedAt,
+		); err != nil {
 			return fmt.Errorf("console.ExportEventsCSV scan: %w", err)
 		}
 		record := []string{
-			e.EventID, e.TenantID, e.AgentID, e.Tool, e.Action,
-			e.Resource, strconv.Itoa(e.RiskScore), e.Decision,
+			e.EventID, e.TenantID, e.AgentID, e.UserID, e.UserName, e.UserEmail,
+			e.Tool, e.Action, e.Resource, strconv.Itoa(e.RiskScore), e.Decision,
 			e.SessionID, e.TraceID, e.ReceivedAt.Format(time.RFC3339),
 		}
 		if err := cw.Write(record); err != nil {
@@ -2000,42 +2128,96 @@ func (s *Store) ExportEventsCSV(ctx context.Context, tenantID string, since, unt
 // Sessions
 // ──────────────────────────────────────────────────────────────────────────────
 
-func (s *Store) ListSessions(ctx context.Context, tenantID string, limit, offset int) ([]Session, error) {
-	limit = clampLimit(limit)
-	offset = clampOffset(offset)
+func (s *Store) ListSessions(ctx context.Context, filters SessionFilters) ([]Session, error) {
+	limit := clampLimit(filters.Limit)
+	offset := clampOffset(filters.Offset)
 
-	var query string
-	var args []any
-	if tenantID != "" {
-		query = `
-			SELECT s.id, s.tenant_id, s.agent_id, s.started_at, s.ended_at,
-			       COALESCE(ec.cnt, 0)
-			FROM sessions s
-			LEFT JOIN (
-				SELECT session_id, COUNT(*) AS cnt
-				FROM tool_events
-				WHERE tenant_id = $1 AND session_id != ''
-				GROUP BY session_id
-			) ec ON ec.session_id = s.id
-			WHERE s.tenant_id = $1
-			ORDER BY s.started_at DESC
-			LIMIT $2 OFFSET $3`
-		args = []any{tenantID, limit, offset}
-	} else {
-		query = `
-			SELECT s.id, s.tenant_id, s.agent_id, s.started_at, s.ended_at,
-			       COALESCE(ec.cnt, 0)
-			FROM sessions s
-			LEFT JOIN (
-				SELECT session_id, COUNT(*) AS cnt
-				FROM tool_events
-				WHERE session_id != ''
-				GROUP BY session_id
-			) ec ON ec.session_id = s.id
-			ORDER BY s.started_at DESC
-			LIMIT $1 OFFSET $2`
-		args = []any{limit, offset}
+	clauses := []string{"e.session_id != ''"}
+	args := make([]any, 0, 12)
+	argIdx := 1
+	addFilter := func(expr, value string) {
+		if value == "" {
+			return
+		}
+		clauses = append(clauses, fmt.Sprintf("%s = $%d", expr, argIdx))
+		args = append(args, value)
+		argIdx++
 	}
+
+	addFilter("e.tenant_id", filters.TenantID)
+	addFilter("e.session_id", filters.SessionID)
+	addFilter("e.agent_id", filters.AgentID)
+	addFilter("e.user_id", filters.UserID)
+	addFilter("e.trace_id", filters.TraceID)
+	addFilter("e.tool", filters.Tool)
+	addFilter("e.action", filters.Action)
+	addFilter("e.decision", filters.Decision)
+	if filters.RiskMin != nil {
+		clauses = append(clauses, fmt.Sprintf("e.risk_score >= $%d", argIdx))
+		args = append(args, *filters.RiskMin)
+		argIdx++
+	}
+	if filters.RiskMax != nil {
+		clauses = append(clauses, fmt.Sprintf("e.risk_score <= $%d", argIdx))
+		args = append(args, *filters.RiskMax)
+		argIdx++
+	}
+	if filters.Since != nil {
+		clauses = append(clauses, fmt.Sprintf("e.received_at >= $%d", argIdx))
+		args = append(args, *filters.Since)
+		argIdx++
+	}
+	if filters.Until != nil {
+		clauses = append(clauses, fmt.Sprintf("e.received_at <= $%d", argIdx))
+		args = append(args, *filters.Until)
+		argIdx++
+	}
+
+	query := fmt.Sprintf(`
+		WITH matching_sessions AS (
+			SELECT DISTINCT e.tenant_id, e.session_id
+			FROM tool_events e
+			WHERE %s
+		),
+		session_events AS (
+			SELECT e.event_id, e.tenant_id, e.session_id, e.agent_id, e.user_id, e.trace_id,
+			       COALESCE(e.payload_json->'labels'->>'user_name', '') AS user_name,
+			       COALESCE(e.payload_json->'labels'->>'user_email', '') AS user_email,
+			       e.tool, e.action, COALESCE(e.payload_json->>'resource', '') AS resource,
+			       e.risk_score, e.decision, e.received_at,
+			       ROW_NUMBER() OVER (
+			       	PARTITION BY e.tenant_id, e.session_id
+			       	ORDER BY e.received_at DESC, e.event_seq DESC
+			       ) AS recency_rank
+			FROM tool_events e
+			JOIN matching_sessions ms
+			  ON ms.tenant_id = e.tenant_id
+			 AND ms.session_id = e.session_id
+			WHERE e.session_id != ''
+		)
+		SELECT session_id AS id, tenant_id,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN agent_id END), '') AS agent_id,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN user_id END), '') AS user_id,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN user_name END), '') AS user_name,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN user_email END), '') AS user_email,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN trace_id END), '') AS trace_id,
+		       MIN(received_at) AS started_at,
+		       MAX(received_at) AS last_event_at,
+		       COUNT(*) AS event_count,
+		       COUNT(*) FILTER (WHERE decision = 'allow') AS allow_count,
+		       COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count,
+		       COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN event_id END), '') AS last_event_id,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN tool END), '') AS last_tool,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN action END), '') AS last_action,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN decision END), '') AS last_decision,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN resource END), '') AS last_resource,
+		       COALESCE(MAX(CASE WHEN recency_rank = 1 THEN risk_score END), 0) AS last_risk_score
+		FROM session_events
+		GROUP BY tenant_id, session_id
+		ORDER BY MAX(received_at) DESC
+		LIMIT $%d OFFSET $%d`, strings.Join(clauses, " AND "), argIdx, argIdx+1)
+	args = append(args, limit, offset)
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -2046,10 +2228,18 @@ func (s *Store) ListSessions(ctx context.Context, tenantID string, limit, offset
 	out := make([]Session, 0)
 	for rows.Next() {
 		var sess Session
-		if err := rows.Scan(&sess.ID, &sess.TenantID, &sess.AgentID,
-			&sess.StartedAt, &sess.EndedAt, &sess.EventCount); err != nil {
+		if err := rows.Scan(
+			&sess.ID, &sess.TenantID, &sess.AgentID,
+			&sess.UserID, &sess.UserName, &sess.UserEmail, &sess.TraceID,
+			&sess.StartedAt, &sess.LastEventAt, &sess.EventCount,
+			&sess.AllowCount, &sess.DenyCount, &sess.ApproveCount,
+			&sess.LastEventID, &sess.LastTool, &sess.LastAction, &sess.LastDecision,
+			&sess.LastResource, &sess.LastRiskScore,
+		); err != nil {
 			return nil, fmt.Errorf("console.ListSessions scan: %w", err)
 		}
+		last := sess.LastEventAt
+		sess.EndedAt = &last
 		out = append(out, sess)
 	}
 	if err := rows.Err(); err != nil {
@@ -2058,39 +2248,394 @@ func (s *Store) ListSessions(ctx context.Context, tenantID string, limit, offset
 	return out, nil
 }
 
-func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, tenantScope string) ([]EventListItem, error) {
-	query := `
-		SELECT event_id, tenant_id, agent_id, tool, action,
-		       COALESCE(payload_json->>'resource', ''), risk_score,
-		       decision, session_id, trace_id, received_at
-		FROM tool_events
-		WHERE session_id = $1`
-	args := []any{sessionID}
-	if tenantScope != "" {
-		query += ` AND tenant_id = $2`
-		args = append(args, tenantScope)
+func (s *Store) GetSession(ctx context.Context, sessionID, tenantScope, tenantHint string) (*Session, error) {
+	tenantID, err := s.resolveSessionTenant(ctx, sessionID, tenantScope, tenantHint)
+	if err != nil {
+		return nil, err
 	}
-	query += ` ORDER BY received_at ASC`
-	rows, err := s.pool.Query(ctx, query, args...)
+	sessions, err := s.ListSessions(ctx, SessionFilters{
+		TenantID:  tenantID,
+		SessionID: sessionID,
+		Limit:     2,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("console.GetSession: %w", err)
+	}
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+	return &sessions[0], nil
+}
+
+func (s *Store) GetSessionTimeline(ctx context.Context, sessionID, tenantScope, tenantHint string) ([]SessionTimelineEvent, error) {
+	tenantID, err := s.resolveSessionTenant(ctx, sessionID, tenantScope, tenantHint)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.event_id,
+		       COALESCE(parent.parent_event_id, '') AS parent_event_id,
+		       e.tenant_id, e.agent_id,
+		       COALESCE(e.user_id, ''),
+		       COALESCE(e.payload_json->'labels'->>'user_name', ''),
+		       COALESCE(e.payload_json->'labels'->>'user_email', ''),
+		       e.tool, e.action,
+		       COALESCE(e.payload_json->>'resource', ''), e.risk_score,
+		       e.decision, e.session_id, e.trace_id, e.received_at,
+		       e.payload_json, e.policy_result,
+		       r.status, r.output_json, r.error_msg, r.duration_ms,
+		       ar.id, ar.status, ar.reason, ar.deny_reason, ar.created_at, ar.expires_at
+		FROM tool_events e
+		LEFT JOIN tool_results r ON r.event_id = e.event_id
+		LEFT JOIN approval_requests ar ON ar.event_id = e.event_id
+		LEFT JOIN tool_executions parent ON parent.execution_event_id = e.event_id
+		WHERE e.tenant_id = $1 AND e.session_id = $2
+		ORDER BY e.received_at ASC, e.event_seq ASC`, tenantID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("console.GetSessionTimeline: %w", err)
 	}
 	defer rows.Close()
 
-	out := make([]EventListItem, 0)
+	type sessionTimelineRow struct {
+		EventID          string
+		ParentEventID    string
+		TenantID         string
+		AgentID          string
+		UserID           string
+		UserName         string
+		UserEmail        string
+		Tool             string
+		Action           string
+		Resource         string
+		RiskScore        int
+		Decision         string
+		SessionID        string
+		TraceID          string
+		ReceivedAt       time.Time
+		PayloadJSON      []byte
+		PolicyResultJSON []byte
+		ResultStatus     *string
+		ResultOutput     []byte
+		ResultError      *string
+		ResultDuration   *int64
+		ApprovalID       *string
+		ApprovalStatus   *string
+		ApprovalReason   *string
+		ApprovalDeny     *string
+		ApprovalCreated  *time.Time
+		ApprovalExpires  *time.Time
+	}
+
+	items := make([]*SessionTimelineEvent, 0)
+	index := make(map[string]*SessionTimelineEvent)
+	pendingExecutions := make(map[string]*SessionExecutionSummary)
+
 	for rows.Next() {
-		var e EventListItem
-		if err := rows.Scan(&e.EventID, &e.TenantID, &e.AgentID, &e.Tool, &e.Action,
-			&e.Resource, &e.RiskScore, &e.Decision, &e.SessionID, &e.TraceID,
-			&e.ReceivedAt); err != nil {
+		var row sessionTimelineRow
+		if err := rows.Scan(
+			&row.EventID, &row.ParentEventID,
+			&row.TenantID, &row.AgentID,
+			&row.UserID, &row.UserName, &row.UserEmail,
+			&row.Tool, &row.Action, &row.Resource, &row.RiskScore,
+			&row.Decision, &row.SessionID, &row.TraceID, &row.ReceivedAt,
+			&row.PayloadJSON, &row.PolicyResultJSON,
+			&row.ResultStatus, &row.ResultOutput, &row.ResultError, &row.ResultDuration,
+			&row.ApprovalID, &row.ApprovalStatus, &row.ApprovalReason, &row.ApprovalDeny, &row.ApprovalCreated, &row.ApprovalExpires,
+		); err != nil {
 			return nil, fmt.Errorf("console.GetSessionTimeline scan: %w", err)
 		}
-		out = append(out, e)
+
+		policyReason, riskFactors := sessionDetailsFromPayload(row.PayloadJSON, row.PolicyResultJSON)
+		execution := sessionExecutionFromRow(row.EventID, row.ReceivedAt, row.ResultStatus, row.ResultOutput, row.ResultError, row.ResultDuration, policyReason)
+
+		if row.ParentEventID != "" {
+			if execution != nil {
+				if parent, ok := index[row.ParentEventID]; ok {
+					parent.Execution = execution
+					parent.Explain = buildSessionExplain(parent)
+				} else {
+					pendingExecutions[row.ParentEventID] = execution
+				}
+			}
+			continue
+		}
+
+		item := &SessionTimelineEvent{
+			EventListItem: EventListItem{
+				EventID:    row.EventID,
+				TenantID:   row.TenantID,
+				AgentID:    row.AgentID,
+				UserID:     row.UserID,
+				UserName:   row.UserName,
+				UserEmail:  row.UserEmail,
+				Tool:       row.Tool,
+				Action:     row.Action,
+				Resource:   row.Resource,
+				RiskScore:  row.RiskScore,
+				Decision:   row.Decision,
+				SessionID:  row.SessionID,
+				TraceID:    row.TraceID,
+				ReceivedAt: row.ReceivedAt,
+			},
+			PolicyReason: policyReason,
+			RiskFactors:  riskFactors,
+			Execution:    execution,
+		}
+		if row.ApprovalID != nil && row.ApprovalStatus != nil && row.ApprovalCreated != nil && row.ApprovalExpires != nil {
+			item.Approval = &SessionApprovalSummary{
+				ID:         *row.ApprovalID,
+				Status:     *row.ApprovalStatus,
+				Reason:     stringValue(row.ApprovalReason),
+				DenyReason: stringValue(row.ApprovalDeny),
+				CreatedAt:  *row.ApprovalCreated,
+				ExpiresAt:  *row.ApprovalExpires,
+			}
+		}
+		if pending := pendingExecutions[item.EventID]; pending != nil {
+			item.Execution = pending
+			delete(pendingExecutions, item.EventID)
+		}
+		item.Explain = buildSessionExplain(item)
+		items = append(items, item)
+		index[item.EventID] = item
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("console.GetSessionTimeline iteration: %w", err)
 	}
+
+	out := make([]SessionTimelineEvent, 0, len(items))
+	for _, item := range items {
+		out = append(out, *item)
+	}
 	return out, nil
+}
+
+func (s *Store) ExportSessionCSV(ctx context.Context, sessionID, tenantScope, tenantHint string, w io.Writer) error {
+	timeline, err := s.GetSessionTimeline(ctx, sessionID, tenantScope, tenantHint)
+	if err != nil {
+		return err
+	}
+	cw := csv.NewWriter(w)
+	defer cw.Flush()
+
+	header := []string{
+		"session_id", "event_id", "tenant_id", "agent_id", "user_id", "user_name", "user_email",
+		"tool", "action", "resource", "decision", "risk_score", "policy_reason", "risk_factors",
+		"approval_id", "approval_status", "execution_event_id", "execution_status", "trace_id", "received_at",
+	}
+	if err := cw.Write(header); err != nil {
+		return fmt.Errorf("console.ExportSessionCSV write header: %w", err)
+	}
+	for _, item := range timeline {
+		record := []string{
+			item.SessionID,
+			item.EventID,
+			item.TenantID,
+			item.AgentID,
+			item.UserID,
+			item.UserName,
+			item.UserEmail,
+			item.Tool,
+			item.Action,
+			item.Resource,
+			item.Decision,
+			strconv.Itoa(item.RiskScore),
+			item.PolicyReason,
+			strings.Join(item.RiskFactors, "; "),
+			"",
+			"",
+			"",
+			"",
+			item.TraceID,
+			item.ReceivedAt.Format(time.RFC3339),
+		}
+		if item.Approval != nil {
+			record[14] = item.Approval.ID
+			record[15] = item.Approval.Status
+		}
+		if item.Execution != nil {
+			record[16] = item.Execution.EventID
+			record[17] = item.Execution.Status
+		}
+		if err := cw.Write(record); err != nil {
+			return fmt.Errorf("console.ExportSessionCSV write row: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) resolveSessionTenant(ctx context.Context, sessionID, tenantScope, tenantHint string) (string, error) {
+	if tenantScope != "" {
+		return tenantScope, nil
+	}
+	if tenantHint != "" {
+		return tenantHint, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT tenant_id
+		FROM tool_events
+		WHERE session_id = $1
+		ORDER BY tenant_id
+		LIMIT 2`, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("console.resolveSessionTenant: %w", err)
+	}
+	defer rows.Close()
+
+	tenants := make([]string, 0, 2)
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return "", fmt.Errorf("console.resolveSessionTenant scan: %w", err)
+		}
+		tenants = append(tenants, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("console.resolveSessionTenant iteration: %w", err)
+	}
+	switch len(tenants) {
+	case 0:
+		return "", nil
+	case 1:
+		return tenants[0], nil
+	default:
+		return "", ErrSessionTenantRequired
+	}
+}
+
+func sessionDetailsFromPayload(payloadJSON, policyResultJSON []byte) (string, []string) {
+	type sessionPayload struct {
+		RiskFactors []string `json:"risk_factors"`
+	}
+	type sessionPolicyResult struct {
+		Reason string `json:"reason"`
+	}
+
+	var policyReason string
+	if len(policyResultJSON) > 0 {
+		var pr sessionPolicyResult
+		if err := json.Unmarshal(policyResultJSON, &pr); err == nil {
+			policyReason = strings.TrimSpace(pr.Reason)
+		}
+	}
+
+	riskFactors := make([]string, 0)
+	if len(payloadJSON) > 0 {
+		var payload sessionPayload
+		if err := json.Unmarshal(payloadJSON, &payload); err == nil && len(payload.RiskFactors) > 0 {
+			riskFactors = append(riskFactors, payload.RiskFactors...)
+		}
+	}
+	return policyReason, riskFactors
+}
+
+func sessionExecutionFromRow(eventID string, receivedAt time.Time, status *string, outputJSON []byte, errMsg *string, durationMS *int64, policyReason string) *SessionExecutionSummary {
+	if status == nil {
+		return nil
+	}
+	exec := &SessionExecutionSummary{
+		EventID:      eventID,
+		ReceivedAt:   receivedAt,
+		Status:       *status,
+		PolicyReason: policyReason,
+	}
+	if len(outputJSON) > 0 {
+		exec.OutputJSON = outputJSON
+	}
+	if errMsg != nil {
+		exec.ErrorMsg = *errMsg
+	}
+	if durationMS != nil {
+		exec.DurationMS = *durationMS
+	}
+	return exec
+}
+
+func buildSessionExplain(item *SessionTimelineEvent) string {
+	var parts []string
+	actor := sessionActorLabel(item.UserID, item.UserName, item.UserEmail)
+	switch {
+	case actor != "" && item.AgentID != "":
+		parts = append(parts, fmt.Sprintf("Requested by %s via %s.", actor, item.AgentID))
+	case actor != "":
+		parts = append(parts, fmt.Sprintf("Requested by %s.", actor))
+	case item.AgentID != "":
+		parts = append(parts, fmt.Sprintf("Requested via %s.", item.AgentID))
+	}
+
+	action := fmt.Sprintf("%s.%s", item.Tool, item.Action)
+	switch item.Decision {
+	case "allow":
+		if item.PolicyReason != "" {
+			parts = append(parts, fmt.Sprintf("%s was allowed because %s.", action, item.PolicyReason))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s was allowed.", action))
+		}
+	case "deny":
+		if item.PolicyReason != "" {
+			parts = append(parts, fmt.Sprintf("%s was blocked because %s.", action, item.PolicyReason))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s was blocked by policy.", action))
+		}
+	case "approve":
+		if item.PolicyReason != "" {
+			parts = append(parts, fmt.Sprintf("%s was sent for approval because %s.", action, item.PolicyReason))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s was sent for approval.", action))
+		}
+	default:
+		parts = append(parts, fmt.Sprintf("%s returned decision %s.", action, item.Decision))
+	}
+
+	if len(item.RiskFactors) > 0 {
+		parts = append(parts, fmt.Sprintf("Risk factors: %s.", strings.Join(item.RiskFactors, ", ")))
+	}
+	if item.Approval != nil {
+		approvalSummary := fmt.Sprintf("Approval %s is %s.", item.Approval.ID, item.Approval.Status)
+		if item.Approval.Status == "denied" && item.Approval.DenyReason != "" {
+			approvalSummary = fmt.Sprintf("Approval %s was denied: %s.", item.Approval.ID, item.Approval.DenyReason)
+		}
+		parts = append(parts, approvalSummary)
+	}
+	if item.Execution != nil {
+		switch item.Execution.Status {
+		case "success":
+			parts = append(parts, "Execution finished successfully.")
+		case "error", "timeout":
+			if item.Execution.ErrorMsg != "" {
+				parts = append(parts, fmt.Sprintf("Execution finished with %s: %s.", item.Execution.Status, item.Execution.ErrorMsg))
+			} else {
+				parts = append(parts, fmt.Sprintf("Execution finished with %s.", item.Execution.Status))
+			}
+		default:
+			parts = append(parts, fmt.Sprintf("Execution status: %s.", item.Execution.Status))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func sessionActorLabel(userID, userName, userEmail string) string {
+	switch {
+	case strings.TrimSpace(userName) != "" && strings.TrimSpace(userEmail) != "":
+		return fmt.Sprintf("%s (%s)", userName, userEmail)
+	case strings.TrimSpace(userName) != "":
+		return userName
+	case strings.TrimSpace(userEmail) != "":
+		return userEmail
+	case strings.TrimSpace(userID) != "":
+		return userID
+	default:
+		return ""
+	}
+}
+
+func stringValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

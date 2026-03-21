@@ -16,6 +16,11 @@ type ApprovalRequest struct {
 	EventID    string    `json:"event_id"`
 	TenantID   string    `json:"tenant_id"`
 	AgentID    string    `json:"agent_id"`
+	UserID     string    `json:"user_id,omitempty"`
+	UserName   string    `json:"user_name,omitempty"`
+	UserEmail  string    `json:"user_email,omitempty"`
+	SessionID  string    `json:"session_id,omitempty"`
+	TraceID    string    `json:"trace_id,omitempty"`
 	Tool       string    `json:"tool"`
 	Action     string    `json:"action"`
 	Resource   string    `json:"resource,omitempty"`
