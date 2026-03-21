@@ -357,10 +357,18 @@ curl -s "http://localhost:8090/admin/events/$EVENT_ID" \
 curl -s "http://localhost:8090/admin/sessions?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
+# Narrow to one run by session_id
+curl -s "http://localhost:8090/admin/sessions?tenant_id=$TENANT_ID&session_id=run-local-001" \
+  -H "Authorization: Bearer $TOKEN"
+
 # Inspect one session in detail
 SESSION_ID="run-local-001"
 curl -s "http://localhost:8090/admin/sessions/$SESSION_ID?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
+
+# Platform-admin ambiguity recovery: omit tenant_id only if you know the session
+# exists in one tenant. If not, the API returns 400 with `candidates` so the UI
+# can prompt you to choose the right tenant.
 
 # View the session timeline with approval/execution context
 curl -s "http://localhost:8090/admin/sessions/$SESSION_ID/timeline?tenant_id=$TENANT_ID" \

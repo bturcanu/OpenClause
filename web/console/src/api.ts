@@ -1,5 +1,21 @@
 const API_BASE = '/api';
 
+export class APIClientError extends Error {
+  status: number
+  code?: string
+  details?: unknown
+  candidates?: string[]
+
+  constructor(message: string, options: { status: number; code?: string; details?: unknown; candidates?: string[] }) {
+    super(message)
+    this.name = 'APIClientError'
+    this.status = options.status
+    this.code = options.code
+    this.details = options.details
+    this.candidates = options.candidates
+  }
+}
+
 export type StoredAuthClaims = {
   sub?: string
   sid?: string
@@ -42,6 +58,24 @@ export function storeAuthSession(token: string, sessionID?: string) {
   else localStorage.removeItem('oc_session_id')
 }
 
+function extractCandidates(payload: any): string[] | undefined {
+  const direct = Array.isArray(payload?.candidates) ? payload.candidates : null
+  if (direct && direct.length > 0) return direct.map((value: unknown) => String(value))
+  const nested = Array.isArray(payload?.details?.candidates) ? payload.details.candidates : null
+  if (nested && nested.length > 0) return nested.map((value: unknown) => String(value))
+  return undefined
+}
+
+function toAPIClientError(status: number, fallback: string, payload: any) {
+  const message = payload?.message || payload?.error || fallback
+  return new APIClientError(message, {
+    status,
+    code: payload?.code,
+    details: payload?.details,
+    candidates: extractCandidates(payload),
+  })
+}
+
 async function apiFetch(path: string, options?: RequestInit) {
   const token = localStorage.getItem('oc_token');
   const headers: Record<string, string> = {
@@ -59,8 +93,7 @@ async function apiFetch(path: string, options?: RequestInit) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({} as any));
-    const msg = err?.message || err?.error || res.statusText;
-    throw new Error(msg);
+    throw toAPIClientError(res.status, res.statusText, err);
   }
   return res;
 }
@@ -73,7 +106,7 @@ async function unauthFetch(path: string, body: unknown) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({} as any));
-    throw new Error(err?.message || err?.error || res.statusText);
+    throw toAPIClientError(res.status, res.statusText, err);
   }
   return res.json();
 }

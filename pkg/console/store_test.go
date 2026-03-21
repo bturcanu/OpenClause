@@ -4,7 +4,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestClampLimit(t *testing.T) {
@@ -84,5 +87,103 @@ func TestCanonicalEmail(t *testing.T) {
 	got := canonicalEmail("  User.Name+test@Example.COM ")
 	if got != "user.name+test@example.com" {
 		t.Fatalf("unexpected canonical email: %q", got)
+	}
+}
+
+func TestSessionTenantAmbiguityErrorCarriesCandidates(t *testing.T) {
+	err := &SessionTenantAmbiguityError{Candidates: []string{"tenant-a", "tenant-b"}}
+
+	if !errors.Is(err, ErrSessionTenantRequired) {
+		t.Fatalf("expected ambiguity error to match ErrSessionTenantRequired")
+	}
+	got := SessionTenantCandidates(err)
+	want := []string{"tenant-a", "tenant-b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected candidates %v, got %v", want, got)
+	}
+}
+
+func TestBuildSessionTimelineDeduplicatesBaseRows(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	expires := now.Add(30 * time.Minute)
+	success := "success"
+	duration := int64(17)
+	pending := "pending"
+	approvalID := "approval-1"
+
+	rows := []sessionTimelineRow{
+		{
+			EventID:          "evt-1",
+			TenantID:         "tenant-1",
+			AgentID:          "agent-1",
+			UserID:           "user-1",
+			UserName:         "Avery Analyst",
+			UserEmail:        "avery@example.com",
+			Tool:             "slack",
+			Action:           "msg.post",
+			Resource:         "#general",
+			RiskScore:        8,
+			Decision:         "approve",
+			SessionID:        "sess-1",
+			TraceID:          "trace-1",
+			ReceivedAt:       now,
+			PayloadJSON:      []byte(`{"risk_factors":["high_impact"]}`),
+			PolicyResultJSON: []byte(`{"reason":"risk exceeded threshold"}`),
+			ApprovalID:       &approvalID,
+			ApprovalStatus:   &pending,
+			ApprovalCreated:  &now,
+			ApprovalExpires:  &expires,
+		},
+		{
+			EventID:          "evt-1",
+			TenantID:         "tenant-1",
+			AgentID:          "agent-1",
+			UserID:           "user-1",
+			UserName:         "Avery Analyst",
+			UserEmail:        "avery@example.com",
+			Tool:             "slack",
+			Action:           "msg.post",
+			Resource:         "#general",
+			RiskScore:        8,
+			Decision:         "approve",
+			SessionID:        "sess-1",
+			TraceID:          "trace-1",
+			ReceivedAt:       now,
+			PayloadJSON:      []byte(`{"risk_factors":["high_impact"]}`),
+			PolicyResultJSON: []byte(`{"reason":"risk exceeded threshold"}`),
+		},
+		{
+			EventID:          "exec-1",
+			ParentEventID:    "evt-1",
+			TenantID:         "tenant-1",
+			AgentID:          "agent-1",
+			Tool:             "slack",
+			Action:           "msg.post",
+			Decision:         "allow",
+			SessionID:        "sess-1",
+			ReceivedAt:       now.Add(2 * time.Minute),
+			PayloadJSON:      []byte(`{}`),
+			PolicyResultJSON: []byte(`{"reason":"approval grant consumed"}`),
+			ResultStatus:     &success,
+			ResultDuration:   &duration,
+		},
+	}
+
+	timeline := buildSessionTimeline(rows)
+	if len(timeline) != 1 {
+		t.Fatalf("expected one timeline item, got %d", len(timeline))
+	}
+	item := timeline[0]
+	if item.EventID != "evt-1" {
+		t.Fatalf("expected parent event to remain visible, got %q", item.EventID)
+	}
+	if item.Approval == nil || item.Approval.ID != "approval-1" {
+		t.Fatalf("expected approval summary to be preserved, got %+v", item.Approval)
+	}
+	if item.Execution == nil || item.Execution.EventID != "exec-1" || item.Execution.Status != "success" {
+		t.Fatalf("expected child execution to attach to parent, got %+v", item.Execution)
+	}
+	if item.Explain == "" {
+		t.Fatalf("expected explain text to be generated")
 	}
 }

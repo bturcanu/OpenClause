@@ -374,10 +374,10 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/reports/activity` | JWT | Legacy alias for `/admin/events` |
 | `GET` | `/admin/reports/export/csv` | JWT | Legacy alias for `/admin/events/export/csv` |
 | `GET` | `/admin/sessions` | JWT | List observed runs derived from `tool_events.session_id` with user/agent attribution, decision counts, and last action summary |
-| `GET` | `/admin/sessions/{session_id}` | JWT | Get session summary (platform admins should include `tenant_id` when a session id could exist in multiple tenants) |
+| `GET` | `/admin/sessions/{session_id}` | JWT | Get session summary; ambiguous platform-admin lookups return `400` with tenant `candidates` so the UI can prompt for `tenant_id` |
 | `GET` | `/admin/connectors` | JWT | List the full connector registry for the console (works before any toolcalls) |
 | `GET` | `/v1/connectors` | JWT | Legacy console-api alias for `/admin/connectors` |
-| `GET` | `/admin/sessions/{session_id}/timeline` | JWT | Session timeline grouped by request plus related approval/execution context |
+| `GET` | `/admin/sessions/{session_id}/timeline` | JWT | Session timeline grouped by request plus related approval/execution context; ambiguous platform-admin lookups return tenant `candidates` |
 | `GET` | `/admin/sessions/{session_id}/export/csv` | JWT | Export a session timeline as CSV |
 | `GET` | `/admin/sessions/{session_id}/export/json` | JWT | Export a session summary + timeline as JSON |
 | `GET` | `/admin/policy/versions` | JWT | List policy versions |
@@ -618,6 +618,7 @@ Important behavior:
 
 - `agent_id` is the tenant-scoped service identity for the caller.
 - `session_id` groups related tool calls into an operator-facing run in the Sessions UI. If you omit it, the request still works, but the console will show `(none)` and cannot assemble a run timeline.
+- Session IDs are resolved within tenant scope. If a platform admin opens a bare `session_id` that exists in multiple tenants, the API returns a `400` with tenant `candidates`, and the Console prompts them to choose one.
 - `user_id` identifies the human end user behind the agent request when you have one.
 - `labels.user_name` and `labels.user_email` are optional display helpers used by the Console on Sessions, Approvals, and Audit pages.
 - `trace_id` gives operators a stable correlation key across logs, traces, approvals, and exports.

@@ -107,7 +107,7 @@ func TestHandleListSessionsScopesTenantAdminAndPassesFilters(t *testing.T) {
 }
 
 func TestHandleGetSessionRequiresTenantHintForAmbiguousPlatformSession(t *testing.T) {
-	store := &fakeSessionsStore{getErr: console.ErrSessionTenantRequired}
+	store := &fakeSessionsStore{getErr: &console.SessionTenantAmbiguityError{Candidates: []string{"tenant-a", "tenant-b"}}}
 	api := newTestSessionsAPI(store)
 	claims := &console.JWTClaims{
 		Sub:   "admin-1",
@@ -125,8 +125,47 @@ func TestHandleGetSessionRequiresTenantHintForAmbiguousPlatformSession(t *testin
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "tenant_id required for ambiguous session_id") {
-		t.Fatalf("unexpected body: %s", rr.Body.String())
+	var payload struct {
+		Code       string   `json:"code"`
+		Message    string   `json:"message"`
+		Error      string   `json:"error"`
+		Candidates []string `json:"candidates"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+	}
+	if payload.Message != "tenant_id required" || payload.Error != "tenant_id required" {
+		t.Fatalf("unexpected ambiguity payload: %+v", payload)
+	}
+	if len(payload.Candidates) != 2 || payload.Candidates[0] != "tenant-a" || payload.Candidates[1] != "tenant-b" {
+		t.Fatalf("unexpected candidates: %+v", payload.Candidates)
+	}
+}
+
+func TestHandleSessionTimelineReturnsTenantCandidatesForAmbiguousPlatformSession(t *testing.T) {
+	store := &fakeSessionsStore{timelineErr: &console.SessionTenantAmbiguityError{Candidates: []string{"tenant-a", "tenant-b"}}}
+	api := newTestSessionsAPI(store)
+	claims := &console.JWTClaims{Sub: "admin-1", Roles: []string{"platform_admin"}}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(http.MethodGet, "/admin/sessions/sess-1/timeline", nil).WithContext(ctx)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("session_id", "sess-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	rr := httptest.NewRecorder()
+
+	api.handleSessionTimeline(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Candidates []string `json:"candidates"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+	}
+	if len(payload.Candidates) != 2 {
+		t.Fatalf("expected candidates in response, got %+v", payload)
 	}
 }
 

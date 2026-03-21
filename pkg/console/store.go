@@ -33,6 +33,28 @@ var (
 	ErrSessionTenantRequired = errors.New("tenant_id required for ambiguous session_id")
 )
 
+type SessionTenantAmbiguityError struct {
+	Candidates []string
+}
+
+func (e *SessionTenantAmbiguityError) Error() string {
+	return ErrSessionTenantRequired.Error()
+}
+
+func (e *SessionTenantAmbiguityError) Is(target error) bool {
+	return target == ErrSessionTenantRequired
+}
+
+func SessionTenantCandidates(err error) []string {
+	var ambiguity *SessionTenantAmbiguityError
+	if !errors.As(err, &ambiguity) || len(ambiguity.Candidates) == 0 {
+		return nil
+	}
+	out := make([]string, len(ambiguity.Candidates))
+	copy(out, ambiguity.Candidates)
+	return out
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────────────────────────────────────
@@ -297,6 +319,36 @@ type SessionTimelineEvent struct {
 	Approval     *SessionApprovalSummary  `json:"approval,omitempty"`
 	Execution    *SessionExecutionSummary `json:"execution,omitempty"`
 	Explain      string                   `json:"explain"`
+}
+
+type sessionTimelineRow struct {
+	EventID          string
+	ParentEventID    string
+	TenantID         string
+	AgentID          string
+	UserID           string
+	UserName         string
+	UserEmail        string
+	Tool             string
+	Action           string
+	Resource         string
+	RiskScore        int
+	Decision         string
+	SessionID        string
+	TraceID          string
+	ReceivedAt       time.Time
+	PayloadJSON      []byte
+	PolicyResultJSON []byte
+	ResultStatus     *string
+	ResultOutput     []byte
+	ResultError      *string
+	ResultDuration   *int64
+	ApprovalID       *string
+	ApprovalStatus   *string
+	ApprovalReason   *string
+	ApprovalDeny     *string
+	ApprovalCreated  *time.Time
+	ApprovalExpires  *time.Time
 }
 
 type PolicyVersion struct {
@@ -2287,9 +2339,27 @@ func (s *Store) GetSessionTimeline(ctx context.Context, sessionID, tenantScope, 
 		       r.status, r.output_json, r.error_msg, r.duration_ms,
 		       ar.id, ar.status, ar.reason, ar.deny_reason, ar.created_at, ar.expires_at
 		FROM tool_events e
-		LEFT JOIN tool_results r ON r.event_id = e.event_id
-		LEFT JOIN approval_requests ar ON ar.event_id = e.event_id
-		LEFT JOIN tool_executions parent ON parent.execution_event_id = e.event_id
+		LEFT JOIN LATERAL (
+			SELECT r.status, r.output_json, r.error_msg, r.duration_ms
+			FROM tool_results r
+			WHERE r.event_id = e.event_id
+			ORDER BY r.created_at DESC, r.id DESC
+			LIMIT 1
+		) r ON true
+		LEFT JOIN LATERAL (
+			SELECT ar.id, ar.status, ar.reason, ar.deny_reason, ar.created_at, ar.expires_at
+			FROM approval_requests ar
+			WHERE ar.event_id = e.event_id
+			ORDER BY ar.created_at DESC, ar.id DESC
+			LIMIT 1
+		) ar ON true
+		LEFT JOIN LATERAL (
+			SELECT parent.parent_event_id
+			FROM tool_executions parent
+			WHERE parent.execution_event_id = e.event_id
+			ORDER BY parent.created_at DESC, parent.parent_event_id DESC
+			LIMIT 1
+		) parent ON true
 		WHERE e.tenant_id = $1 AND e.session_id = $2
 		ORDER BY e.received_at ASC, e.event_seq ASC`, tenantID, sessionID)
 	if err != nil {
@@ -2297,39 +2367,7 @@ func (s *Store) GetSessionTimeline(ctx context.Context, sessionID, tenantScope, 
 	}
 	defer rows.Close()
 
-	type sessionTimelineRow struct {
-		EventID          string
-		ParentEventID    string
-		TenantID         string
-		AgentID          string
-		UserID           string
-		UserName         string
-		UserEmail        string
-		Tool             string
-		Action           string
-		Resource         string
-		RiskScore        int
-		Decision         string
-		SessionID        string
-		TraceID          string
-		ReceivedAt       time.Time
-		PayloadJSON      []byte
-		PolicyResultJSON []byte
-		ResultStatus     *string
-		ResultOutput     []byte
-		ResultError      *string
-		ResultDuration   *int64
-		ApprovalID       *string
-		ApprovalStatus   *string
-		ApprovalReason   *string
-		ApprovalDeny     *string
-		ApprovalCreated  *time.Time
-		ApprovalExpires  *time.Time
-	}
-
-	items := make([]*SessionTimelineEvent, 0)
-	index := make(map[string]*SessionTimelineEvent)
-	pendingExecutions := make(map[string]*SessionExecutionSummary)
+	scanned := make([]sessionTimelineRow, 0)
 
 	for rows.Next() {
 		var row sessionTimelineRow
@@ -2345,70 +2383,12 @@ func (s *Store) GetSessionTimeline(ctx context.Context, sessionID, tenantScope, 
 		); err != nil {
 			return nil, fmt.Errorf("console.GetSessionTimeline scan: %w", err)
 		}
-
-		policyReason, riskFactors := sessionDetailsFromPayload(row.PayloadJSON, row.PolicyResultJSON)
-		execution := sessionExecutionFromRow(row.EventID, row.ReceivedAt, row.ResultStatus, row.ResultOutput, row.ResultError, row.ResultDuration, policyReason)
-
-		if row.ParentEventID != "" {
-			if execution != nil {
-				if parent, ok := index[row.ParentEventID]; ok {
-					parent.Execution = execution
-					parent.Explain = buildSessionExplain(parent)
-				} else {
-					pendingExecutions[row.ParentEventID] = execution
-				}
-			}
-			continue
-		}
-
-		item := &SessionTimelineEvent{
-			EventListItem: EventListItem{
-				EventID:    row.EventID,
-				TenantID:   row.TenantID,
-				AgentID:    row.AgentID,
-				UserID:     row.UserID,
-				UserName:   row.UserName,
-				UserEmail:  row.UserEmail,
-				Tool:       row.Tool,
-				Action:     row.Action,
-				Resource:   row.Resource,
-				RiskScore:  row.RiskScore,
-				Decision:   row.Decision,
-				SessionID:  row.SessionID,
-				TraceID:    row.TraceID,
-				ReceivedAt: row.ReceivedAt,
-			},
-			PolicyReason: policyReason,
-			RiskFactors:  riskFactors,
-			Execution:    execution,
-		}
-		if row.ApprovalID != nil && row.ApprovalStatus != nil && row.ApprovalCreated != nil && row.ApprovalExpires != nil {
-			item.Approval = &SessionApprovalSummary{
-				ID:         *row.ApprovalID,
-				Status:     *row.ApprovalStatus,
-				Reason:     stringValue(row.ApprovalReason),
-				DenyReason: stringValue(row.ApprovalDeny),
-				CreatedAt:  *row.ApprovalCreated,
-				ExpiresAt:  *row.ApprovalExpires,
-			}
-		}
-		if pending := pendingExecutions[item.EventID]; pending != nil {
-			item.Execution = pending
-			delete(pendingExecutions, item.EventID)
-		}
-		item.Explain = buildSessionExplain(item)
-		items = append(items, item)
-		index[item.EventID] = item
+		scanned = append(scanned, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("console.GetSessionTimeline iteration: %w", err)
 	}
-
-	out := make([]SessionTimelineEvent, 0, len(items))
-	for _, item := range items {
-		out = append(out, *item)
-	}
-	return out, nil
+	return buildSessionTimeline(scanned), nil
 }
 
 func (s *Store) ExportSessionCSV(ctx context.Context, sessionID, tenantScope, tenantHint string, w io.Writer) error {
@@ -2473,27 +2453,9 @@ func (s *Store) resolveSessionTenant(ctx context.Context, sessionID, tenantScope
 		return tenantHint, nil
 	}
 
-	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT tenant_id
-		FROM tool_events
-		WHERE session_id = $1
-		ORDER BY tenant_id
-		LIMIT 2`, sessionID)
+	tenants, err := s.ListSessionTenantCandidates(ctx, sessionID, 10)
 	if err != nil {
 		return "", fmt.Errorf("console.resolveSessionTenant: %w", err)
-	}
-	defer rows.Close()
-
-	tenants := make([]string, 0, 2)
-	for rows.Next() {
-		var tenantID string
-		if err := rows.Scan(&tenantID); err != nil {
-			return "", fmt.Errorf("console.resolveSessionTenant scan: %w", err)
-		}
-		tenants = append(tenants, tenantID)
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("console.resolveSessionTenant iteration: %w", err)
 	}
 	switch len(tenants) {
 	case 0:
@@ -2501,8 +2463,37 @@ func (s *Store) resolveSessionTenant(ctx context.Context, sessionID, tenantScope
 	case 1:
 		return tenants[0], nil
 	default:
-		return "", ErrSessionTenantRequired
+		return "", &SessionTenantAmbiguityError{Candidates: tenants}
 	}
+}
+
+func (s *Store) ListSessionTenantCandidates(ctx context.Context, sessionID string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT tenant_id
+		FROM tool_events
+		WHERE session_id = $1
+		ORDER BY tenant_id
+		LIMIT $2`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListSessionTenantCandidates: %w", err)
+	}
+	defer rows.Close()
+
+	tenants := make([]string, 0, limit)
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return nil, fmt.Errorf("console.ListSessionTenantCandidates scan: %w", err)
+		}
+		tenants = append(tenants, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListSessionTenantCandidates iteration: %w", err)
+	}
+	return tenants, nil
 }
 
 func sessionDetailsFromPayload(payloadJSON, policyResultJSON []byte) (string, []string) {
@@ -2551,6 +2542,92 @@ func sessionExecutionFromRow(eventID string, receivedAt time.Time, status *strin
 		exec.DurationMS = *durationMS
 	}
 	return exec
+}
+
+func sessionApprovalFromRow(row sessionTimelineRow) *SessionApprovalSummary {
+	if row.ApprovalID == nil || row.ApprovalStatus == nil || row.ApprovalCreated == nil || row.ApprovalExpires == nil {
+		return nil
+	}
+	return &SessionApprovalSummary{
+		ID:         *row.ApprovalID,
+		Status:     *row.ApprovalStatus,
+		Reason:     stringValue(row.ApprovalReason),
+		DenyReason: stringValue(row.ApprovalDeny),
+		CreatedAt:  *row.ApprovalCreated,
+		ExpiresAt:  *row.ApprovalExpires,
+	}
+}
+
+func buildSessionTimeline(rows []sessionTimelineRow) []SessionTimelineEvent {
+	items := make([]*SessionTimelineEvent, 0, len(rows))
+	index := make(map[string]*SessionTimelineEvent, len(rows))
+	pendingExecutions := make(map[string]*SessionExecutionSummary)
+
+	for _, row := range rows {
+		policyReason, riskFactors := sessionDetailsFromPayload(row.PayloadJSON, row.PolicyResultJSON)
+		execution := sessionExecutionFromRow(row.EventID, row.ReceivedAt, row.ResultStatus, row.ResultOutput, row.ResultError, row.ResultDuration, policyReason)
+
+		if row.ParentEventID != "" {
+			if execution == nil {
+				continue
+			}
+			if parent, ok := index[row.ParentEventID]; ok {
+				parent.Execution = execution
+				parent.Explain = buildSessionExplain(parent)
+			} else {
+				pendingExecutions[row.ParentEventID] = execution
+			}
+			continue
+		}
+
+		item, exists := index[row.EventID]
+		if !exists {
+			item = &SessionTimelineEvent{
+				EventListItem: EventListItem{
+					EventID:    row.EventID,
+					TenantID:   row.TenantID,
+					AgentID:    row.AgentID,
+					UserID:     row.UserID,
+					UserName:   row.UserName,
+					UserEmail:  row.UserEmail,
+					Tool:       row.Tool,
+					Action:     row.Action,
+					Resource:   row.Resource,
+					RiskScore:  row.RiskScore,
+					Decision:   row.Decision,
+					SessionID:  row.SessionID,
+					TraceID:    row.TraceID,
+					ReceivedAt: row.ReceivedAt,
+				},
+			}
+			items = append(items, item)
+			index[item.EventID] = item
+		}
+
+		if item.PolicyReason == "" {
+			item.PolicyReason = policyReason
+		}
+		if len(item.RiskFactors) == 0 && len(riskFactors) > 0 {
+			item.RiskFactors = append(item.RiskFactors, riskFactors...)
+		}
+		if approval := sessionApprovalFromRow(row); approval != nil {
+			item.Approval = approval
+		}
+		if execution != nil {
+			item.Execution = execution
+		}
+		if pending := pendingExecutions[item.EventID]; pending != nil {
+			item.Execution = pending
+			delete(pendingExecutions, item.EventID)
+		}
+		item.Explain = buildSessionExplain(item)
+	}
+
+	out := make([]SessionTimelineEvent, 0, len(items))
+	for _, item := range items {
+		out = append(out, *item)
+	}
+	return out
 }
 
 func buildSessionExplain(item *SessionTimelineEvent) string {

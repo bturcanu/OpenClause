@@ -2113,7 +2113,7 @@ func (api *ConsoleAPI) handleGetSession(w http.ResponseWriter, r *http.Request) 
 	session, err := api.sessionsStore.GetSession(r.Context(), sessionID, scope, tenantHint)
 	if err != nil {
 		if errors.Is(err, console.ErrSessionTenantRequired) {
-			writeError(w, http.StatusBadRequest, "tenant_id required for ambiguous session_id")
+			writeSessionTenantRequiredError(w, err)
 			return
 		}
 		api.log.Error("get session failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
@@ -2209,7 +2209,7 @@ func (api *ConsoleAPI) handleSessionTimeline(w http.ResponseWriter, r *http.Requ
 	events, err := api.sessionsStore.GetSessionTimeline(r.Context(), sessionID, scope, tenantHint)
 	if err != nil {
 		if errors.Is(err, console.ErrSessionTenantRequired) {
-			writeError(w, http.StatusBadRequest, "tenant_id required for ambiguous session_id")
+			writeSessionTenantRequiredError(w, err)
 			return
 		}
 		api.log.Error("session timeline failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
@@ -2231,7 +2231,7 @@ func (api *ConsoleAPI) handleExportSessionCSV(w http.ResponseWriter, r *http.Req
 	buf := bytes.NewBuffer(nil)
 	if err := api.sessionsStore.ExportSessionCSV(r.Context(), sessionID, scope, tenantHint, buf); err != nil {
 		if errors.Is(err, console.ErrSessionTenantRequired) {
-			types.ErrBadRequest("tenant_id required for ambiguous session_id").WriteJSON(w)
+			writeSessionTenantRequiredError(w, err)
 			return
 		}
 		api.log.Error("export session csv failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
@@ -2257,7 +2257,7 @@ func (api *ConsoleAPI) handleExportSessionJSON(w http.ResponseWriter, r *http.Re
 	session, err := api.sessionsStore.GetSession(r.Context(), sessionID, scope, tenantHint)
 	if err != nil {
 		if errors.Is(err, console.ErrSessionTenantRequired) {
-			types.ErrBadRequest("tenant_id required for ambiguous session_id").WriteJSON(w)
+			writeSessionTenantRequiredError(w, err)
 			return
 		}
 		api.log.Error("get session for json export failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
@@ -2271,7 +2271,7 @@ func (api *ConsoleAPI) handleExportSessionJSON(w http.ResponseWriter, r *http.Re
 	events, err := api.sessionsStore.GetSessionTimeline(r.Context(), sessionID, scope, tenantHint)
 	if err != nil {
 		if errors.Is(err, console.ErrSessionTenantRequired) {
-			types.ErrBadRequest("tenant_id required for ambiguous session_id").WriteJSON(w)
+			writeSessionTenantRequiredError(w, err)
 			return
 		}
 		api.log.Error("get session timeline for json export failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
@@ -2565,6 +2565,20 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 		}
 	}
 	apiErr.WriteJSON(w)
+}
+
+func writeSessionTenantRequiredError(w http.ResponseWriter, err error) {
+	candidates := console.SessionTenantCandidates(err)
+	payload := map[string]any{
+		"code":    "BAD_REQUEST",
+		"error":   "tenant_id required",
+		"message": "tenant_id required",
+	}
+	if len(candidates) > 0 {
+		payload["candidates"] = candidates
+		payload["details"] = map[string]any{"candidates": candidates}
+	}
+	writeJSON(w, http.StatusBadRequest, payload)
 }
 
 func requestClientIP(r *http.Request) string {

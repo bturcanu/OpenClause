@@ -4,6 +4,55 @@ Date: 2026-03-20
 Branch: `fix/logic-flow-sweep`
 Status: Complete
 
+## Follow-up: Sessions Hardening
+
+Date: 2026-03-20
+Branch: `feature/console-sessions-polish`
+Status: Complete
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-015 | High | Sessions timeline | Session detail could show ghost duplicate rows if `tool_results` or `approval_requests` ever contained more than one row for a single `event_id` | `GetSessionTimeline` used direct left joins without limiting related rows | Replaced direct joins with `LEFT JOIN LATERAL (...) ORDER BY ... LIMIT 1` and added a de-duplicating timeline builder regression test | `pkg/console/store.go`, `pkg/console/store_test.go` | Fixed |
+| LF-016 | Medium | Sessions platform-admin UX | Pasting a bare `session_id` that existed in multiple tenants produced an opaque `400` with no operator recovery path | `resolveSessionTenant` only returned a sentinel error, and handlers/UI flattened it to a string message | Added a typed ambiguity error carrying tenant candidates, structured JSON handler responses, and a Session detail tenant picker that retries with `tenant_id` | `pkg/console/store.go`, `cmd/console-api/main.go`, `cmd/console-api/session_handlers_test.go`, `web/console/src/api.ts`, `web/console/src/pages/SessionTimeline.tsx`, `web/console/src/pages/Sessions.tsx` | Fixed |
+| LF-017 | Low | Sessions/UI polish | The new console theme still had a few readability hazards on sidebar links, badges over striped tables, and code blocks on smaller screens | Palette/spacing polish landed faster than a targeted contrast/overflow pass | Applied minimal CSS-only contrast and overflow fixes | `web/console/src/index.css` | Fixed |
+| LF-018 | Low | Demo/docs | The demo proved approvals and exports, but not that Sessions and user attribution worked on a fresh run | `scripts/demo.sh` did not send session/user/trace attribution or check `/admin/sessions` | Added attributed toolcalls, a Sessions confirmation step, and matching README/local-testing guidance | `scripts/demo.sh`, `readme.md`, `docs/LOCAL_TESTING.md` | Fixed |
+
+### Follow-up Verification
+
+- `go test ./pkg/console ./cmd/console-api -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/cmd/console-api`
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built in 595ms`
+- `go test ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/cmd/console-api`
+- `go test -race ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/cmd/console-api`
+- `docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v`
+  - Pass
+  - Key output: `PASS: 19/19`
+- `npm --prefix sdk/typescript run build`
+  - Pass
+  - Key output: `tsc`
+- `./scripts/dev.sh`
+  - Pass
+  - Key output: stack rebuilt, migrations applied, health URLs printed
+- `./scripts/demo.sh`
+  - Pass
+  - Key output: session confirmation `Session visible in console API: demo-session-1774058548`
+- Live ambiguity smoke
+  - Pass
+  - Key output: `status=400`, `candidates=["4e511724-16f6-4390-8db5-9bdc51e845cb","76a644cf-2540-452b-a09c-6ebf438c76d9"]`, `message=tenant_id required`
+
+### Follow-up Notes
+
+- Initial direct localhost curl smoke failed inside the sandbox with `curl: (7) Failed to connect to localhost...`; this was an environment restriction, not a repo bug. Rerunning the same smoke outside the sandbox succeeded and produced the expected ambiguity payload.
+
 ## Flow Map
 
 ### A. Console bootstrap and auth flows

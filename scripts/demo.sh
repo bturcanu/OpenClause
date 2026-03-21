@@ -56,11 +56,17 @@ KEY=$(curl -sS -X POST "$API/admin/tenants/$TENANT_ID/apikeys" \
 RAW_KEY=$(echo "$KEY" | jq -r '.raw_key')
 ok "API Key: ${RAW_KEY:0:20}..."
 
+SESSION_ID="demo-session-$(date +%s)"
+TRACE_ID="trace-demo-$(date +%s)"
+USER_ID="demo-user-123"
+USER_NAME="Taylor Tester"
+USER_EMAIL="taylor@example.com"
+
 # ─── 4. Allow toolcall ──────────────────────────────────────────────────────
 info "Step 4: Submit a low-risk toolcall (auto-allowed)"
 ALLOW=$(curl -sS -X POST "$GW/v1/toolcalls" \
   -H "X-API-Key: $RAW_KEY" -H "Content-Type: application/json" \
-  -d "{\"tenant_id\":\"$TENANT_ID\",\"agent_id\":\"$AGENT_ID\",\"tool\":\"slack\",\"action\":\"channel.list\",\"risk_score\":1,\"idempotency_key\":\"demo-allow-$(date +%s)\"}")
+  -d "{\"tenant_id\":\"$TENANT_ID\",\"agent_id\":\"$AGENT_ID\",\"user_id\":\"$USER_ID\",\"session_id\":\"$SESSION_ID\",\"trace_id\":\"$TRACE_ID\",\"labels\":{\"user_name\":\"$USER_NAME\",\"user_email\":\"$USER_EMAIL\"},\"tool\":\"slack\",\"action\":\"channel.list\",\"risk_score\":1,\"idempotency_key\":\"demo-allow-$(date +%s)\"}")
 ALLOW_DEC=$(echo "$ALLOW" | jq -r '.decision')
 ALLOW_ID=$(echo "$ALLOW" | jq -r '.event_id')
 [ "$ALLOW_DEC" = "allow" ] && ok "Decision: $ALLOW_DEC (event: $ALLOW_ID)" || fail "Expected allow, got $ALLOW_DEC"
@@ -69,7 +75,7 @@ ALLOW_ID=$(echo "$ALLOW" | jq -r '.event_id')
 info "Step 5: Submit an unknown-tool request (auto-denied)"
 DENY=$(curl -sS -X POST "$GW/v1/toolcalls" \
   -H "X-API-Key: $RAW_KEY" -H "Content-Type: application/json" \
-  -d "{\"tenant_id\":\"$TENANT_ID\",\"agent_id\":\"$AGENT_ID\",\"tool\":\"unknown\",\"action\":\"danger\",\"risk_score\":3,\"idempotency_key\":\"demo-deny-$(date +%s)\"}")
+  -d "{\"tenant_id\":\"$TENANT_ID\",\"agent_id\":\"$AGENT_ID\",\"user_id\":\"$USER_ID\",\"session_id\":\"$SESSION_ID\",\"trace_id\":\"$TRACE_ID\",\"labels\":{\"user_name\":\"$USER_NAME\",\"user_email\":\"$USER_EMAIL\"},\"tool\":\"unknown\",\"action\":\"danger\",\"risk_score\":3,\"idempotency_key\":\"demo-deny-$(date +%s)\"}")
 DENY_DEC=$(echo "$DENY" | jq -r '.decision')
 [ "$DENY_DEC" = "deny" ] && ok "Decision: $DENY_DEC" || fail "Expected deny, got $DENY_DEC"
 
@@ -77,7 +83,7 @@ DENY_DEC=$(echo "$DENY" | jq -r '.decision')
 info "Step 6: Submit a high-risk toolcall (requires approval)"
 APPROVE=$(curl -sS -X POST "$GW/v1/toolcalls" \
   -H "X-API-Key: $RAW_KEY" -H "Content-Type: application/json" \
-  -d "{\"tenant_id\":\"$TENANT_ID\",\"agent_id\":\"$AGENT_ID\",\"tool\":\"slack\",\"action\":\"msg.post\",\"risk_score\":8,\"params\":{\"channel\":\"#general\",\"text\":\"Hello from demo\"},\"idempotency_key\":\"demo-approve-$(date +%s)\"}")
+  -d "{\"tenant_id\":\"$TENANT_ID\",\"agent_id\":\"$AGENT_ID\",\"user_id\":\"$USER_ID\",\"session_id\":\"$SESSION_ID\",\"trace_id\":\"$TRACE_ID\",\"labels\":{\"user_name\":\"$USER_NAME\",\"user_email\":\"$USER_EMAIL\"},\"tool\":\"slack\",\"action\":\"msg.post\",\"risk_score\":8,\"params\":{\"channel\":\"#general\",\"text\":\"Hello from demo\"},\"idempotency_key\":\"demo-approve-$(date +%s)\"}")
 APPROVE_DEC=$(echo "$APPROVE" | jq -r '.decision')
 APPROVE_ID=$(echo "$APPROVE" | jq -r '.event_id')
 APPROVAL_URL=$(echo "$APPROVE" | jq -r '.approval_url')
@@ -107,8 +113,15 @@ AUDIT=$(curl -sS "$API/admin/events/$APPROVE_ID" -H "Authorization: Bearer $TOKE
 AUDIT_TOOL=$(echo "$AUDIT" | jq -r '.tool // .event.tool // empty')
 [ -n "$AUDIT_TOOL" ] && ok "Audit event found: tool=$AUDIT_TOOL" || ok "Audit trail accessible"
 
-# ─── 10. Exports ────────────────────────────────────────────────────────────
-info "Step 10: Export data"
+# ─── 10. Sessions ───────────────────────────────────────────────────────────
+info "Step 10: Verify session view"
+SESSION_LIST=$(curl -sS "$API/admin/sessions?tenant_id=$TENANT_ID&session_id=$SESSION_ID" -H "Authorization: Bearer $TOKEN")
+SESSION_MATCHES=$(echo "$SESSION_LIST" | jq 'length')
+SESSION_FOUND_ID=$(echo "$SESSION_LIST" | jq -r '.[0].id // empty')
+[ "$SESSION_MATCHES" -ge 1 ] && [ "$SESSION_FOUND_ID" = "$SESSION_ID" ] && ok "Session visible in console API: $SESSION_ID" || fail "Session not found in sessions API"
+
+# ─── 11. Exports ────────────────────────────────────────────────────────────
+info "Step 11: Export data"
 CSV_CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$API/admin/events/export/csv?tenant_id=$TENANT_ID" -H "Authorization: Bearer $TOKEN")
 [ "$CSV_CODE" = "200" ] && ok "CSV export: HTTP $CSV_CODE" || fail "CSV export failed"
 
@@ -116,15 +129,15 @@ BUNDLE=$(curl -sS "$API/admin/reports/export/bundle?tenant_id=$TENANT_ID" -H "Au
 BUNDLE_COUNT=$(echo "$BUNDLE" | jq -r '.event_count')
 ok "Bundle export: $BUNDLE_COUNT events"
 
-# ─── 11. Connectors ─────────────────────────────────────────────────────────
-info "Step 11: List connectors"
+# ─── 12. Connectors ─────────────────────────────────────────────────────────
+info "Step 12: List connectors"
 GW_CONN_COUNT=$(curl -sS "$GW/v1/connectors" | jq 'length')
 API_CONN_COUNT=$(curl -sS "$API/admin/connectors" -H "Authorization: Bearer $TOKEN" | jq 'length')
 ok "Gateway connectors: $GW_CONN_COUNT registered"
 ok "Console connectors: $API_CONN_COUNT registered"
 
-# ─── 12. Analytics ──────────────────────────────────────────────────────────
-info "Step 12: Tenant analytics"
+# ─── 13. Analytics ──────────────────────────────────────────────────────────
+info "Step 13: Tenant analytics"
 ANALYTICS=$(curl -sS "$API/admin/tenants/$TENANT_ID/analytics/summary?range=24h&bucket_minutes=60&top_agents=5" -H "Authorization: Bearer $TOKEN")
 TOTAL=$(echo "$ANALYTICS" | jq -r '.totals.total_events')
 ok "Analytics: $TOTAL events in last 24h"
@@ -140,6 +153,7 @@ echo "  Login:        admin@openclause.dev / Admin123!"
 echo ""
 echo "  Tenant ID:    $TENANT_ID"
 echo "  Agent ID:     $AGENT_ID"
+echo "  Session ID:   $SESSION_ID"
 echo "  API Key:      ${RAW_KEY:0:25}..."
 echo ""
 echo "  Events created:"

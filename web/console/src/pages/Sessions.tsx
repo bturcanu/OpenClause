@@ -124,7 +124,7 @@ export default function Sessions() {
       />
 
       <div className="banner-note mb-16">
-        Sessions are derived from observed `session_id` values on tool calls. Events without a session id still appear in Audit Trail as <strong>(none)</strong>.
+        Sessions are derived from observed `session_id` values on tool calls. Events without a session id still appear in Audit Trail as <strong>(none)</strong>. If the same session id exists in multiple tenants, platform admins will be prompted to pick the tenant when opening it.
       </div>
 
       <div className="stats-grid">

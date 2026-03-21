@@ -12,11 +12,11 @@ Branch: `feature/console-sessions-polish`
   - `GET /admin/sessions` in [cmd/console-api/main.go](/Users/bogdan/dev/personal/OpenClause/cmd/console-api/main.go)
   - `GET /admin/sessions/{session_id}/timeline` in [cmd/console-api/main.go](/Users/bogdan/dev/personal/OpenClause/cmd/console-api/main.go)
   - `ListSessions` / `GetSessionTimeline` in [pkg/console/store.go](/Users/bogdan/dev/personal/OpenClause/pkg/console/store.go)
-- Important gap: `ListSessions` currently reads the `sessions` table, but the repo does not appear to create/update those rows anywhere. In practice, operator sessions are not derived from observed tool events yet.
-- Current UI gaps:
-  - Sessions list only shows ID, tenant, agent, event count, started, ended.
-  - Timeline is a flat event list with no approval/execution chain, no policy reason, no user attribution, and no export/share flow.
-  - Filters/search for `user_id`, `trace_id`, and risk/time ranges are missing.
+- Session summaries and timeline detail are now derived from observed `tool_events.session_id`, not the dormant `sessions` table.
+- Current hardening focus:
+  - Timeline queries must stay stable even if related tables ever contain duplicate rows.
+  - Platform-admin lookups for a bare `session_id` need a friendly tenant-selection recovery path.
+  - The polished theme still needs a contrast/overflow sanity pass on key pages.
 
 ## Checklist
 
@@ -62,6 +62,34 @@ Branch: `feature/console-sessions-polish`
   - Verification: pending
   - Commit: pending
 
+- [x] Hardening: make session timeline joins defensive against duplicate related rows
+  - Scope: stable timeline rows even if `tool_results` or `approval_requests` drift from one-row-per-event assumptions
+  - Files: `pkg/console/store.go`, `pkg/console/store_test.go`
+  - Screenshot: N/A (backend)
+  - Verification: `go test ./pkg/console ./cmd/console-api -count=1`; `go test ./... -count=1`; `go test -race ./... -count=1`
+  - Commit: pending
+
+- [x] UX: recover from ambiguous platform-admin session lookups with tenant candidates
+  - Scope: structured API error payload + Session detail tenant picker that retries with `tenant_id`
+  - Files: `pkg/console/store.go`, `cmd/console-api/main.go`, `cmd/console-api/session_handlers_test.go`, `web/console/src/api.ts`, `web/console/src/pages/SessionTimeline.tsx`, `web/console/src/pages/Sessions.tsx`
+  - Screenshot: not captured in terminal environment
+  - Verification: `go test ./pkg/console ./cmd/console-api -count=1`; `npm --prefix web/console run build`; live curl ambiguity smoke
+  - Commit: pending
+
+- [x] UI sanity: contrast/readability pass for the polished theme
+  - Scope: sidebar links, badge readability over zebra rows, and code block containment on smaller screens
+  - Files: `web/console/src/index.css`
+  - Screenshot: not captured in terminal environment
+  - Verification: `npm --prefix web/console run build`
+  - Commit: pending
+
+- [x] Demo: prove Sessions and attribution in a fresh run
+  - Scope: demo payloads include `session_id`, `user_id`, `trace_id`, `labels.user_name`, and `labels.user_email`, plus a Sessions API confirmation step
+  - Files: `scripts/demo.sh`, `readme.md`, `docs/LOCAL_TESTING.md`
+  - Screenshot: N/A
+  - Verification: `./scripts/dev.sh`; `./scripts/demo.sh`
+  - Commit: pending
+
 ## Findings
 
 - [x] `SS-001` High: Sessions page depends on `sessions` rows that are not populated by observed tool-call flows.
@@ -72,6 +100,14 @@ Branch: `feature/console-sessions-polish`
   - Fix: surface `user_id`, `user_name`, `user_email`, `session_id`, and `trace_id` in event and approval reads, then render them in Sessions, Approvals, Audit, and Event Detail.
 - [x] `SS-004` Medium: Session/audit UX lacks share/export affordances that are important in demos and operator handoffs.
   - Fix: add copyable session summary, better approvals handoff UI, session exports, richer filters, and shared product-grade page states.
+- [x] `SS-005` High: Session timeline SQL could multiply rows if related tables ever contained duplicate `tool_results` or `approval_requests` rows for one event.
+  - Fix: switch to `LEFT JOIN LATERAL ... ORDER BY ... LIMIT 1` and add a de-duplicating timeline builder regression test.
+- [x] `SS-006` Medium: Ambiguous platform-admin lookups for a shared `session_id` returned an opaque 400 with no recovery path.
+  - Fix: return tenant `candidates` in the error payload and let the Session detail UI prompt for a tenant and retry automatically.
+- [x] `SS-007` Low: The new visual theme still had some readability risk around sidebar links, badges on striped tables, and code blocks on smaller screens.
+  - Fix: tighten contrast and overflow handling with minimal CSS adjustments.
+- [x] `SS-008` Low: The demo script proved approvals and exports but not Sessions or attribution.
+  - Fix: add attribution fields to demo toolcalls and verify the session appears through `/admin/sessions`.
 
 ## Verification Evidence
 
@@ -84,6 +120,11 @@ Branch: `feature/console-sessions-polish`
 - `npm --prefix sdk/typescript run build` — PASS
 - `./scripts/dev.sh` — PASS (rebuilt stack with updated console-api, gateway, approvals, and console-ui images)
 - `./scripts/demo.sh` — PASS
+- `go test ./pkg/console ./cmd/console-api -count=1` — PASS
+- Live ambiguity smoke — PASS
+  - `GET /admin/sessions/ambiguous-session-smoke` without `tenant_id` returned `status=400`
+  - Response included `candidates=["4e511724-16f6-4390-8db5-9bdc51e845cb","76a644cf-2540-452b-a09c-6ebf438c76d9"]`
+  - Response message: `tenant_id required`
 - Session smoke after rebuild — PASS
   - `GET /admin/sessions?tenant_id=<tenant>&session_id=<session>` returned `list_count=1`
   - `GET /admin/sessions/{session_id}` returned `allow_count=2`, `deny_count=0`, `approve_count=1`

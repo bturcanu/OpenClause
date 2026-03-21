@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { api, formatDate } from '../api'
+import { APIClientError, api, formatDate } from '../api'
 import { EmptyState, InlineErrorState, PageHeaderBlock, StatCard, buildQuery, copyText, decisionTone, downloadBlob, formatRequester, noneText } from '../ui'
 
 type SessionSummary = {
@@ -77,7 +77,7 @@ const defaultFilters: TimelineFilters = {
 
 export default function SessionTimeline() {
   const { id = '' } = useParams<{ id: string }>()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const tenantID = searchParams.get('tenant_id') || ''
   const [session, setSession] = useState<SessionSummary | null>(null)
   const [events, setEvents] = useState<SessionTimelineEvent[]>([])
@@ -85,13 +85,36 @@ export default function SessionTimeline() {
   const [selectedExplain, setSelectedExplain] = useState<SessionTimelineEvent | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [ambiguityMessage, setAmbiguityMessage] = useState('')
+  const [tenantCandidates, setTenantCandidates] = useState<string[]>([])
+  const [selectedTenantCandidate, setSelectedTenantCandidate] = useState('')
   const [copyStatus, setCopyStatus] = useState('')
   const fetchSeq = useRef(0)
+
+  const handleSessionError = useCallback((err: unknown) => {
+    const message = err instanceof Error ? err.message : 'Failed to load session'
+    if (err instanceof APIClientError && (err.candidates?.length || 0) > 0) {
+      setTenantCandidates(err.candidates || [])
+      setSelectedTenantCandidate('')
+      setAmbiguityMessage('This session id exists in multiple tenants. Pick the tenant you want to inspect and the page will reload automatically.')
+      setError('')
+      return
+    }
+    setTenantCandidates([])
+    setSelectedTenantCandidate('')
+    setAmbiguityMessage('')
+    setError(message)
+  }, [])
 
   const fetchSession = useCallback(async () => {
     const seq = ++fetchSeq.current
     setLoading(true)
     setError('')
+    if (tenantID) {
+      setTenantCandidates([])
+      setSelectedTenantCandidate('')
+      setAmbiguityMessage('')
+    }
     try {
       const query = buildQuery({ tenant_id: tenantID })
       const [summary, timeline] = await Promise.all([
@@ -101,12 +124,19 @@ export default function SessionTimeline() {
       if (seq !== fetchSeq.current) return
       setSession(summary)
       setEvents(Array.isArray(timeline) ? timeline : timeline?.events || [])
+      setTenantCandidates([])
+      setSelectedTenantCandidate('')
+      setAmbiguityMessage('')
     } catch (err: any) {
-      if (seq === fetchSeq.current) setError(err.message)
+      if (seq === fetchSeq.current) {
+        setSession(null)
+        setEvents([])
+        handleSessionError(err)
+      }
     } finally {
       if (seq === fetchSeq.current) setLoading(false)
     }
-  }, [id, tenantID])
+  }, [handleSessionError, id, tenantID])
 
   useEffect(() => {
     if (!id) return
@@ -169,8 +199,19 @@ export default function SessionTimeline() {
       const blob = await api.getBlob(`/admin/sessions/${encodeURIComponent(id)}/export/${kind}${query}`)
       downloadBlob(blob, `session-${id}.${kind}`)
     } catch (err: any) {
-      setError(err.message)
+      handleSessionError(err)
     }
+  }
+
+  function handleTenantCandidateChange(value: string) {
+    setSelectedTenantCandidate(value)
+    if (!value) return
+    const next = new URLSearchParams(searchParams)
+    next.set('tenant_id', value)
+    setTenantCandidates([])
+    setAmbiguityMessage('')
+    setError('')
+    setSearchParams(next)
   }
 
   return (
@@ -183,13 +224,13 @@ export default function SessionTimeline() {
             <Link to="/sessions" className="btn btn-outline">
               Back to sessions
             </Link>
-            <button className="btn btn-outline" type="button" onClick={() => void exportSession('csv')} disabled={loading}>
+            <button className="btn btn-outline" type="button" onClick={() => void exportSession('csv')} disabled={loading || !session || tenantCandidates.length > 0}>
               Export CSV
             </button>
-            <button className="btn btn-outline" type="button" onClick={() => void exportSession('json')} disabled={loading}>
+            <button className="btn btn-outline" type="button" onClick={() => void exportSession('json')} disabled={loading || !session || tenantCandidates.length > 0}>
               Export JSON
             </button>
-            <button className="btn btn-primary" type="button" onClick={() => void handleCopySummary()} disabled={loading || !session}>
+            <button className="btn btn-primary" type="button" onClick={() => void handleCopySummary()} disabled={loading || !session || tenantCandidates.length > 0}>
               Copy shareable summary
             </button>
           </div>
@@ -197,7 +238,27 @@ export default function SessionTimeline() {
       />
 
       {copyStatus ? <div className="success-msg mb-16">{copyStatus}</div> : null}
-      {error ? <InlineErrorState message={error} onRetry={() => void fetchSession()} /> : null}
+      {error && tenantCandidates.length === 0 ? <InlineErrorState message={error} onRetry={() => void fetchSession()} /> : null}
+
+      {tenantCandidates.length > 0 ? (
+        <div className="detail-panel">
+          <h3>Pick a tenant to continue</h3>
+          <p className="table-subtext">
+            {ambiguityMessage || 'This session id exists in multiple tenants for your platform-admin view.'}
+          </p>
+          <div className="form-inline mt-16">
+            <div className="form-group" style={{ minWidth: 320 }}>
+              <label>Tenant</label>
+              <select value={selectedTenantCandidate} onChange={e => handleTenantCandidateChange(e.target.value)}>
+                <option value="">Choose a tenant</option>
+                {tenantCandidates.map(candidate => (
+                  <option key={candidate} value={candidate}>{candidate}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {session ? (
         <div className="stats-grid">
@@ -208,49 +269,51 @@ export default function SessionTimeline() {
         </div>
       ) : null}
 
-      <div className="filters-panel">
-        <div className="filters-bar filters-bar-dense">
-          <div className="form-group">
-            <label>Decision</label>
-            <select value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
-              <option value="">Any</option>
-              <option value="allow">Allow</option>
-              <option value="deny">Deny</option>
-              <option value="approve">Approve</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Tool</label>
-            <input value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
-          </div>
-          <div className="form-group">
-            <label>Action</label>
-            <input value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
-          </div>
-          <div className="form-group form-group-small">
-            <label>Risk min</label>
-            <input value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
-          </div>
-          <div className="form-group form-group-small">
-            <label>Risk max</label>
-            <input value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
-          </div>
-          <div className="form-group">
-            <label>Since</label>
-            <input value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
-          </div>
-          <div className="form-group">
-            <label>Until</label>
-            <input value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
-          </div>
-          <div className="form-group">
-            <label>&nbsp;</label>
-            <button className="btn btn-outline" type="button" onClick={() => setFilters(defaultFilters)}>
-              Reset filters
-            </button>
+      {session && tenantCandidates.length === 0 ? (
+        <div className="filters-panel">
+          <div className="filters-bar filters-bar-dense">
+            <div className="form-group">
+              <label>Decision</label>
+              <select value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
+                <option value="">Any</option>
+                <option value="allow">Allow</option>
+                <option value="deny">Deny</option>
+                <option value="approve">Approve</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Tool</label>
+              <input value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
+            </div>
+            <div className="form-group">
+              <label>Action</label>
+              <input value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
+            </div>
+            <div className="form-group form-group-small">
+              <label>Risk min</label>
+              <input value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group form-group-small">
+              <label>Risk max</label>
+              <input value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+            </div>
+            <div className="form-group">
+              <label>Since</label>
+              <input value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
+            </div>
+            <div className="form-group">
+              <label>Until</label>
+              <input value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
+            </div>
+            <div className="form-group">
+              <label>&nbsp;</label>
+              <button className="btn btn-outline" type="button" onClick={() => setFilters(defaultFilters)}>
+                Reset filters
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       {loading ? (
         <div className="detail-panel">
@@ -258,6 +321,17 @@ export default function SessionTimeline() {
           <div className="skeleton-line" />
           <div className="skeleton-line" />
         </div>
+      ) : tenantCandidates.length > 0 ? null : !session ? (
+        <EmptyState
+          icon="↻"
+          title="Session not found"
+          description="We could not find a run for this session id in the selected scope."
+          action={
+            <Link to="/sessions" className="btn btn-outline btn-sm">
+              Back to sessions
+            </Link>
+          }
+        />
       ) : filteredEvents.length === 0 ? (
         <EmptyState
           icon="↻"
