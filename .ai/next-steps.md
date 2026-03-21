@@ -6,6 +6,28 @@
 
 ---
 
+## Status Refresh — Current Repo State
+
+This file started as the verified backlog for the `product/next-steps` branch. Later branches have already completed several items that were still open in this snapshot:
+
+- Completed since the original draft:
+  - NS-01 connector registry endpoint via `GET /admin/connectors`
+  - NS-02 Java Gradle wrapper and `./gradlew test`
+  - NS-10 console login-session visibility and revocation, implemented from the Users surface via `GET /admin/auth-sessions` and `POST /admin/auth-sessions/{session_id}/revoke`
+  - invite email delivery with `accept_url` + `email_status`
+  - operator-grade Sessions explorer and broader console UI polish
+- Still genuinely open/high-value:
+  - NS-03 Python 3.9 support
+  - NS-04 Windows `demo.ps1`
+  - NS-05/NS-06 CI release gates + e2e demo job
+  - NS-07 docs golden path consolidation
+  - NS-08 broader mock connector coverage
+  - NS-09 alerts folded into the main demo flow
+- Historical note:
+  - the “Known gaps”, “Top 10 Next Steps”, and “PR-Sized Chunks” sections below preserve the branch-time planning context and are superseded wherever they conflict with the current repo state.
+
+---
+
 ## 1. Reality Check — What Is Confirmed Working
 
 ### Quality Gates (all pass)
@@ -73,14 +95,14 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 | F-003 | Overview page calls `/admin/analytics/overview` + `/admin/analytics/timeseries` but routes were not registered | Routes already existed as handlers; added route registration |
 | F-004 | Demo script missing | Created `scripts/demo.sh` — 12-step automated happy-path |
 
-### Known gaps (not regressions — never existed)
+### Known gaps at the time of original verification (historical snapshot)
 
 | # | Gap | Impact | Effort |
 |---|-----|--------|--------|
-| G-001 | Console-API `/v1/connectors` returns event-based data (observed tools), not the connector registry | Connectors page shows only tools that have been used, misses builtins | M |
+| G-001 | Console-API `/v1/connectors` returned event-based data (observed tools), not the connector registry | Fixed later: console-api now proxies the full gateway connector registry via `/admin/connectors` | M |
 | G-002 | Overview page endpoints (`/admin/analytics/overview`, `/admin/analytics/timeseries`) existed but weren't routed — now fixed | Overview showed zeros before fix | Fixed ✅ |
 | G-003 | Python SDK requires Python ≥3.10; system macOS has 3.9.6 | Developers with older Python can't install | S |
-| G-004 | No Gradle wrapper in Java SDK | Requires system `gradle` or Docker-based build | S |
+| G-004 | No Gradle wrapper in Java SDK | Fixed later: repo now includes `sdk/java/gradlew` and wrapper assets | S |
 | G-005 | No `scripts/demo.ps1` for Windows PowerShell | Windows developers can't run demo script | S |
 
 ---
@@ -127,7 +149,8 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 
 ### Top 10 Next Steps
 
-#### NS-01: Connector registry endpoint for console-api
+#### NS-01: Connector registry endpoint for console-api — Completed later
+- **Status:** Completed on later branches via `GET /admin/connectors`
 - **Impact:** Connectors page shows real connector catalog (not just observed events)
 - **Acceptance:** `GET /admin/connectors` returns all 8 connectors with names, types, actions — even before any toolcalls
 - **Sketch:** Add console-api env `GATEWAY_URL`, proxy `GET /v1/connectors` from gateway, or embed a static registry; update Connectors.tsx to call `/admin/connectors`
@@ -136,7 +159,8 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 - **Docs:** Update LOCAL_TESTING.md connectors section
 - **Demo:** "Here are all 8 connectors OpenClause can govern — Slack, Jira, GitHub, AWS, ServiceNow, email, Postgres, webhook"
 
-#### NS-02: Add Gradle wrapper to Java SDK
+#### NS-02: Add Gradle wrapper to Java SDK — Completed later
+- **Status:** Completed on later branches via committed wrapper assets and `./gradlew test`
 - **Impact:** Java SDK builds reproducibly without system Gradle
 - **Acceptance:** `cd sdk/java && ./gradlew test` works on fresh checkout
 - **Sketch:** `cd sdk/java && gradle wrapper --gradle-version 8.5`
@@ -200,7 +224,8 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 - **Test:** Demo script generates 3 denies, waits, verifies alert event
 - **Docs:** Add "Alerts demo" section to LOCAL_TESTING.md
 
-#### NS-10: Session management UI
+#### NS-10: Session management UI — Completed later
+- **Status:** Completed on later branches; active console login sessions now live under Users via `/admin/auth-sessions`, while the Sessions page focuses on agent/tool-call runs
 - **Impact:** Admins can see active user sessions and revoke access
 - **Acceptance:** Sessions page lists active JWT sessions; revoke action invalidates token
 - **Sketch:** Already have `/admin/sessions` endpoint; Sessions.tsx page exists; add revocation

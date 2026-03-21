@@ -552,6 +552,7 @@ Status: Complete
 
 - Live smoke directly covered LF-002, LF-003, LF-004, LF-005, LF-006, LF-008, LF-009, LF-010, LF-011 API reachability, and LF-014.
 - LF-001, LF-007, and LF-012 remain primarily verified by focused automated regression tests because they require log-link inspection, policy-engine failure/override conditions, or SDK harness behavior that is more reliable to validate in tests than raw curl.
+- Historical note: the early `gateway connectors 3 registered` / `console connectors 3 registered` smoke output above came from a pre-registry-proxy demo run and is superseded by later follow-up sections and the current README/LOCAL_TESTING guidance, which both reflect the current 8-connector catalog.
 
 ## UI Issues Fixed
 
@@ -637,3 +638,58 @@ Status: Complete
 
 - No backend/API contract changes were made in this final sweep.
 - The outage simulation evidence aligns with the current page code paths: auth/bootstrap pages and the remaining data-heavy pages now route request failures into explicit `InlineErrorState` handling instead of rendering misleading empty states.
+
+## Final Sweep: Documentation Accuracy
+
+Date: 2026-03-20
+Branch: `feature/console-sessions-polish`
+Status: Complete
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-034 | Low | Internal docs / roadmap | `.ai/next-steps.md` still presented NS-01, NS-02, and NS-10 as open backlog even though later branches had already shipped those capabilities | The planning doc captured a correct point-in-time snapshot, but it never got a status refresh after the connector-registry, Gradle-wrapper, and auth-session work landed | Added a current-state refresh section and marked the completed backlog items explicitly as later-completed historical entries | `.ai/next-steps.md` | Fixed |
+| LF-035 | Low | Internal tracker hygiene | `.ai/sessions-and-ui-polish.md` still showed one docs verification item as `pending` even though the README/local-testing updates had already been validated through build + demo runs | Tracker drift after the polish work was finished | Updated the checklist entry with the actual verification commands that were already used | `.ai/sessions-and-ui-polish.md` | Fixed |
+| LF-036 | Low | Release/docs summary | The primary README still stopped at `v0.3`, so the top-level project summary missed the connector registry, auth-session revocation, operator-grade Sessions, invite email delivery, Java wrapper, and final console hardening work | The release summary was never refreshed after the later branches landed | Added a concise `v0.4` summary line covering the features and hardening that shipped after the `v0.3` line | `readme.md` | Fixed |
+
+### Files Changed
+
+- `.ai/next-steps.md`
+- `.ai/sessions-and-ui-polish.md`
+- `.ai/logic-flow-sweep.md`
+- `readme.md`
+
+### Verification
+
+- `go test ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/pkg/sdk/client`
+- `go test -race ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/gateway`, `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/pkg/evidence`
+- `docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v`
+  - Pass
+  - Key output: `PASS: 19/19`
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built in 4.13s`
+- `npm --prefix sdk/typescript run build`
+  - Pass
+  - Key output: `tsc`
+- `PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v`
+  - Pass
+  - Key output: `Ran 16 tests`, `OK`
+- `cd sdk/java && ./gradlew test`
+  - Pass
+  - Key output: `BUILD SUCCESSFUL`
+- `./scripts/dev.sh`
+  - Pass
+  - Key output: stack rebuilt cleanly, migrations reapplied, and health URLs printed for gateway/approvals/connectors/OPA/MinIO
+- `./scripts/demo.sh`
+  - Pass
+  - Key output: 14/14 steps passed, including invite email status, session visibility, connectors `8 registered`, and tenant analytics `4 events in last 24h`
+
+### Notes
+
+- No new runtime regressions were reproduced in this final pass. The actionable issues were documentation drift and release-summary gaps rather than code-path failures.

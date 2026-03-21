@@ -6,6 +6,8 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 
 **v0.3** adds DB-backed tenant-scoped approver/user/invite/reset + setup wizard flows, SSO/OIDC auth-provider seams, persistent notification routing, a full deny-spike alert worker and UI, tenant analytics dashboards, API key rotation/primary/expiry metadata UX, tenant policy rule-builder with version diff/rollback + enforcement wiring, Helm charts for console services, and deep usability/correctness fixes from the demo/usability trackers (SDK endpoint + wait semantics, export/error-contract consistency, race/stale UI fixes, invite UX/token visibility, safer execute/tenant-disable handling, and robust date rendering).
 
+**v0.4** adds a gateway-backed connector catalog in the console, server-tracked console auth sessions with admin revocation, an operator-grade Sessions explorer with exports and attribution, real invite email delivery with absolute links and delivery status, Java Gradle-wrapper builds, console-wide UX polish, and a final correctness pass across API-client behavior, docs, demo flow, and logic/evidence edge cases.
+
 ---
 
 ## Table of Contents

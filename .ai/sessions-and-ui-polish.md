@@ -59,7 +59,7 @@ Branch: `feature/console-sessions-polish`
   - Scope: README + local testing guide
   - Files: `readme.md`, `docs/LOCAL_TESTING.md`
   - Screenshot: N/A
-  - Verification: pending
+  - Verification: `npm --prefix web/console run build`; `./scripts/dev.sh`; `./scripts/demo.sh`
   - Commit: `a516ea6`
 
 - [x] Hardening: make session timeline joins defensive against duplicate related rows

@@ -2,6 +2,8 @@
 
 This document tracks implementation work for OpenClause “Approver Management + UX Roadmap”.
 
+> Historical note: this file preserves the branch-by-branch execution log for the approver/user/onboarding roadmap. A few early items still show `TBD` commit links because they were completed across later consolidated branches rather than committed in that original session. For the current merged state, use `readme.md`, `.ai/logic-flow-sweep.md`, and `.ai/sessions-and-ui-polish.md`.
+
 ## Tier 1 — Adoption-critical (1 → 4)
 
 ### (1) Database-backed approver management with Console UI
@@ -330,4 +332,3 @@ This document tracks implementation work for OpenClause “Approver Management +
       - deny `event_id=e1e98524-e47c-470e-a506-6d65cbb2b16c`
       - approve `event_id=053410e1-ba0d-47ef-b0b8-0bf4ba02a212` (`approval_id=c9e707db-a58d-49eb-9c46-ace8f68aac61`)
       - approve + execute: execution audit `event_id=df5ca075-f28e-4b3f-ad0b-d78db70c7599` (`result.status=error`), audit trail endpoint verified
-
