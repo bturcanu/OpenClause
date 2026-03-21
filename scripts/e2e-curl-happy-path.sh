@@ -82,11 +82,18 @@ INVITE_JSON="$(
       '{email:$email,tenant_id:$tenant_id,role:$role,name:$name}')"
 )"
 INVITE_TOKEN="$(echo "${INVITE_JSON}" | jq -r '.token')"
+INVITE_STATUS="$(echo "${INVITE_JSON}" | jq -r '.email_status // empty')"
 if [[ -z "${INVITE_TOKEN}" || "${INVITE_TOKEN}" == "null" ]]; then
   echo "invite token missing; invite response:" >&2
   echo "${INVITE_JSON}" >&2
   exit 1
 fi
+if [[ -z "${INVITE_STATUS}" ]]; then
+  echo "invite email_status missing; invite response:" >&2
+  echo "${INVITE_JSON}" >&2
+  exit 1
+fi
+echo "invite email_status=${INVITE_STATUS}"
 
 echo ">>> Accepting invite (setting known password)"
 ACCEPT_RESP="$(

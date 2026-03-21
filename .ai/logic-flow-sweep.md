@@ -4,6 +4,82 @@ Date: 2026-03-20
 Branch: `fix/logic-flow-sweep`
 Status: Complete
 
+## Follow-up: Invite Delivery Hardening
+
+Date: 2026-03-20
+Branch: `feature/console-sessions-polish`
+Status: Complete
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-029 | High | Auth / invites | `POST /admin/invites` created a token but never attempted real email delivery, so operators had no delivery signal beyond dev logs and manual copy/paste | Invite creation stopped after persisting the invite row; there was no sender abstraction, SMTP path, or delivery-status contract | Added a pluggable invite email sender (dev logger + SMTP), absolute `accept_url`, short-timeout delivery attempt, persisted `email_status` / `email_sent_at` / `email_error`, and handler regressions for sent/failed branches | `cmd/console-api/main.go`, `cmd/console-api/invite_email.go`, `cmd/console-api/invite_handlers_test.go`, `pkg/console/store.go`, `migrations/001_initial.sql`, `web/console/src/pages/Users.tsx` | Fixed |
+| LF-030 | Medium | Auth / invites | Invite links were only server-relative unless the UI reconstructed them client-side, which made API-created invites awkward to share and harder to email from the backend | Invite/reset URL helpers returned route-only paths and the backend had no public console base URL config | Switched backend invite/reset URL builders to absolute URLs using `PUBLIC_BASE_URL`, surfaced `accept_url` in create-invite responses, and updated docs/config | `cmd/console-api/main.go`, `cmd/console-api/setup_config_test.go`, `.env.example`, `deploy/helm/console-api/values.yaml`, `readme.md`, `docs/LOCAL_TESTING.md` | Fixed |
+| LF-031 | Medium | Auth / invites | `GET /admin/invites` looked like it could return a reusable `token`, but invite tokens are HMAC-hashed at rest so list consumers could only ever get a non-usable value | The store still selected the persisted `token` column even after hashing-at-rest was added, so the list shape implied a secret that no longer existed | Stopped exposing raw token fields from list responses and replaced that operator surface with durable delivery status metadata | `pkg/console/store.go`, `cmd/console-api/invite_handlers_test.go`, `readme.md`, `docs/LOCAL_TESTING.md` | Fixed |
+
+### Minimal Repros
+
+- LF-029 before fix:
+  - Create an invite with `POST /admin/invites`
+  - Result: response only contained `token` + `expires_at`; there was no backend email attempt and no delivery status
+  - After: response includes `accept_url`, `email_status`, and `email_error` when needed; SMTP-backed send is attempted with a short timeout
+- LF-030 before fix:
+  - Call `POST /admin/invites` from the API or inspect dev logs
+  - Result: invite accept URLs were route-only (`/invite/accept?...`) unless a browser rebuilt them
+  - After: backend returns/logs absolute URLs such as `https://console.example.com/invite/accept?...`
+- LF-031 before fix:
+  - Call `GET /admin/invites` after creating an invite
+  - Result: the `token` field reflected the hashed-at-rest DB value, not a usable invite token
+  - After: list responses omit the raw token and instead expose delivery status fields operators can trust
+
+### Files Changed
+
+- `cmd/console-api/main.go`
+- `cmd/console-api/invite_email.go`
+- `cmd/console-api/invite_handlers_test.go`
+- `cmd/console-api/setup_config_test.go`
+- `pkg/console/store.go`
+- `migrations/001_initial.sql`
+- `web/console/src/pages/Users.tsx`
+- `.env.example`
+- `deploy/helm/console-api/values.yaml`
+- `readme.md`
+- `docs/LOCAL_TESTING.md`
+- `scripts/demo.sh`
+- `scripts/e2e-curl-happy-path.sh`
+
+### Verification
+
+- `go test ./cmd/console-api -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built in 617ms`
+- `go test ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`
+- `go test -race ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`
+- `docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v`
+  - Pass
+  - Key output: `PASS: 19/19`
+- `npm --prefix sdk/typescript run build`
+  - Pass
+  - Key output: `tsc`
+- `./scripts/dev.sh`
+  - Pass
+  - Key output: migrations added `email_status`, `email_sent_at`, and `email_last_error` via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+- `./scripts/demo.sh`
+  - Pass
+  - Key output: `Invite link logged for dev/test (SMTP not configured)`
+
+### Follow-up Notes
+
+- This machine did not have SMTP configured, so the live demo exercised the no-op logging sender and returned `email_status=logged`. The SMTP branch is covered by handler tests and environment-driven configuration.
+
 ## Follow-up: Sessions Hardening
 
 Date: 2026-03-20

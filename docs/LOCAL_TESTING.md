@@ -68,10 +68,12 @@ SQL
 ## Token handling note (dev)
 
 - Invite + password reset tokens are stored in the database as keyed HMAC hashes (not plaintext).
-- The `token` you receive (e.g. from `POST /admin/invites`) is still the raw value the accept/confirm endpoints require.
+- `POST /admin/invites` still returns the raw `token` once, plus an absolute `accept_url` and `email_status`.
+- `GET /admin/invites` does not return the raw token after creation; it only shows pending invite metadata + email delivery status.
 - Console-api may log raw invite/reset token URLs in development. Control this with `CONSOLE_DEV_LOG_RAW_TOKENS`:
   - `true` (default): log raw token URLs for easier local testing
   - `false`: suppress raw token URLs in logs
+- If `SMTP_HOST` / `SMTP_FROM` are unset, invite delivery uses the dev/test logging sender and `email_status` is `logged`.
 
 On Windows PowerShell, pipe the SQL through docker directly:
 

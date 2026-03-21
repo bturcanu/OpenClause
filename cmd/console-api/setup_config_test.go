@@ -36,16 +36,23 @@ func Test_normalizeSetupFirstTenantName_RejectsBlankAfterTrim(t *testing.T) {
 }
 
 func Test_inviteAcceptPageURL_UsesConsoleRoute(t *testing.T) {
-	got := inviteAcceptPageURL("tok en")
-	if got != "/invite/accept?token=tok+en" {
+	got := inviteAcceptPageURL("https://console.example.com", "tok en")
+	if got != "https://console.example.com/invite/accept?token=tok+en" {
 		t.Fatalf("unexpected invite accept url: %q", got)
 	}
 }
 
 func Test_passwordResetPageURL_UsesConsoleRoute(t *testing.T) {
-	got := passwordResetPageURL("tok en")
-	if got != "/reset?token=tok+en" {
+	got := passwordResetPageURL("https://console.example.com", "tok en")
+	if got != "https://console.example.com/reset?token=tok+en" {
 		t.Fatalf("unexpected reset url: %q", got)
+	}
+}
+
+func Test_buildConsolePageURL_FallsBackToDefaultBaseURL(t *testing.T) {
+	got := inviteAcceptPageURL("://bad-url", "tok en")
+	if got != "http://localhost:3000/invite/accept?token=tok+en" {
+		t.Fatalf("unexpected fallback invite accept url: %q", got)
 	}
 }
 

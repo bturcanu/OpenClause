@@ -1369,13 +1369,16 @@ func (s *Store) ListUsers(ctx context.Context, tenantID *string, emailQuery stri
 // ──────────────────────────────────────────────────────────────────────────────
 
 type Invite struct {
-	Token     string    `json:"token"`
-	Email     string    `json:"email"`
-	TenantID  string    `json:"tenant_id"`
-	Role      string    `json:"role"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Token       string     `json:"token,omitempty"`
+	Email       string     `json:"email"`
+	TenantID    string     `json:"tenant_id"`
+	Role        string     `json:"role"`
+	Name        string     `json:"name"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	EmailStatus string     `json:"email_status,omitempty"`
+	EmailSentAt *time.Time `json:"email_sent_at,omitempty"`
+	EmailError  string     `json:"email_error,omitempty"`
 }
 
 // InviteAcceptResult is the structured response payload for the invite acceptance flow.
@@ -1390,11 +1393,27 @@ func (s *Store) CreateInvite(ctx context.Context, token, email, tenantID, role, 
 	email = canonicalEmail(email)
 	tokenHash := s.hashInviteResetToken(token)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO invites (token, email, tenant_id, role, name, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`, tokenHash, email, tenantID, role, name, expiresAt,
+		INSERT INTO invites (token, email, tenant_id, role, name, expires_at, email_status, email_last_error)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', '')`, tokenHash, email, tenantID, role, name, expiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("console.CreateInvite: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateInviteEmailStatus(ctx context.Context, token, status string, sentAt *time.Time, emailError string) error {
+	tokenHash := s.hashInviteResetToken(token)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE invites
+		SET email_status = $2,
+		    email_sent_at = $3,
+		    email_last_error = $4
+		WHERE token = $1`,
+		tokenHash, status, sentAt, emailError,
+	)
+	if err != nil {
+		return fmt.Errorf("console.UpdateInviteEmailStatus: %w", err)
 	}
 	return nil
 }
@@ -1538,14 +1557,14 @@ func (s *Store) ListInvites(ctx context.Context, tenantID *string, limit, offset
 	var err error
 	if tenantID != nil && *tenantID != "" {
 		rows, err = s.pool.Query(ctx, `
-			SELECT token, email, tenant_id, role, name, created_at, expires_at
+			SELECT '' AS token, email, tenant_id, role, name, created_at, expires_at, email_status, email_sent_at, email_last_error
 			FROM invites
 			WHERE tenant_id = $1 AND expires_at > NOW()
 			ORDER BY created_at DESC
 			LIMIT $2 OFFSET $3`, *tenantID, limit, offset)
 	} else {
 		rows, err = s.pool.Query(ctx, `
-			SELECT token, email, tenant_id, role, name, created_at, expires_at
+			SELECT '' AS token, email, tenant_id, role, name, created_at, expires_at, email_status, email_sent_at, email_last_error
 			FROM invites
 			WHERE expires_at > NOW()
 			ORDER BY created_at DESC
@@ -1559,7 +1578,7 @@ func (s *Store) ListInvites(ctx context.Context, tenantID *string, limit, offset
 	out := make([]Invite, 0)
 	for rows.Next() {
 		var inv Invite
-		if err := rows.Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.CreatedAt, &inv.ExpiresAt); err != nil {
+		if err := rows.Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.CreatedAt, &inv.ExpiresAt, &inv.EmailStatus, &inv.EmailSentAt, &inv.EmailError); err != nil {
 			return nil, fmt.Errorf("console.ListInvites scan: %w", err)
 		}
 		out = append(out, inv)

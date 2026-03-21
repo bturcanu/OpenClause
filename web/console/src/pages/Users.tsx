@@ -47,6 +47,9 @@ export default function Users() {
   const [inviteCreated, setInviteCreated] = useState<{
     token: string
     expires_at?: string
+    accept_url?: string
+    email_status?: string
+    email_error?: string
   } | null>(null)
 
   const [createUserForm, setCreateUserForm] = useState({
@@ -129,7 +132,13 @@ export default function Users() {
         role: inviteForm.role,
         name: inviteForm.name || undefined,
       })
-      setInviteCreated({ token: resp?.token, expires_at: resp?.expires_at })
+      setInviteCreated({
+        token: resp?.token,
+        expires_at: resp?.expires_at,
+        accept_url: resp?.accept_url,
+        email_status: resp?.email_status,
+        email_error: resp?.email_error,
+      })
       setInviteForm({ email: '', tenant_id: '', role: 'tenant_admin', name: '' })
       await fetchUsers()
     } catch (err: any) {
@@ -277,7 +286,7 @@ export default function Users() {
             </div>
 
             <div className="form-card">
-              <h3>Invite User (token)</h3>
+              <h3>Invite User</h3>
               <form onSubmit={handleCreateInvite}>
                 <div className="form-group">
                   <label>Email</label>
@@ -312,10 +321,28 @@ export default function Users() {
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
                     Invite created
                   </div>
+                  <div
+                    style={{
+                      marginBottom: 8,
+                      color:
+                        inviteCreated.email_status === 'sent'
+                          ? '#166534'
+                          : inviteCreated.email_status === 'failed'
+                            ? '#b91c1c'
+                            : '#92400e',
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {inviteCreated.email_status === 'sent' ? 'Email sent' : null}
+                    {inviteCreated.email_status === 'failed' ? `Email failed (copy link instead)${inviteCreated.email_error ? `: ${inviteCreated.email_error}` : ''}` : null}
+                    {inviteCreated.email_status === 'logged' ? 'Invite link logged for dev; copy it below or check console-api logs.' : null}
+                    {!inviteCreated.email_status ? 'Invite link ready to copy.' : null}
+                  </div>
                   <div className="detail-row" style={{ display: 'block', marginBottom: 8 }}>
                     <div style={{ fontSize: 12, color: '#64748b' }}>Accept link</div>
                     {(() => {
-                      const acceptUrl = new URL(`/invite/accept?token=${encodeURIComponent(inviteCreated.token)}`, window.location.origin).toString()
+                      const acceptUrl = inviteCreated.accept_url || new URL(`/invite/accept?token=${encodeURIComponent(inviteCreated.token)}`, window.location.origin).toString()
                       return (
                         <>
                           <a href={acceptUrl} target="_blank" rel="noreferrer">

@@ -82,8 +82,18 @@ CREATE TABLE IF NOT EXISTS invites (
     role        TEXT NOT NULL CHECK (role IN ('tenant_admin', 'approver', 'viewer')),
     name        TEXT DEFAULT '',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at  TIMESTAMPTZ NOT NULL
+    expires_at  TIMESTAMPTZ NOT NULL,
+    email_status TEXT NOT NULL DEFAULT 'pending',
+    email_sent_at TIMESTAMPTZ NULL,
+    email_last_error TEXT NOT NULL DEFAULT ''
 );
+
+ALTER TABLE invites
+    ADD COLUMN IF NOT EXISTS email_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE invites
+    ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ NULL;
+ALTER TABLE invites
+    ADD COLUMN IF NOT EXISTS email_last_error TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_invites_tenant_expires ON invites(tenant_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_invites_email_expires ON invites(email, expires_at);

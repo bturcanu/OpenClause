@@ -113,6 +113,7 @@ func main() {
 	api := &ConsoleAPI{
 		log:                     log,
 		store:                   store,
+		inviteStore:             store,
 		sessionsStore:           store,
 		analyticsStore:          store,
 		alertsStore:             store,
@@ -125,6 +126,8 @@ func main() {
 		authProvider:            authProvider,
 		authSessionStore:        store,
 		gatewayURL:              config.EnvOr("GATEWAY_URL", defaultGatewayURL),
+		publicBaseURL:           config.EnvOr("PUBLIC_BASE_URL", "http://localhost:3000"),
+		inviteEmailSender:       newInviteEmailSenderFromEnv(log),
 		httpClient:              &http.Client{Timeout: 10 * time.Second},
 		devLogRawTokens:         devLogRawTokens,
 	}
@@ -284,6 +287,7 @@ func main() {
 type ConsoleAPI struct {
 	log                     *slog.Logger
 	store                   *console.Store
+	inviteStore             inviteStore
 	sessionsStore           sessionsStore
 	analyticsStore          analyticsStore
 	alertsStore             alertsStore
@@ -296,6 +300,8 @@ type ConsoleAPI struct {
 	approverAuth            *approvals.ApproverAuthorizer
 	approverAuthSource      string
 	gatewayURL              string
+	publicBaseURL           string
+	inviteEmailSender       InviteEmailSender
 	httpClient              *http.Client
 
 	devLogRawTokens bool
@@ -304,6 +310,14 @@ type ConsoleAPI struct {
 type exportEventsStore interface {
 	ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error
 	ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventListItem, error)
+}
+
+type inviteStore interface {
+	GetTenant(ctx context.Context, id string) (*console.Tenant, error)
+	CreateInvite(ctx context.Context, token, email, tenantID, role, name string, expiresAt time.Time) error
+	UpdateInviteEmailStatus(ctx context.Context, token, status string, sentAt *time.Time, emailError string) error
+	ListInvites(ctx context.Context, tenantID *string, limit, offset int) ([]console.Invite, error)
+	ConsumeInviteAccept(ctx context.Context, token, password, name string) (*console.InviteAcceptResult, error)
 }
 
 type sessionsStore interface {
@@ -871,15 +885,6 @@ func (api *ConsoleAPI) handleCreateInvite(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	if t, err := api.store.GetTenant(r.Context(), in.TenantID); err != nil {
-		api.log.Error("get tenant failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to load tenant")
-		return
-	} else if t == nil {
-		writeError(w, http.StatusNotFound, "tenant not found")
-		return
-	}
-
 	token, err := generateRandomToken()
 	if err != nil {
 		api.log.Error("generate invite token failed", "error", err)
@@ -893,25 +898,85 @@ func (api *ConsoleAPI) handleCreateInvite(w http.ResponseWriter, r *http.Request
 		name = strings.TrimSpace(*in.Name)
 	}
 
-	if err := api.store.CreateInvite(r.Context(), token, email, in.TenantID, in.Role, name, expiresAt); err != nil {
-		api.log.Error("create invite failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to create invite")
+	if t, err := api.inviteStore.GetTenant(r.Context(), in.TenantID); err != nil {
+		api.log.Error("get tenant failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to load tenant")
+		return
+	} else if t == nil {
+		writeError(w, http.StatusNotFound, "tenant not found")
+		return
+	} else {
+		acceptURL := inviteAcceptPageURL(api.publicBaseURL, token)
+
+		if err := api.inviteStore.CreateInvite(r.Context(), token, email, in.TenantID, in.Role, name, expiresAt); err != nil {
+			api.log.Error("create invite failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to create invite")
+			return
+		}
+
+		emailStatus := InviteEmailStatusLogged
+		emailError := ""
+		var sentAt *time.Time
+		if api.inviteEmailSender != nil {
+			sendCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			sendResult, sendErr := api.inviteEmailSender.SendInvite(sendCtx, InviteEmailMessage{
+				To:         email,
+				Name:       name,
+				TenantName: t.Name,
+				Role:       in.Role,
+				AcceptURL:  acceptURL,
+				ExpiresAt:  expiresAt,
+			})
+			cancel()
+
+			emailStatus = sendResult.Status
+			emailError = strings.TrimSpace(sendResult.ErrorMessage)
+			if emailStatus == "" {
+				if sendErr != nil {
+					emailStatus = InviteEmailStatusFailed
+				} else {
+					emailStatus = InviteEmailStatusLogged
+				}
+			}
+			if sendErr != nil {
+				api.log.Error("invite email send failed", "error", sendErr, "email", email, "tenant_id", in.TenantID, "role", in.Role)
+			}
+			if emailStatus == InviteEmailStatusSent {
+				now := time.Now().UTC()
+				sentAt = &now
+			}
+		}
+
+		if err := api.inviteStore.UpdateInviteEmailStatus(r.Context(), token, emailStatus, sentAt, emailError); err != nil {
+			api.log.Error("update invite email status failed", "error", err, "email", email, "tenant_id", in.TenantID, "role", in.Role)
+		}
+
+		if api.devLogRawTokens {
+			// Dev bootstrap: log invite accept guidance without affecting client contract.
+			api.log.Info(
+				"invite created (dev)",
+				"email", email,
+				"tenant_id", in.TenantID,
+				"role", in.Role,
+				"accept_url", acceptURL,
+				"email_status", emailStatus,
+			)
+		} else {
+			api.log.Info("invite created", "email", email, "tenant_id", in.TenantID, "role", in.Role, "email_status", emailStatus)
+		}
+
+		resp := map[string]any{
+			"token":        token,
+			"expires_at":   expiresAt,
+			"accept_url":   acceptURL,
+			"email_status": emailStatus,
+		}
+		if emailError != "" {
+			resp["email_error"] = emailError
+		}
+		writeJSON(w, http.StatusCreated, resp)
 		return
 	}
-
-	if api.devLogRawTokens {
-		// Dev bootstrap: log invite accept guidance without affecting client contract.
-		api.log.Info(
-			"invite created (dev)",
-			"email", email,
-			"tenant_id", in.TenantID,
-			"role", in.Role,
-			"accept_url", inviteAcceptPageURL(token),
-		)
-	} else {
-		api.log.Info("invite created", "email", email, "tenant_id", in.TenantID, "role", in.Role)
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expires_at": expiresAt})
 }
 
 func (api *ConsoleAPI) handleListInvites(w http.ResponseWriter, r *http.Request) {
@@ -935,7 +1000,7 @@ func (api *ConsoleAPI) handleListInvites(w http.ResponseWriter, r *http.Request)
 		tenantID = &claims.Tenant
 	}
 
-	invites, err := api.store.ListInvites(r.Context(), tenantID, limit, offset)
+	invites, err := api.inviteStore.ListInvites(r.Context(), tenantID, limit, offset)
 	if err != nil {
 		api.log.Error("list invites failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list invites")
@@ -960,7 +1025,7 @@ func (api *ConsoleAPI) handleInviteAccept(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	res, err := api.store.ConsumeInviteAccept(r.Context(), in.Token, in.Password, in.Name)
+	res, err := api.inviteStore.ConsumeInviteAccept(r.Context(), in.Token, in.Password, in.Name)
 	if err != nil {
 		api.log.Error("invite accept failed", "error", err)
 		writeError(w, http.StatusBadRequest, "invalid or expired token")
@@ -1014,7 +1079,7 @@ func (api *ConsoleAPI) handleResetRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	if api.devLogRawTokens {
-		api.log.Info("password reset created (dev)", "email", email, "confirm_url", passwordResetPageURL(token))
+		api.log.Info("password reset created (dev)", "email", email, "confirm_url", passwordResetPageURL(api.publicBaseURL, token))
 	} else {
 		api.log.Info("password reset created", "email", email)
 	}
@@ -1147,12 +1212,37 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
-func inviteAcceptPageURL(token string) string {
-	return "/invite/accept?token=" + url.QueryEscape(token)
+func inviteAcceptPageURL(baseURL, token string) string {
+	return buildConsolePageURL(baseURL, "/invite/accept", token)
 }
 
-func passwordResetPageURL(token string) string {
-	return "/reset?token=" + url.QueryEscape(token)
+func passwordResetPageURL(baseURL, token string) string {
+	return buildConsolePageURL(baseURL, "/reset", token)
+}
+
+func buildConsolePageURL(baseURL, routePath, token string) string {
+	base := strings.TrimSpace(baseURL)
+	if base == "" {
+		base = "http://localhost:3000"
+	}
+
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		u = &url.URL{Scheme: "http", Host: "localhost:3000"}
+	}
+
+	route := strings.TrimPrefix(routePath, "/")
+	if route != "" {
+		if !strings.HasSuffix(u.Path, "/") {
+			u.Path = strings.TrimRight(u.Path, "/") + "/"
+		}
+		u.Path = strings.TrimSuffix(u.Path, "/") + "/" + route
+	}
+
+	q := u.Query()
+	q.Set("token", token)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func containsRole(roles []string, role string) bool {

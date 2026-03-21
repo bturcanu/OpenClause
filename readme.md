@@ -285,7 +285,7 @@ The admin console (http://localhost:3000) provides:
 | **Policies** | Tenant rule builder, policy versions, diff/rollback, and policy simulation |
 | **Alerts** | Tenant alert rules (`deny_spike`) and alert events |
 | **Connectors** | Registered connector catalog with supported actions |
-| **Users** | Manage console users, roles, invite tokens, and active console login sessions; invite acceptance and password reset happen on dedicated public routes |
+| **Users** | Manage console users, roles, invite delivery status, and active console login sessions; invite acceptance and password reset happen on dedicated public routes |
 
 ### Console Auth
 
@@ -298,7 +298,7 @@ The admin console (http://localhost:3000) provides:
 
 The console UI includes token-based pages for invite acceptance and password reset (`/invite/accept` and `/reset`).
 
-Admin-side invites are created from the Users page via `POST /admin/invites`. The same Users page shows active console login sessions and lets tenant admins or platform admins revoke them immediately. Password resets are self-service via `POST /auth/reset/request`, and both flows are completed by `POST /auth/invite/accept` / `POST /auth/reset/confirm`. In local development, console-api can log raw invite/reset URLs unless `CONSOLE_DEV_LOG_RAW_TOKENS=false`.
+Admin-side invites are created from the Users page via `POST /admin/invites`. Create-invite returns the raw invite token once, an absolute `accept_url`, and `email_status` / `email_error` fields so operators can tell whether SMTP delivery succeeded, failed, or was only logged for dev. `GET /admin/invites` exposes pending invites plus delivery status, but never the raw token after creation because invite tokens are hashed at rest. The same Users page shows active console login sessions and lets tenant admins or platform admins revoke them immediately. Password resets are self-service via `POST /auth/reset/request`, and both flows are completed by `POST /auth/invite/accept` / `POST /auth/reset/confirm`. In local development, console-api can log raw invite/reset URLs unless `CONSOLE_DEV_LOG_RAW_TOKENS=false`.
 
 ---
 
@@ -342,8 +342,8 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `POST` | `/admin/users` | `platform_admin` or `tenant_admin` | Create a user |
 | `POST` | `/admin/users/{id}/roles` | `platform_admin` or `tenant_admin` | Assign a role to a user |
 | `DELETE` | `/admin/users/{id}/roles/{role_id}` | `platform_admin` or `tenant_admin` | Remove a role assignment from a user |
-| `POST` | `/admin/invites` | `platform_admin` or `tenant_admin` | Create an invite token (email + tenant + role) |
-| `GET` | `/admin/invites` | `platform_admin` or `tenant_admin` | List pending invites |
+| `POST` | `/admin/invites` | `platform_admin` or `tenant_admin` | Create an invite token, return an absolute `accept_url`, and attempt email delivery (`email_status`, `email_error`) |
+| `GET` | `/admin/invites` | `platform_admin` or `tenant_admin` | List pending invites with delivery status (never returns the raw invite token) |
 | `GET` | `/admin/auth-sessions` | `platform_admin` or `tenant_admin` | List active console login sessions (optionally filter by `user_id`) |
 | `POST` | `/admin/auth-sessions/{session_id}/revoke` | `platform_admin` or `tenant_admin` | Revoke an active console login session |
 | `GET` | `/admin/analytics/overview` | JWT (scoped by role) | Decision counts, pending approvals, active tenants/agents |
@@ -985,12 +985,18 @@ Defaults below describe runtime behavior when a variable is unset. The checked-i
 | `CONSOLE_API_ADDR` | `:8090` | Console API listen address |
 | `GATEWAY_URL` | `http://localhost:8080` | Gateway base URL used by console-api for connector discovery |
 | `PUBLIC_APPROVALS_URL` | `APPROVALS_URL` | Public base URL embedded in `approval_url` responses |
+| `PUBLIC_BASE_URL` | `http://localhost:3000` | Public console base URL used to build absolute invite/password-reset links |
 | `CONSOLE_JWT_SECRET` | — | **Required at runtime.** JWT signing secret for console; local dev scripts generate one if missing |
 | `CONSOLE_JWT_EXPIRY_HOURS` | `24` | JWT token expiry in hours |
 | `CONSOLE_CORS_ORIGINS` | — | Comma-separated allowed origins for console-api CORS responses |
 | `CONSOLE_AUTH_PROVIDER` | `email_password` | Console auth provider implementation (`email_password`, `password`, `local`) |
 | `CONSOLE_DEV_LOG_RAW_TOKENS` | `true` | In dev, log raw invite/reset URLs unless explicitly disabled |
 | `INVITE_RESET_TOKEN_HMAC_SECRET` | `CONSOLE_JWT_SECRET` | Keyed-HMAC secret for storing invite/reset tokens hashed at rest |
+| `SMTP_HOST` | — | SMTP host for real invite email delivery; if unset, console-api logs invite links in dev/test instead |
+| `SMTP_PORT` | `587` | SMTP port for invite delivery |
+| `SMTP_USER` | — | Optional SMTP username |
+| `SMTP_PASS` | — | Optional SMTP password |
+| `SMTP_FROM` | — | Required sender address when SMTP delivery is enabled |
 | `APPROVALS_ADDR` | `:8081` | Approvals service listen address |
 | `APPROVALS_URL` | `http://localhost:8081` | Approvals service URL (for gateway) |
 | `CONNECTOR_SLACK_URL` | `http://localhost:8082` | Slack connector URL |
