@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
+import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, buildQuery, decisionTone, downloadBlob, formatRequester, shortID } from '../ui'
 
-interface Event {
+type Event = {
   event_id: string
   tool: string
   action: string
@@ -11,21 +12,45 @@ interface Event {
   tenant_id: string
   session_id: string
   agent_id: string
+  user_id?: string
+  user_name?: string
+  user_email?: string
+  trace_id?: string
   received_at: string
+}
+
+type EventFilters = {
+  tenant_id: string
+  user_id: string
+  agent_id: string
+  trace_id: string
+  tool: string
+  action: string
+  decision: string
+  session_id: string
+  risk_min: string
+  risk_max: string
+}
+
+const defaultFilters: EventFilters = {
+  tenant_id: '',
+  user_id: '',
+  agent_id: '',
+  trace_id: '',
+  tool: '',
+  action: '',
+  decision: '',
+  session_id: '',
+  risk_min: '',
+  risk_max: '',
 }
 
 export default function Events() {
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [filters, setFilters] = useState<EventFilters>(defaultFilters)
   const fetchSeq = useRef(0)
-  const [filters, setFilters] = useState({
-    tenant_id: '',
-    tool: '',
-    action: '',
-    decision: '',
-    session_id: '',
-  })
   const [page, setPage] = useState(0)
   const limit = 25
 
@@ -50,15 +75,12 @@ export default function Events() {
     setLoading(true)
     setError('')
     try {
-      const params = new URLSearchParams()
-      params.set('limit', String(limit))
-      params.set('offset', String(page * limit))
-      if (filters.tenant_id) params.set('tenant_id', filters.tenant_id)
-      if (filters.tool) params.set('tool', filters.tool)
-      if (filters.action) params.set('action', filters.action)
-      if (filters.decision) params.set('decision', filters.decision)
-      if (filters.session_id) params.set('session_id', filters.session_id)
-      const data = await api.get(`/admin/events?${params}`)
+      const query = buildQuery({
+        ...filters,
+        limit,
+        offset: page * limit,
+      })
+      const data = await api.get(`/admin/events${query}`)
       if (seq !== fetchSeq.current) return
       setEvents(Array.isArray(data) ? data : data?.events || [])
     } catch (err: any) {
@@ -68,29 +90,23 @@ export default function Events() {
     }
   }, [filters, page])
 
-  useEffect(() => { fetchEvents() }, [fetchEvents])
+  useEffect(() => {
+    void fetchEvents()
+  }, [fetchEvents])
 
-  function updateFilter(key: string, value: string) {
-    setFilters(f => ({ ...f, [key]: value }))
+  function updateFilter(key: keyof EventFilters, value: string) {
+    setFilters(current => ({ ...current, [key]: value }))
     setPage(0)
   }
 
   async function exportCSV() {
     try {
       if (isPlatformAdmin && !selectedTenant) {
-        setError('Select a tenant to export')
+        setError('Select a tenant before exporting CSV')
         return
       }
-      const exportUrl = selectedTenant
-        ? `/admin/events/export/csv?tenant_id=${encodeURIComponent(selectedTenant)}`
-        : '/admin/events/export/csv'
-      const blob = await api.getBlob(exportUrl)
-      const objectUrl = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = objectUrl
-      a.download = 'events.csv'
-      a.click()
-      URL.revokeObjectURL(objectUrl)
+      const blob = await api.getBlob(selectedTenant ? `/admin/events/export/csv${buildQuery({ tenant_id: selectedTenant })}` : '/admin/events/export/csv')
+      downloadBlob(blob, 'events.csv')
     } catch (err: any) {
       setError(err.message)
     }
@@ -99,20 +115,11 @@ export default function Events() {
   async function exportBundle() {
     try {
       if (isPlatformAdmin && !selectedTenant) {
-        setError('Select a tenant to export')
+        setError('Select a tenant before exporting the evidence bundle')
         return
       }
-      const exportUrl = selectedTenant
-        ? `/admin/reports/export/bundle?tenant_id=${encodeURIComponent(selectedTenant)}`
-        : '/admin/reports/export/bundle'
-      const blob = await api.getBlob(exportUrl)
-      const objectUrl = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = objectUrl
-      // `GET /admin/reports/export/bundle` returns JSON (not a zip archive).
-      a.download = 'audit-bundle.json'
-      a.click()
-      URL.revokeObjectURL(objectUrl)
+      const blob = await api.getBlob(selectedTenant ? `/admin/reports/export/bundle${buildQuery({ tenant_id: selectedTenant })}` : '/admin/reports/export/bundle')
+      downloadBlob(blob, 'audit-bundle.json')
     } catch (err: any) {
       setError(err.message)
     }
@@ -120,56 +127,81 @@ export default function Events() {
 
   return (
     <div>
-      <div className="flex-between">
-        <div className="page-header">
-          <h2>Audit Trail</h2>
-          <p>All governance events across tenants</p>
-        </div>
-        <div className="btn-group">
-          <button className="btn btn-outline" onClick={exportCSV}>Export CSV</button>
-          <button className="btn btn-outline" onClick={exportBundle}>Export Bundle</button>
+      <PageHeaderBlock
+        title="Audit Trail"
+        description="Inspect every governed tool event with clear user, agent, session, and trace attribution."
+        actions={
+          <div className="btn-group">
+            <button className="btn btn-outline" type="button" onClick={exportCSV}>
+              Export CSV
+            </button>
+            <button className="btn btn-outline" type="button" onClick={exportBundle}>
+              Export bundle
+            </button>
+          </div>
+        }
+      />
+
+      {error ? <InlineErrorState message={error} onRetry={() => void fetchEvents()} /> : null}
+
+      <div className="filters-panel">
+        <div className="filters-bar filters-bar-dense">
+          <div className="form-group">
+            <label>Tenant</label>
+            <input value={filters.tenant_id} onChange={e => updateFilter('tenant_id', e.target.value)} placeholder="tenant_id" />
+          </div>
+          <div className="form-group">
+            <label>User ID</label>
+            <input value={filters.user_id} onChange={e => updateFilter('user_id', e.target.value)} placeholder="user_id" />
+          </div>
+          <div className="form-group">
+            <label>Agent ID</label>
+            <input value={filters.agent_id} onChange={e => updateFilter('agent_id', e.target.value)} placeholder="agent_id" />
+          </div>
+          <div className="form-group">
+            <label>Trace ID</label>
+            <input value={filters.trace_id} onChange={e => updateFilter('trace_id', e.target.value)} placeholder="trace_id" />
+          </div>
+          <div className="form-group">
+            <label>Tool</label>
+            <input value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
+          </div>
+          <div className="form-group">
+            <label>Action</label>
+            <input value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
+          </div>
+          <div className="form-group">
+            <label>Decision</label>
+            <select value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
+              <option value="">Any</option>
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
+              <option value="approve">Approve</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Session ID</label>
+            <input value={filters.session_id} onChange={e => updateFilter('session_id', e.target.value)} placeholder="session_id" />
+          </div>
+          <div className="form-group form-group-small">
+            <label>Risk min</label>
+            <input value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
+          </div>
+          <div className="form-group form-group-small">
+            <label>Risk max</label>
+            <input value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+          </div>
         </div>
       </div>
 
-      {error && <div className="error-msg">{error}</div>}
-
-      <div className="filters-bar">
-        <div className="form-group">
-          <label>Tenant ID</label>
-          <input placeholder="Filter…" value={filters.tenant_id} onChange={e => updateFilter('tenant_id', e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label>Tool</label>
-          <input placeholder="Filter…" value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label>Action</label>
-          <input placeholder="Filter…" value={filters.action} onChange={e => updateFilter('action', e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label>Decision</label>
-          <select value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
-            <option value="">All</option>
-            <option value="allow">Allow</option>
-            <option value="deny">Deny</option>
-            <option value="approve">Approve</option>
-          </select>
-        </div>
-        <div className="form-group">
-          <label>Session ID</label>
-          <input placeholder="Filter…" value={filters.session_id} onChange={e => updateFilter('session_id', e.target.value)} />
-        </div>
-      </div>
-
-      <div className="table-container">
+      <div className="table-container table-sticky">
         <table>
           <thead>
             <tr>
-              <th>ID</th>
+              <th>Event</th>
+              <th>Requested by</th>
               <th>Tool</th>
-              <th>Action</th>
               <th>Decision</th>
-              <th>Risk</th>
               <th>Tenant</th>
               <th>Session</th>
               <th>Time</th>
@@ -177,24 +209,44 @@ export default function Events() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} className="loading">Loading…</td></tr>
+              <TableSkeleton columns={7} rows={6} />
             ) : events.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 32, color: '#94a3b8' }}>No events found</td></tr>
+              <tr>
+                <td colSpan={7}>
+                  <EmptyState icon="▤" title="No audit events match these filters" description="Adjust the tenant, user, agent, or session filters to widen the search." />
+                </td>
+              </tr>
             ) : (
-              events.map(ev => (
-                <tr key={ev.event_id}>
-                  <td><Link to={`/events/${ev.event_id}`}>{ev.event_id.slice(0, 8)}…</Link></td>
-                  <td>{ev.tool}</td>
-                  <td>{ev.action}</td>
-                  <td><span className={`badge badge-${ev.decision}`}>{ev.decision}</span></td>
-                  <td>{ev.risk_score}</td>
-                  <td>{ev.tenant_id?.slice(0, 8) || '—'}</td>
+              events.map(event => (
+                <tr key={event.event_id}>
                   <td>
-                    {ev.session_id ? (
-                      <Link to={`/sessions/${ev.session_id}`}>{ev.session_id.slice(0, 8)}…</Link>
-                    ) : '—'}
+                    <Link to={`/events/${event.event_id}`} className="table-primary">
+                      {shortID(event.event_id)}
+                    </Link>
+                    <div className="table-subtext">Trace {event.trace_id ? shortID(event.trace_id) : '(none)'}</div>
                   </td>
-                  <td>{formatDate(ev.received_at)}</td>
+                  <td>
+                    <div className="table-primary">{formatRequester(event.user_id, event.user_name, event.user_email, event.agent_id)}</div>
+                    <div className="table-subtext">Agent {event.agent_id || '(none)'}</div>
+                  </td>
+                  <td>
+                    <div className="table-primary">{event.tool}.{event.action}</div>
+                    <div className="table-subtext">Risk {event.risk_score}</div>
+                  </td>
+                  <td>
+                    <span className={`badge badge-${decisionTone(event.decision)}`}>{event.decision}</span>
+                  </td>
+                  <td>
+                    <code>{shortID(event.tenant_id, 12)}</code>
+                  </td>
+                  <td>
+                    {event.session_id ? (
+                      <Link to={`/sessions/${encodeURIComponent(event.session_id)}${buildQuery({ tenant_id: event.tenant_id })}`}>{shortID(event.session_id)}</Link>
+                    ) : (
+                      '(none)'
+                    )}
+                  </td>
+                  <td>{formatDate(event.received_at)}</td>
                 </tr>
               ))
             )}
@@ -203,12 +255,12 @@ export default function Events() {
       </div>
 
       <div className="pagination">
-        <button className="btn btn-outline btn-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
-          ← Previous
+        <button className="btn btn-outline btn-sm" disabled={page === 0 || loading} onClick={() => setPage(current => current - 1)}>
+          Previous
         </button>
         <span>Page {page + 1}</span>
-        <button className="btn btn-outline btn-sm" disabled={events.length < limit} onClick={() => setPage(p => p + 1)}>
-          Next →
+        <button className="btn btn-outline btn-sm" disabled={loading || events.length < limit} onClick={() => setPage(current => current + 1)}>
+          Next
         </button>
       </div>
     </div>

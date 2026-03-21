@@ -191,6 +191,10 @@ curl -s -X POST http://localhost:8080/v1/toolcalls \
   -d "{
     \"tenant_id\": \"$TENANT_ID\",
     \"agent_id\": \"$AGENT_ID\",
+    \"user_id\": \"user-123\",
+    \"session_id\": \"run-demo-001\",
+    \"trace_id\": \"trace-demo-001\",
+    \"labels\": {\"user_name\": \"Avery Analyst\", \"user_email\": \"avery@example.com\"},
     \"tool\": \"slack\",
     \"action\": \"msg.post\",
     \"params\": {\"channel\": \"#general\", \"text\": \"Hello from agent\"},
@@ -222,6 +226,10 @@ curl -s -X POST http://localhost:8080/v1/toolcalls \
   -d "{
     \"tenant_id\": \"$TENANT_ID\",
     \"agent_id\": \"$AGENT_ID\",
+    \"user_id\": \"user-123\",
+    \"session_id\": \"run-demo-001\",
+    \"trace_id\": \"trace-demo-001\",
+    \"labels\": {\"user_name\": \"Avery Analyst\", \"user_email\": \"avery@example.com\"},
     \"tool\": \"github\",
     \"action\": \"issue.create\",
     \"params\": {\"title\": \"Test issue\"},
@@ -269,11 +277,11 @@ The admin console (http://localhost:3000) provides:
 | Page | Description |
 |---|---|
 | **Overview** | Decision analytics — allow/deny/approve counts, decision timeseries, pending approvals |
-| **Approvals** | Pending approval queue with approve/deny actions and detail view |
-| **Audit Trail** | Searchable event list with filters (tenant, tool, action, decision) + event detail |
+| **Approvals** | Pending approval queue with user/agent/session attribution, approve/deny actions, and execution handoff help |
+| **Audit Trail** | Searchable event list with tenant, user, agent, trace, session, decision, and risk filters plus event detail |
 | **Tenants** | Create/list/disable tenants, view config and usage |
 | **Tenant Detail** | Manage agents, API keys, tenant-scoped approvers, analytics, alerts, and notification routing |
-| **Sessions** | Agent interaction session timelines with event counts and per-session history |
+| **Sessions** | Operator-grade run explorer derived from `tool_events.session_id`, with approval/execution chain detail, explain summaries, and CSV/JSON export |
 | **Policies** | Tenant rule builder, policy versions, diff/rollback, and policy simulation |
 | **Alerts** | Tenant alert rules (`deny_spike`) and alert events |
 | **Connectors** | Registered connector catalog with supported actions |
@@ -356,19 +364,22 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/tenants/{tenant_id}/approvers` | `tenant_admin` or `platform_admin` | List tenant-scoped approvers |
 | `POST` | `/admin/tenants/{tenant_id}/approvers` | `tenant_admin` or `platform_admin` | Upsert a tenant-scoped approver |
 | `DELETE` | `/admin/tenants/{tenant_id}/approvers/{user_id}` | `tenant_admin` or `platform_admin` | Remove a tenant-scoped approver |
-| `GET` | `/admin/approvals/pending` | JWT | List pending approvals |
+| `GET` | `/admin/approvals/pending` | JWT | List pending approvals with user/session/trace attribution from the originating event |
 | `POST` | `/admin/approvals/{id}/approve` | `approver` or `platform_admin` | Approve request (transactional with grant) |
 | `POST` | `/admin/approvals/{id}/deny` | `approver` or `platform_admin` | Deny request |
-| `GET` | `/admin/events` | JWT | List events (filterable) |
+| `GET` | `/admin/events` | JWT | List events (filterable by tenant, user, agent, trace, tool, action, decision, session, and risk range) |
 | `GET` | `/admin/events/{event_id}` | JWT | Event detail with policy result + hash chain |
 | `GET` | `/admin/events/export/csv` | JWT | Export events as CSV |
 | `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON |
 | `GET` | `/admin/reports/activity` | JWT | Legacy alias for `/admin/events` |
 | `GET` | `/admin/reports/export/csv` | JWT | Legacy alias for `/admin/events/export/csv` |
-| `GET` | `/admin/sessions` | JWT | List agent interaction sessions with event counts |
+| `GET` | `/admin/sessions` | JWT | List observed runs derived from `tool_events.session_id` with user/agent attribution, decision counts, and last action summary |
+| `GET` | `/admin/sessions/{session_id}` | JWT | Get session summary (platform admins should include `tenant_id` when a session id could exist in multiple tenants) |
 | `GET` | `/admin/connectors` | JWT | List the full connector registry for the console (works before any toolcalls) |
 | `GET` | `/v1/connectors` | JWT | Legacy console-api alias for `/admin/connectors` |
-| `GET` | `/admin/sessions/{session_id}/timeline` | JWT | Agent session event timeline |
+| `GET` | `/admin/sessions/{session_id}/timeline` | JWT | Session timeline grouped by request plus related approval/execution context |
+| `GET` | `/admin/sessions/{session_id}/export/csv` | JWT | Export a session timeline as CSV |
+| `GET` | `/admin/sessions/{session_id}/export/json` | JWT | Export a session summary + timeline as JSON |
 | `GET` | `/admin/policy/versions` | JWT | List policy versions |
 | `POST` | `/admin/policy/versions` | `tenant_admin` or `platform_admin` | Create policy version |
 | `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
@@ -603,6 +614,14 @@ Important behavior:
 - If grant is missing, `/execute` returns `409 awaiting approval` (fail-closed).
 - If replay/idempotency storage checks fail, gateway returns `500` (no best-effort fallback).
 
+### Sessions And Attribution
+
+- `agent_id` is the tenant-scoped service identity for the caller.
+- `session_id` groups related tool calls into an operator-facing run in the Sessions UI. If you omit it, the request still works, but the console will show `(none)` and cannot assemble a run timeline.
+- `user_id` identifies the human end user behind the agent request when you have one.
+- `labels.user_name` and `labels.user_email` are optional display helpers used by the Console on Sessions, Approvals, and Audit pages.
+- `trace_id` gives operators a stable correlation key across logs, traces, approvals, and exports.
+
 ---
 
 ## Evidence & Audit Trail
@@ -611,6 +630,7 @@ Every tool call is recorded in the `tool_events` table with:
 
 - Full canonical request payload
 - Policy decision and reasoning
+- Attribution fields such as `session_id`, `user_id`, `trace_id`, and optional display labels
 - Execution result (if allowed)
 - SHA-256 **hash chain** linking each event to the previous one per tenant
 
@@ -643,7 +663,7 @@ evidence.VerifyChain(events) // returns error if chain is broken
 | `api_keys` | Hashed API keys with prefix-based lookup |
 | `users` | Console user accounts (bcrypt passwords) |
 | `user_roles` | RBAC role assignments (platform_admin, tenant_admin, approver, viewer) |
-| `sessions` | Agent conversation sessions |
+| `sessions` | Reserved table for explicit session metadata; current operator Sessions UI is derived from `tool_events.session_id` |
 | `tool_events` | One row per incoming request (payload, decision, hash) |
 | `tool_results` | Execution outcomes (status, output, duration) |
 | `tool_executions` | Links original approved event to append-only execution event |

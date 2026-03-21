@@ -131,6 +131,10 @@ curl -s http://localhost:8080/v1/toolcalls \
   -d "{
     \"tenant_id\": \"$TENANT_ID\",
     \"agent_id\": \"agent-1\",
+    \"user_id\": \"user-123\",
+    \"session_id\": \"run-local-001\",
+    \"trace_id\": \"trace-local-001\",
+    \"labels\": {\"user_name\": \"Avery Analyst\", \"user_email\": \"avery@example.com\"},
     \"tool\": \"slack\",
     \"action\": \"channel.list\",
     \"risk_score\": 1,
@@ -149,6 +153,10 @@ curl -s http://localhost:8080/v1/toolcalls \
   -d "{
     \"tenant_id\": \"$TENANT_ID\",
     \"agent_id\": \"agent-1\",
+    \"user_id\": \"user-123\",
+    \"session_id\": \"run-local-001\",
+    \"trace_id\": \"trace-local-001\",
+    \"labels\": {\"user_name\": \"Avery Analyst\", \"user_email\": \"avery@example.com\"},
     \"tool\": \"postgres\",
     \"action\": \"query.readonly\",
     \"params\": { \"sql\": \"SELECT 1\", \"params\": [] },
@@ -168,6 +176,10 @@ curl -s http://localhost:8080/v1/toolcalls \
   -d "{
     \"tenant_id\": \"$TENANT_ID\",
     \"agent_id\": \"agent-1\",
+    \"user_id\": \"user-123\",
+    \"session_id\": \"run-local-001\",
+    \"trace_id\": \"trace-local-001\",
+    \"labels\": {\"user_name\": \"Avery Analyst\", \"user_email\": \"avery@example.com\"},
     \"tool\": \"jira\",
     \"action\": \"issue.create\",
     \"params\": { \"project\": \"OPS\", \"summary\": \"Test issue from local testing\" },
@@ -341,8 +353,24 @@ curl -s "http://localhost:8090/admin/events?tenant_id=$TENANT_ID" \
 curl -s "http://localhost:8090/admin/events/$EVENT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
-# List agent interaction sessions
+# List observed sessions (derived from tool_events.session_id)
 curl -s "http://localhost:8090/admin/sessions?tenant_id=$TENANT_ID" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Inspect one session in detail
+SESSION_ID="run-local-001"
+curl -s "http://localhost:8090/admin/sessions/$SESSION_ID?tenant_id=$TENANT_ID" \
+  -H "Authorization: Bearer $TOKEN"
+
+# View the session timeline with approval/execution context
+curl -s "http://localhost:8090/admin/sessions/$SESSION_ID/timeline?tenant_id=$TENANT_ID" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Export the session as CSV or JSON
+curl -s "http://localhost:8090/admin/sessions/$SESSION_ID/export/csv?tenant_id=$TENANT_ID" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -s "http://localhost:8090/admin/sessions/$SESSION_ID/export/json?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
 # List active console login sessions

@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
+import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, decisionTone, formatRequester, buildQuery, noneText, shortID } from '../ui'
 
-interface Approval {
+type Approval = {
   id: string
   event_id: string
   tool: string
@@ -10,28 +12,28 @@ interface Approval {
   agent_id: string
   tenant_id: string
   status: string
-  payload: any
+  reason?: string
+  deny_reason?: string
+  user_id?: string
+  user_name?: string
+  user_email?: string
+  session_id?: string
+  trace_id?: string
   created_at: string
+  expires_at: string
 }
 
 export default function Approvals() {
+  const [searchParams] = useSearchParams()
+  const approvalID = searchParams.get('approval_id') || ''
   const [approvals, setApprovals] = useState<Approval[]>([])
   const [selected, setSelected] = useState<Approval | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const fetchSeq = useRef(0)
-  const [executeApiKey, setExecuteApiKey] = useState('')
   const [copyStatus, setCopyStatus] = useState('')
-
-  const executeCommand = (() => {
-    if (!selected?.event_id) return ''
-    const apiKey = executeApiKey.trim()
-    const gatewayBase = 'http://localhost:8080'
-    const url = `${gatewayBase}/v1/toolcalls/${encodeURIComponent(selected.event_id)}/execute`
-    const header = apiKey ? `X-API-Key: ${apiKey}` : 'X-API-Key: <API_KEY>'
-    return `curl -s -X POST "${url}" -H "Content-Type: application/json" -H "${header}" -d '{}'`
-  })()
+  const [executeApiKey, setExecuteApiKey] = useState('')
+  const fetchSeq = useRef(0)
 
   const fetchApprovals = useCallback(async (silent = false) => {
     const seq = ++fetchSeq.current
@@ -42,15 +44,18 @@ export default function Approvals() {
       }
       const data = await api.get('/admin/approvals/pending')
       if (seq !== fetchSeq.current) return
-      setApprovals(Array.isArray(data) ? data : data?.approvals || [])
+      const nextApprovals = Array.isArray(data) ? data : data?.approvals || []
+      setApprovals(nextApprovals)
+      if (approvalID) {
+        const match = nextApprovals.find((approval: Approval) => approval.id === approvalID)
+        if (match) setSelected(match)
+      }
     } catch (err: any) {
       if (!silent) setError(err.message)
     } finally {
-      if (!silent) {
-        if (seq === fetchSeq.current) setLoading(false)
-      }
+      if (!silent && seq === fetchSeq.current) setLoading(false)
     }
-  }, [])
+  }, [approvalID])
 
   useEffect(() => {
     void fetchApprovals(false)
@@ -60,29 +65,26 @@ export default function Approvals() {
     return () => window.clearInterval(timer)
   }, [fetchApprovals])
 
-  // Prevent stale execution helper state when switching between approvals.
   useEffect(() => {
     setExecuteApiKey('')
     setCopyStatus('')
   }, [selected?.id])
 
-  // If the selected pending approval disappears from the polled list (resolved/expired),
-  // close the modal to avoid a stale UI.
   useEffect(() => {
     if (!selected) return
     if (selected.status === 'approved') return
-    const stillPending = approvals.some(a => a.id === selected.id)
+    const stillPending = approvals.some(approval => approval.id === selected.id)
     if (!stillPending) setSelected(null)
-  }, [approvals, selected?.id, selected?.status])
+  }, [approvals, selected])
 
   async function handleAction(id: string, action: 'approve' | 'deny') {
     setActionLoading(id)
     try {
       await api.post(`/admin/approvals/${id}/${action}`)
       await fetchApprovals(true)
-      setSelected(prev => {
-        if (!prev || prev.id !== id) return prev
-        if (action === 'approve') return { ...prev, status: 'approved' }
+      setSelected(current => {
+        if (!current || current.id !== id) return current
+        if (action === 'approve') return { ...current, status: 'approved' }
         return null
       })
     } catch (err: any) {
@@ -92,71 +94,86 @@ export default function Approvals() {
     }
   }
 
+  const executeCommand = (() => {
+    if (!selected?.event_id) return ''
+    const apiKey = executeApiKey.trim()
+    const header = apiKey ? `X-API-Key: ${apiKey}` : 'X-API-Key: <API_KEY>'
+    return `curl -s -X POST "http://localhost:8080/v1/toolcalls/${encodeURIComponent(selected.event_id)}/execute" -H "Content-Type: application/json" -H "${header}" -d '{}'`
+  })()
+
   return (
     <div>
-      <div className="page-header">
-        <h2>Approvals Queue</h2>
-        <p>Review and action pending human-in-the-loop requests</p>
-      </div>
+      <PageHeaderBlock
+        title="Approvals"
+        description="Review high-risk requests, understand who triggered them, and send operators straight to the underlying evidence."
+        actions={
+          <button className="btn btn-primary" type="button" disabled={loading} onClick={() => void fetchApprovals(false)}>
+            Refresh queue
+          </button>
+        }
+      />
 
-      <div className="btn-group mb-16">
-        <button className="btn btn-outline" disabled={loading} onClick={() => void fetchApprovals(false)}>
-          Refresh
-        </button>
-      </div>
+      {error ? <InlineErrorState message={error} onRetry={() => void fetchApprovals(false)} /> : null}
 
-      {error && <div className="error-msg">{error}</div>}
-
-      <div className="table-container">
+      <div className="table-container table-sticky">
         <table>
           <thead>
             <tr>
-              <th>ID</th>
+              <th>Approval</th>
+              <th>Requested by</th>
               <th>Tool</th>
-              <th>Action</th>
-              <th>Risk Score</th>
-              <th>Agent</th>
+              <th>Tenant</th>
               <th>Created</th>
               <th>Status</th>
-              <th>Actions</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} className="loading">Loading…</td></tr>
+              <TableSkeleton columns={7} rows={5} />
             ) : approvals.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 32, color: '#94a3b8' }}>No pending approvals</td></tr>
+              <tr>
+                <td colSpan={7}>
+                  <EmptyState
+                    icon="✓"
+                    title="No approvals are waiting right now"
+                    description="New high-risk or destructive requests will appear here as soon as policy routes them for review."
+                  />
+                </td>
+              </tr>
             ) : (
-              approvals.map(a => (
-                <tr key={a.id}>
+              approvals.map(approval => (
+                <tr key={approval.id}>
                   <td>
-                    <button
-                      onClick={() => setSelected(a)}
-                      style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
-                    >
-                      {a.id.slice(0, 8)}…
+                    <button className="link-button" onClick={() => setSelected(approval)} type="button">
+                      {shortID(approval.id)}
                     </button>
+                    <div className="table-subtext">Risk {approval.risk_score}</div>
                   </td>
-                  <td>{a.tool}</td>
-                  <td>{a.action}</td>
-                  <td>{a.risk_score}</td>
-                  <td>{a.agent_id?.slice(0, 8) || '—'}</td>
-                  <td>{formatDate(a.created_at)}</td>
-                  <td><span className="badge badge-pending">{a.status || 'pending'}</span></td>
+                  <td>
+                    <div className="table-primary">{formatRequester(approval.user_id, approval.user_name, approval.user_email, approval.agent_id)}</div>
+                    <div className="table-subtext">
+                      Session {approval.session_id ? shortID(approval.session_id) : '(none)'}
+                      {' · '}Trace {approval.trace_id ? shortID(approval.trace_id) : '(none)'}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="table-primary">{approval.tool}.{approval.action}</div>
+                    <div className="table-subtext">{approval.reason || 'Waiting for human review'}</div>
+                  </td>
+                  <td>
+                    <code>{shortID(approval.tenant_id, 12)}</code>
+                  </td>
+                  <td>{formatDate(approval.created_at)}</td>
+                  <td>
+                    <span className={`badge badge-${decisionTone(approval.status)}`}>{approval.status || 'pending'}</span>
+                  </td>
                   <td>
                     <div className="btn-group">
-                      <button
-                        className="btn btn-success btn-sm"
-                        disabled={actionLoading === a.id}
-                        onClick={() => handleAction(a.id, 'approve')}
-                      >
+                      <button className="btn btn-success btn-sm" disabled={actionLoading === approval.id} onClick={() => handleAction(approval.id, 'approve')}>
                         Approve
                       </button>
-                      <button
-                        className="btn btn-danger btn-sm"
-                        disabled={actionLoading === a.id}
-                        onClick={() => handleAction(a.id, 'deny')}
-                      >
+                      <button className="btn btn-danger btn-sm" disabled={actionLoading === approval.id} onClick={() => handleAction(approval.id, 'deny')}>
                         Deny
                       </button>
                     </div>
@@ -168,137 +185,113 @@ export default function Approvals() {
         </table>
       </div>
 
-      {selected && (
+      {selected ? (
         <div className="modal-backdrop" onClick={() => setSelected(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="flex-between mb-16">
-              <h3>Approval Detail</h3>
-              <button className="btn btn-outline btn-sm" onClick={() => setSelected(null)}>Close</button>
+              <div>
+                <h3>Approval detail</h3>
+                <p className="table-subtext">{selected.tool}.{selected.action}</p>
+              </div>
+              <button className="btn btn-outline btn-sm" type="button" onClick={() => setSelected(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="detail-row">
+              <div className="detail-label">Requested by</div>
+              <div className="detail-value">{formatRequester(selected.user_id, selected.user_name, selected.user_email, selected.agent_id)}</div>
             </div>
             <div className="detail-row">
-              <div className="detail-label">ID</div>
-              <div className="detail-value">{selected.id}</div>
+              <div className="detail-label">Approval reason</div>
+              <div className="detail-value">{selected.reason || 'Not recorded'}</div>
             </div>
             <div className="detail-row">
-              <div className="detail-label">Tool</div>
-              <div className="detail-value">{selected.tool}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Action</div>
-              <div className="detail-value">{selected.action}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Risk Score</div>
-              <div className="detail-value">{selected.risk_score}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Agent</div>
-              <div className="detail-value">{selected.agent_id || '—'}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Tenant</div>
-              <div className="detail-value">{selected.tenant_id}</div>
+              <div className="detail-label">Status</div>
+              <div className="detail-value">
+                <span className={`badge badge-${decisionTone(selected.status)}`}>{selected.status}</span>
+              </div>
             </div>
             <div className="detail-row">
               <div className="detail-label">Event</div>
-              <div className="detail-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                {selected.event_id}
+              <div className="detail-value mono">
+                <Link to={`/events/${selected.event_id}`}>{selected.event_id}</Link>
               </div>
+            </div>
+            <div className="detail-row">
+              <div className="detail-label">Session</div>
+              <div className="detail-value">
+                {selected.session_id ? (
+                  <Link to={`/sessions/${encodeURIComponent(selected.session_id)}${buildQuery({ tenant_id: selected.tenant_id })}`}>
+                    {selected.session_id}
+                  </Link>
+                ) : (
+                  '(none)'
+                )}
+              </div>
+            </div>
+            <div className="detail-row">
+              <div className="detail-label">Trace</div>
+              <div className="detail-value">{noneText(selected.trace_id)}</div>
             </div>
             <div className="detail-row">
               <div className="detail-label">Created</div>
               <div className="detail-value">{formatDate(selected.created_at)}</div>
             </div>
-            {selected.payload && (
-              <div className="detail-row">
-                <div className="detail-label">Payload</div>
-                <div className="detail-value">
-                  <pre>{JSON.stringify(selected.payload, null, 2)}</pre>
-                </div>
-              </div>
-            )}
+            <div className="detail-row">
+              <div className="detail-label">Expires</div>
+              <div className="detail-value">{formatDate(selected.expires_at)}</div>
+            </div>
+
             <div className="btn-group mt-16">
-              <button
-                className="btn btn-success"
-                disabled={actionLoading === selected.id}
-                onClick={() => handleAction(selected.id, 'approve')}
-              >
+              <button className="btn btn-success" disabled={actionLoading === selected.id} onClick={() => handleAction(selected.id, 'approve')}>
                 Approve
               </button>
-              <button
-                className="btn btn-danger"
-                disabled={actionLoading === selected.id}
-                onClick={() => handleAction(selected.id, 'deny')}
-              >
+              <button className="btn btn-danger" disabled={actionLoading === selected.id} onClick={() => handleAction(selected.id, 'deny')}>
                 Deny
               </button>
             </div>
 
             {selected.status !== 'approved' ? (
-              <div style={{ marginTop: 16, color: '#64748b', fontSize: 12 }}>
-                Approve this request first to unlock the execution helper.
+              <div className="banner-note mt-16">
+                Approve this request first to unlock the execution helper for the agent.
               </div>
             ) : (
-              <div style={{ marginTop: 16 }}>
-                <div className="detail-row" style={{ display: 'block' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Execute approved request</div>
-                  <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
-                    This sends{' '}
-                    <code>{`POST /v1/toolcalls/${selected.event_id}/execute`}</code> to the gateway. You need a tenant-scoped API
-                    key.
-                  </div>
-                  <div className="form-group" style={{ marginTop: 8, marginBottom: 8 }}>
-                    <label>Gateway API Key</label>
-                    <input
-                      value={executeApiKey}
-                      onChange={e => setExecuteApiKey(e.target.value)}
-                      placeholder="sk-oc-..."
-                      style={{ fontFamily: 'monospace' }}
-                    />
-                  </div>
-                  <textarea
-                    readOnly
-                    value={executeCommand}
-                    style={{
-                      width: '100%',
-                      minHeight: 64,
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      padding: 10,
-                      borderRadius: 6,
-                      border: '1px solid #e2e8f0',
+              <div className="detail-panel mt-16">
+                <h3>Execute approved request</h3>
+                <p className="table-subtext mb-16">
+                  The agent can resume the run with <code>POST /v1/toolcalls/{selected.event_id}/execute</code>.
+                </p>
+                <div className="form-group">
+                  <label>Gateway API key</label>
+                  <input value={executeApiKey} onChange={e => setExecuteApiKey(e.target.value)} placeholder="sk-oc-..." style={{ fontFamily: 'monospace' }} />
+                </div>
+                <textarea readOnly value={executeCommand} className="code-textarea" />
+                <div className="btn-group mt-16">
+                  <button
+                    className="btn btn-outline btn-sm"
+                    type="button"
+                    disabled={!executeApiKey.trim()}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(executeCommand)
+                        setCopyStatus('Copied execute command')
+                        setTimeout(() => setCopyStatus(''), 1500)
+                      } catch {
+                        setCopyStatus('Copy failed')
+                        setTimeout(() => setCopyStatus(''), 1500)
+                      }
                     }}
-                  />
-                  <div className="btn-group" style={{ marginTop: 10 }}>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      type="button"
-                      disabled={!executeApiKey.trim()}
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(executeCommand)
-                          setCopyStatus('Copied')
-                          setTimeout(() => setCopyStatus(''), 1500)
-                        } catch {
-                          setCopyStatus('Copy failed')
-                          setTimeout(() => setCopyStatus(''), 1500)
-                        }
-                      }}
-                    >
-                      Copy execute command
-                    </button>
-                    {copyStatus ? (
-                      <div style={{ alignSelf: 'center', color: '#16a34a', fontSize: 12, fontWeight: 700 }}>
-                        {copyStatus}
-                      </div>
-                    ) : null}
-                  </div>
+                  >
+                    Copy execute command
+                  </button>
+                  {copyStatus ? <div className="success-inline">{copyStatus}</div> : null}
                 </div>
               </div>
             )}
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
