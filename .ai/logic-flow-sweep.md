@@ -54,6 +54,68 @@ Status: Complete
 - Initial direct localhost curl smoke failed inside the sandbox with `curl: (7) Failed to connect to localhost...`; this was an environment restriction, not a repo bug. Rerunning the same smoke outside the sandbox succeeded and produced the expected ambiguity payload.
 - Follow-up implementation commit: `d2c80f3` (`fix(console): harden sessions timeline and tenant recovery`)
 
+## Follow-up: Merge-ready Sweep
+
+Date: 2026-03-20
+Branch: `feature/console-sessions-polish`
+Status: Complete
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-019 | Medium | C9/C13/F19 | Replay, event detail, and chain/export queries could still multiply or pick unstable related rows if `tool_results` or `approval_requests` ever drifted from 1:1 per event | Several evidence + console detail queries still used direct joins after the session timeline hardening pass | Replaced the remaining joins with defensive `LEFT JOIN LATERAL (...) ORDER BY ... LIMIT 1` lookups so related rows stay stable and unique | `pkg/evidence/store.go`, `pkg/console/store.go` | Fixed |
+| LF-020 | Medium | G21/G23 | Updating or deleting a missing alert rule returned a generic `500`, which looked like a server failure instead of a not-found case | Alert rule store methods did not surface a sentinel not-found error when zero rows were affected | Added `ErrAlertRuleNotFound`, mapped it to `404`, and added handler regressions for update/delete | `pkg/console/store.go`, `cmd/console-api/alerts_handlers.go`, `cmd/console-api/alerts_handlers_test.go` | Fixed |
+| LF-021 | Medium | G22/G23 | Pending alert deliveries lost retry timing in the tenant-scoped flow, so the UI could not explain when another delivery attempt would happen | `ListAlertEventsSince` selected `next_attempt_at` in SQL but did not scan it into the response model, and the alerts UIs did not render retry metadata | Restored `next_attempt_at` scanning, surfaced retry/delivery details in Alerts and Tenant Detail, and documented the contract | `pkg/console/store.go`, `web/console/src/pages/Alerts.tsx`, `web/console/src/pages/TenantDetail.tsx`, `readme.md`, `docs/LOCAL_TESTING.md` | Fixed |
+| LF-022 | Medium | A1 | A transient `/setup/status` failure dropped operators into the setup wizard, implying the instance was uninitialized when the real problem was connectivity or an upstream error | `App.tsx` treated any setup-status exception as `not_initialized` | Added an explicit setup-check error state with retry so first-run setup only appears when the API confirms it is needed | `web/console/src/App.tsx` | Fixed |
+| LF-023 | Low | H24/G23/B6/I27/Journey UX | Several console pages degraded into blank/zero states on partial API failures, hiding the actual problem from operators | `Overview`, `Alerts`, and `TenantDetail` used `.catch(() => [])`-style fallbacks, and Policies had an empty tenant dead-end | Switched to partial-load handling with actionable inline errors, retry affordances, and a friendlier empty state for Policies | `web/console/src/pages/Overview.tsx`, `web/console/src/pages/Alerts.tsx`, `web/console/src/pages/TenantDetail.tsx`, `web/console/src/pages/Policies.tsx`, `web/console/src/index.css` | Fixed |
+
+### Files Changed
+
+- `cmd/console-api/alerts_handlers.go`
+- `cmd/console-api/alerts_handlers_test.go`
+- `pkg/console/store.go`
+- `pkg/evidence/store.go`
+- `web/console/src/App.tsx`
+- `web/console/src/pages/Overview.tsx`
+- `web/console/src/pages/Alerts.tsx`
+- `web/console/src/pages/TenantDetail.tsx`
+- `web/console/src/pages/Policies.tsx`
+- `web/console/src/index.css`
+- `readme.md`
+- `docs/LOCAL_TESTING.md`
+
+### Verification
+
+- `go test ./cmd/console-api ./pkg/console ./pkg/evidence -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/pkg/evidence`
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built in 1.00s`
+- `go test ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/pkg/evidence`
+- `go test -race ./... -count=1`
+  - Pass
+  - Key output: `ok github.com/bturcanu/OpenClause/cmd/gateway`, `ok github.com/bturcanu/OpenClause/pkg/console`, `ok github.com/bturcanu/OpenClause/pkg/evidence`
+- `docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v`
+  - Pass
+  - Key output: `PASS: 19/19`
+- `npm --prefix sdk/typescript run build`
+  - Pass
+  - Key output: `tsc`
+- `./scripts/dev.sh`
+  - Pass
+  - Key output: stack rebuilt, services restarted cleanly, migrations reapplied, health URLs printed
+- `./scripts/demo.sh`
+  - Pass
+  - Key output: session confirmation `Session visible in console API: demo-session-1774060201`, connectors `8 registered`, analytics `4 events in last 24h`
+
+### Follow-up Notes
+
+- No new environment limitations surfaced in this pass. The approved Docker-based OPA run, full Go matrix, web build, dev stack, and live demo all completed successfully on this machine.
+
 ## Flow Map
 
 ### A. Console bootstrap and auth flows

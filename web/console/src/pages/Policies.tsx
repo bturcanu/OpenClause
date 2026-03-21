@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, formatDate } from '../api'
+import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton } from '../ui'
 
 interface Tenant {
   id: string
@@ -207,14 +208,31 @@ export default function Policies() {
       }
     : null
 
+  if (!loading && tenants.length === 0) {
+    return (
+      <div>
+        <PageHeaderBlock
+          title="Policies"
+          description="Tenant rule builder, simulation, versioning, and rollback."
+        />
+        {error ? <InlineErrorState message={error} onRetry={() => void fetchTenants()} /> : null}
+        <EmptyState
+          icon="☰"
+          title="No tenants available"
+          description="Create a tenant first so you can save policy rules, run simulations, and manage version history."
+        />
+      </div>
+    )
+  }
+
   return (
     <div>
-      <div className="page-header">
-        <h2>Policies</h2>
-        <p>Tenant rule builder, simulation, versioning and rollback</p>
-      </div>
+      <PageHeaderBlock
+        title="Policies"
+        description="Tenant rule builder, simulation, versioning, and rollback."
+      />
 
-      {error && <div className="error-msg">{error}</div>}
+      {error ? <InlineErrorState message={error} onRetry={() => selectedTenantID ? void fetchPolicyState(selectedTenantID) : void fetchTenants()} /> : null}
 
       <div className="form-card">
         <h3>Tenant</h3>
@@ -306,7 +324,7 @@ export default function Policies() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={5} className="loading">Loading…</td></tr>
+              <TableSkeleton columns={5} rows={5} />
             ) : versions.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No policy versions</td></tr>
             ) : (
@@ -338,7 +356,7 @@ export default function Policies() {
               Selected version: <span className="badge badge-blue">{selectedVersion.version}</span> ({selectedVersion.id})
             </div>
             {diffPreview && (
-              <pre style={{ background: '#f1f5f9', padding: 12, borderRadius: 6, fontSize: 12, overflow: 'auto', maxHeight: 260 }}>
+              <pre className="code-block" style={{ maxHeight: 260 }}>
                 {JSON.stringify(diffPreview, null, 2)}
               </pre>
             )}
@@ -398,7 +416,7 @@ export default function Policies() {
                 <span style={{ marginLeft: 8, fontSize: 13, color: '#475569' }}>{simResult.policy_result.result.reason}</span>
               )}
             </div>
-            <pre style={{ background: '#f1f5f9', padding: 12, borderRadius: 6, fontSize: 12, overflow: 'auto', maxHeight: 280 }}>
+            <pre className="code-block" style={{ maxHeight: 280 }}>
               {JSON.stringify(simResult, null, 2)}
             </pre>
           </div>

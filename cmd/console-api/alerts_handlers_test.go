@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,9 @@ type fakeAlertsStore struct {
 		TenantID string
 		RuleID   string
 	}
+	updateErr error
+	deleteErr error
+
 	lastListSince *struct {
 		TenantID string
 		Since    time.Time
@@ -76,7 +80,7 @@ func (f *fakeAlertsStore) UpdateAlertRule(_ context.Context, tenantID, ruleID, n
 		Config:   config,
 		Enabled:  enabled,
 	}
-	return nil
+	return f.updateErr
 }
 
 func (f *fakeAlertsStore) GetAlertRule(_ context.Context, tenantID, ruleID string) (*console.AlertRule, error) {
@@ -100,7 +104,7 @@ func (f *fakeAlertsStore) DeleteAlertRule(_ context.Context, tenantID, ruleID st
 		TenantID: tenantID,
 		RuleID:   ruleID,
 	}
-	return nil
+	return f.deleteErr
 }
 
 func (f *fakeAlertsStore) ListAlertEventsSince(_ context.Context, tenantID string, since time.Time, limit int) ([]console.AlertEvent, error) {
@@ -318,17 +322,82 @@ func Test_handleDeleteTenantAlertRule_deletesRule(t *testing.T) {
 	}
 }
 
+func Test_handleUpdateTenantAlertRule_returnsNotFoundForMissingRule(t *testing.T) {
+	fs := &fakeAlertsStore{updateErr: console.ErrAlertRuleNotFound}
+	api := &ConsoleAPI{
+		log:         slog.Default(),
+		alertsStore: fs,
+	}
+
+	body := map[string]any{
+		"name":    "updated",
+		"kind":    "deny_spike",
+		"enabled": false,
+		"config_json": map[string]any{
+			"n":         3,
+			"m_minutes": 10,
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPut, "/admin/tenants/tenant1/alerts/rules/rule-1", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req = setRouteParams(req, map[string]string{"tenant_id": "tenant1", "rule_id": "rule-1"})
+
+	rr := httptest.NewRecorder()
+	api.handleUpdateTenantAlertRule(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var bodyResp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &bodyResp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if bodyResp["message"] != "alert rule not found" {
+		t.Fatalf("unexpected response: %+v", bodyResp)
+	}
+}
+
+func Test_handleDeleteTenantAlertRule_returnsNotFoundForMissingRule(t *testing.T) {
+	fs := &fakeAlertsStore{deleteErr: console.ErrAlertRuleNotFound}
+	api := &ConsoleAPI{
+		log:         slog.Default(),
+		alertsStore: fs,
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/tenants/tenant1/alerts/rules/rule-1", nil)
+	req = setRouteParams(req, map[string]string{"tenant_id": "tenant1", "rule_id": "rule-1"})
+
+	rr := httptest.NewRecorder()
+	api.handleDeleteTenantAlertRule(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var bodyResp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &bodyResp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if bodyResp["message"] != "alert rule not found" {
+		t.Fatalf("unexpected response: %+v", bodyResp)
+	}
+}
+
 func Test_handleListTenantAlertEvents_usesSinceAndLimit(t *testing.T) {
+	nextAttempt := time.Now().UTC().Add(15 * time.Minute).Truncate(time.Second)
 	fs := &fakeAlertsStore{
 		listEvents: []console.AlertEvent{
 			{
-				ID:        "ae-1",
-				RuleID:    "r-1",
-				TenantID:  "tenant1",
-				Severity:  "warning",
-				Message:   "hello",
-				Status:    "sent",
-				CreatedAt: time.Now().UTC(),
+				ID:            "ae-1",
+				RuleID:        "r-1",
+				TenantID:      "tenant1",
+				Severity:      "warning",
+				Message:       "hello",
+				Status:        "pending",
+				AttemptCount:  2,
+				NextAttemptAt: nextAttempt,
+				LastError:     "webhook retry pending",
+				CreatedAt:     time.Now().UTC(),
 			},
 		},
 	}
@@ -355,5 +424,28 @@ func Test_handleListTenantAlertEvents_usesSinceAndLimit(t *testing.T) {
 	}
 	if fs.lastListSince.Limit != 5 {
 		t.Fatalf("expected limit=5, got %d", fs.lastListSince.Limit)
+	}
+
+	var payload []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("expected one alert event, got %d", len(payload))
+	}
+	gotNextAttempt, ok := payload[0]["next_attempt_at"].(string)
+	if !ok || gotNextAttempt == "" {
+		t.Fatalf("expected next_attempt_at in response, got %+v", payload[0])
+	}
+	if gotNextAttempt != nextAttempt.Format(time.RFC3339) {
+		t.Fatalf("expected next_attempt_at %q, got %q", nextAttempt.Format(time.RFC3339), gotNextAttempt)
+	}
+}
+
+func TestAlertRuleNotFoundSentinelMatchesWrappedErrors(t *testing.T) {
+	err := errors.Join(errors.New("wrapped"), console.ErrAlertRuleNotFound)
+
+	if !errors.Is(err, console.ErrAlertRuleNotFound) {
+		t.Fatalf("expected wrapped error to match ErrAlertRuleNotFound")
 	}
 }

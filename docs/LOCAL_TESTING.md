@@ -299,6 +299,7 @@ curl -s "http://localhost:8090/admin/tenants/$TENANT_ID/alerts/events?limit=10" 
 Expected: at least one alert event with:
 - `status` = `sent` (or `pending` if the sink temporarily fails)
 - message containing `"deny spike: 3 denies"`
+- if `status` is `pending`, the payload includes `attempt_count`, `last_error`, and `next_attempt_at` so the UI can show retry timing
 
 ## 8. Approve the Request
 

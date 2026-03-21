@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
 import { api, clearStoredAuth } from './api'
+import { InlineErrorState } from './ui'
 import Login from './pages/Login'
 import Overview from './pages/Overview'
 import Approvals from './pages/Approvals'
@@ -88,28 +89,54 @@ function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const [setupState, setSetupState] = useState<'checking' | 'initialized' | 'not_initialized'>('checking')
+  const [setupState, setSetupState] = useState<'checking' | 'initialized' | 'not_initialized' | 'error'>('checking')
+  const [setupError, setSetupError] = useState('')
+  const [setupCheckNonce, setSetupCheckNonce] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     async function check() {
       try {
+        if (!cancelled) {
+          setSetupState('checking')
+          setSetupError('')
+        }
         const resp = await fetch('/api/setup/status', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
         const data = await resp.json().catch(() => ({} as any))
         if (cancelled) return
+        if (!resp.ok) {
+          setSetupError(data?.message || data?.error || 'Failed to check setup status. Verify console-api is reachable and try again.')
+          setSetupState('error')
+          return
+        }
         setSetupState(data?.initialized ? 'initialized' : 'not_initialized')
-      } catch {
-        if (!cancelled) setSetupState('not_initialized')
+      } catch (err) {
+        if (!cancelled) {
+          setSetupError(err instanceof Error ? err.message : 'Failed to check setup status. Verify console-api is reachable and try again.')
+          setSetupState('error')
+        }
       }
     }
     void check()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [setupCheckNonce])
 
   if (setupState === 'checking') {
     return <div className="loading">Checking setup…</div>
+  }
+
+  if (setupState === 'error') {
+    return (
+      <div className="auth-page">
+        <div className="page-header">
+          <h2>Console Setup</h2>
+          <p>We couldn’t confirm whether this instance is initialized yet.</p>
+        </div>
+        <InlineErrorState message={setupError || 'Failed to check setup status.'} onRetry={() => setSetupCheckNonce(value => value + 1)} />
+      </div>
+    )
   }
 
   if (setupState === 'not_initialized') {

@@ -393,10 +393,10 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `POST` | `/admin/tenants/{tenant_id}/alerts/rules` | `tenant_admin` or `platform_admin` | Create alert rule |
 | `PUT` | `/admin/tenants/{tenant_id}/alerts/rules/{rule_id}` | `tenant_admin` or `platform_admin` | Update alert rule |
 | `DELETE` | `/admin/tenants/{tenant_id}/alerts/rules/{rule_id}` | `tenant_admin` or `platform_admin` | Delete alert rule |
-| `GET` | `/admin/tenants/{tenant_id}/alerts/events` | `tenant_admin` or `platform_admin` | List alert events for a tenant |
+| `GET` | `/admin/tenants/{tenant_id}/alerts/events` | `tenant_admin` or `platform_admin` | List alert events for a tenant, including delivery status, attempt count, `last_error`, and `next_attempt_at` for pending retries |
 | `GET` | `/admin/alerts/rules` | JWT | Legacy global alert rule listing (scoped by caller role/tenant) |
 | `POST` | `/admin/alerts/rules` | `tenant_admin` or `platform_admin` | Legacy/global alert rule creation endpoint |
-| `GET` | `/admin/alerts/events` | JWT | Legacy global alert event listing (scoped by caller role/tenant) |
+| `GET` | `/admin/alerts/events` | JWT | Legacy global alert event listing (scoped by caller role/tenant, including retry metadata for pending deliveries) |
 
 ### Approvals (`:8081`)
 

@@ -1,5 +1,6 @@
-import { useState, useEffect, FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { api, formatDate } from '../api'
+import { InlineErrorState, PageHeaderBlock, TableSkeleton } from '../ui'
 
 interface AlertRule {
   id: string
@@ -14,9 +15,14 @@ interface AlertEvent {
   id: string
   rule_id: string
   tenant_id: string
-  message: string
   severity: string
+  message: string
+  status: string
   created_at: string
+  delivered_at?: string | null
+  attempt_count?: number
+  last_error?: string
+  next_attempt_at?: string | null
 }
 
 export default function Alerts() {
@@ -44,7 +50,7 @@ export default function Alerts() {
       setIsPlatformAdmin(roles.includes('platform_admin'))
       setScopedTenantID(tenantID)
       if (tenantID) {
-        setForm(f => ({ ...f, tenantId: tenantID }))
+        setForm(current => ({ ...current, tenantId: tenantID }))
       }
     } catch {
       setIsPlatformAdmin(false)
@@ -53,24 +59,43 @@ export default function Alerts() {
   }, [])
 
   async function fetchAll() {
-    try {
-      const [r, e] = await Promise.all([
-        api.get('/admin/alerts/rules').catch(() => []),
-        api.get('/admin/alerts/events').catch(() => []),
-      ])
-      setRules(Array.isArray(r) ? r : r?.rules || [])
-      setEvents(Array.isArray(e) ? e : e?.events || [])
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
+    setLoading(true)
+    setError('')
+
+    const [rulesResult, eventsResult] = await Promise.allSettled([
+      api.get('/admin/alerts/rules'),
+      api.get('/admin/alerts/events'),
+    ])
+
+    const failures: string[] = []
+
+    if (rulesResult.status === 'fulfilled') {
+      setRules(Array.isArray(rulesResult.value) ? rulesResult.value as AlertRule[] : ((rulesResult.value as { rules?: AlertRule[] })?.rules || []))
+    } else {
+      setRules([])
+      failures.push('alert rules')
     }
+
+    if (eventsResult.status === 'fulfilled') {
+      setEvents(Array.isArray(eventsResult.value) ? eventsResult.value as AlertEvent[] : ((eventsResult.value as { events?: AlertEvent[] })?.events || []))
+    } else {
+      setEvents([])
+      failures.push('alert events')
+    }
+
+    if (failures.length > 0) {
+      setError(`Some alert data could not be loaded: ${failures.join(', ')}.`)
+    }
+
+    setLoading(false)
   }
 
-  useEffect(() => { fetchAll() }, [])
+  useEffect(() => {
+    void fetchAll()
+  }, [])
 
-  async function handleCreate(e: FormEvent) {
-    e.preventDefault()
+  async function handleCreate(event: FormEvent) {
+    event.preventDefault()
     setCreating(true)
     setError('')
     try {
@@ -88,8 +113,8 @@ export default function Alerts() {
       setForm({ tenantId: tenantID, name: '', n: 3, mMinutes: 5, enabled: true })
       setShowCreate(false)
       await fetchAll()
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create alert rule')
     } finally {
       setCreating(false)
     }
@@ -97,19 +122,19 @@ export default function Alerts() {
 
   return (
     <div>
-      <div className="flex-between">
-        <div className="page-header">
-          <h2>Alerts</h2>
-          <p>Configure alert rules and view triggered events</p>
-        </div>
-        <button className="btn btn-primary" onClick={() => setShowCreate(f => !f)}>
-          {showCreate ? 'Cancel' : '+ New Rule'}
-        </button>
-      </div>
+      <PageHeaderBlock
+        title="Alerts"
+        description="Monitor tenant alert rules, delivery status, and the retry state of triggered alert events."
+        actions={(
+          <button className="btn btn-primary" onClick={() => setShowCreate(current => !current)}>
+            {showCreate ? 'Cancel' : '+ New Rule'}
+          </button>
+        )}
+      />
 
-      {error && <div className="error-msg">{error}</div>}
+      {error ? <InlineErrorState message={error} onRetry={() => void fetchAll()} /> : null}
 
-      {showCreate && (
+      {showCreate ? (
         <div className="form-card">
           <h3>Create Alert Rule</h3>
           <form onSubmit={handleCreate}>
@@ -118,7 +143,7 @@ export default function Alerts() {
                 <label>Tenant ID</label>
                 <input
                   value={form.tenantId}
-                  onChange={e => setForm(f => ({ ...f, tenantId: e.target.value }))}
+                  onChange={event => setForm(current => ({ ...current, tenantId: event.target.value }))}
                   placeholder="tenant-id"
                   required
                 />
@@ -128,7 +153,7 @@ export default function Alerts() {
               <label>Rule Name</label>
               <input
                 value={form.name}
-                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                onChange={event => setForm(current => ({ ...current, name: event.target.value }))}
                 placeholder="e.g., High-risk deny spike"
                 required
               />
@@ -140,7 +165,7 @@ export default function Alerts() {
                   type="number"
                   min={1}
                   value={form.n}
-                  onChange={e => setForm(f => ({ ...f, n: parseInt(e.target.value || '0', 10) || 1 }))}
+                  onChange={event => setForm(current => ({ ...current, n: parseInt(event.target.value || '0', 10) || 1 }))}
                   required
                 />
               </div>
@@ -150,7 +175,7 @@ export default function Alerts() {
                   type="number"
                   min={1}
                   value={form.mMinutes}
-                  onChange={e => setForm(f => ({ ...f, mMinutes: parseInt(e.target.value || '0', 10) || 1 }))}
+                  onChange={event => setForm(current => ({ ...current, mMinutes: parseInt(event.target.value || '0', 10) || 1 }))}
                   required
                 />
               </div>
@@ -160,7 +185,7 @@ export default function Alerts() {
                   <input
                     type="checkbox"
                     checked={form.enabled}
-                    onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
+                    onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))}
                   />
                 </div>
               </div>
@@ -170,10 +195,10 @@ export default function Alerts() {
             </button>
           </form>
         </div>
-      )}
+      ) : null}
 
       <div className="section-title">Alert Rules</div>
-      <div className="table-container">
+      <div className="table-container table-sticky">
         <table>
           <thead>
             <tr>
@@ -186,23 +211,25 @@ export default function Alerts() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={5} className="loading">Loading…</td></tr>
+              <TableSkeleton columns={5} rows={5} />
             ) : rules.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No alert rules configured</td></tr>
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#746250' }}>
+                  No alert rules configured yet.
+                </td>
+              </tr>
             ) : (
-              rules.map(r => (
-                <tr key={r.id}>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.tenant_id?.slice(0, 12) || '—'}</td>
-                  <td style={{ fontWeight: 600 }}>{r.name}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {r.kind}
-                  </td>
+              rules.map(rule => (
+                <tr key={rule.id}>
+                  <td className="mono">{rule.tenant_id || '—'}</td>
+                  <td className="table-primary">{rule.name}</td>
+                  <td className="mono">{rule.kind}</td>
                   <td>
-                    {r.enabled !== false
+                    {rule.enabled !== false
                       ? <span className="badge badge-green">Active</span>
                       : <span className="badge badge-gray">Disabled</span>}
                   </td>
-                  <td>{formatDate(r.created_at, 'date')}</td>
+                  <td>{formatDate(rule.created_at, 'date')}</td>
                 </tr>
               ))
             )}
@@ -211,32 +238,65 @@ export default function Alerts() {
       </div>
 
       <div className="section-title mt-16">Alert Events</div>
-      <div className="table-container">
+      <div className="table-container table-sticky">
         <table>
           <thead>
             <tr>
               <th>Tenant</th>
               <th>Rule</th>
+              <th>Status</th>
               <th>Severity</th>
+              <th>Attempts</th>
               <th>Message</th>
               <th>Fired At</th>
             </tr>
           </thead>
           <tbody>
-            {events.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No alert events</td></tr>
+            {loading ? (
+              <TableSkeleton columns={7} rows={6} />
+            ) : events.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: '#746250' }}>
+                  No alert events yet.
+                </td>
+              </tr>
             ) : (
-              events.map(ev => (
-                <tr key={ev.id}>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{ev.tenant_id?.slice(0, 12) || '—'}</td>
-                  <td style={{ fontWeight: 600 }}>{ev.rule_id?.slice(0, 8)}</td>
+              events.map(event => (
+                <tr key={event.id}>
+                  <td className="mono">{event.tenant_id || '—'}</td>
+                  <td className="table-primary mono">{event.rule_id || '—'}</td>
                   <td>
-                    <span className={`badge ${ev.severity === 'critical' ? 'badge-red' : ev.severity === 'warning' ? 'badge-yellow' : 'badge-gray'}`}>
-                      {ev.severity}
+                    <span className={`badge ${
+                      event.status === 'sent'
+                        ? 'badge-green'
+                        : event.status === 'pending'
+                          ? 'badge-yellow'
+                          : 'badge-gray'
+                    }`}>
+                      {event.status || 'unknown'}
+                    </span>
+                    {event.delivered_at ? <div className="table-subtext">Delivered {formatDate(event.delivered_at)}</div> : null}
+                    {!event.delivered_at && event.next_attempt_at ? (
+                      <div className="table-subtext">Retrying {formatDate(event.next_attempt_at)}</div>
+                    ) : null}
+                  </td>
+                  <td>
+                    <span className={`badge ${
+                      event.severity === 'critical'
+                        ? 'badge-red'
+                        : event.severity === 'warning'
+                          ? 'badge-yellow'
+                          : 'badge-gray'
+                    }`}>
+                      {event.severity || 'info'}
                     </span>
                   </td>
-                  <td>{ev.message}</td>
-                  <td>{formatDate(ev.created_at)}</td>
+                  <td>{event.attempt_count ?? 0}</td>
+                  <td>
+                    <div>{event.message}</div>
+                    {event.last_error ? <div className="table-subtext">Last delivery error: {event.last_error}</div> : null}
+                  </td>
+                  <td>{formatDate(event.created_at)}</td>
                 </tr>
               ))
             )}

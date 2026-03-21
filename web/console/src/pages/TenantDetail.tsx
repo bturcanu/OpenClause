@@ -1,6 +1,7 @@
 import { useState, useEffect, FormEvent, useRef } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
+import { InlineErrorState } from '../ui'
 
 interface Tenant {
   id: string
@@ -71,6 +72,8 @@ interface AlertEvent {
   status: string
   delivered_at?: string
   attempt_count?: number
+  next_attempt_at?: string
+  last_error?: string
   created_at: string
 }
 
@@ -211,24 +214,47 @@ export default function TenantDetail() {
     setAllowlistSource('db')
 
     try {
-      let notifCfgFetchError: string | null = null
-      const [t, ag, keys, approverResp, notifCfg] = await Promise.all([
-        api.get(`/admin/tenants/${id}`).catch(() => null),
-        api.get(`/admin/tenants/${id}/agents`).catch(() => []),
-        api.get(`/admin/tenants/${id}/apikeys`).catch(() => []),
-        api.get(`/admin/tenants/${id}/approvers`).catch(() => ({ approvers: [], allowlist_source: 'db' })),
-        api.get(`/admin/tenants/${id}/notification-config`).catch((err) => {
-          notifCfgFetchError = err?.message || 'Failed to load notification config'
-          return null
-        }),
+      const [tenantResp, agentsResp, keysResp, approversResp, notifCfgResp] = await Promise.allSettled([
+        api.get(`/admin/tenants/${id}`),
+        api.get(`/admin/tenants/${id}/agents`),
+        api.get(`/admin/tenants/${id}/apikeys`),
+        api.get(`/admin/tenants/${id}/approvers`),
+        api.get(`/admin/tenants/${id}/notification-config`),
       ])
       if (seq !== fetchSeq.current) return
-      setTenant(t ?? null)
-      setAgents(Array.isArray(ag) ? ag : ag?.agents || [])
-      setApiKeys(Array.isArray(keys) ? keys : keys?.api_keys || [])
-      setApprovers(Array.isArray(approverResp?.approvers) ? approverResp.approvers : [])
-      if (approverResp?.allowlist_source) setAllowlistSource(approverResp.allowlist_source)
-      if (notifCfg) {
+
+      if (tenantResp.status !== 'fulfilled') {
+        throw tenantResp.reason
+      }
+
+      const partialFailures: string[] = []
+      const tenantData = tenantResp.value as Tenant
+      setTenant(tenantData ?? null)
+
+      if (agentsResp.status === 'fulfilled') {
+        const agentsData = agentsResp.value as Agent[] | { agents?: Agent[] }
+        setAgents(Array.isArray(agentsData) ? agentsData : agentsData?.agents || [])
+      } else {
+        partialFailures.push('agents')
+      }
+
+      if (keysResp.status === 'fulfilled') {
+        const apiKeyData = keysResp.value as ApiKey[] | { api_keys?: ApiKey[] }
+        setApiKeys(Array.isArray(apiKeyData) ? apiKeyData : apiKeyData?.api_keys || [])
+      } else {
+        partialFailures.push('API keys')
+      }
+
+      if (approversResp.status === 'fulfilled') {
+        const approverData = approversResp.value as { approvers?: Approver[]; allowlist_source?: string }
+        setApprovers(Array.isArray(approverData?.approvers) ? approverData.approvers : [])
+        if (approverData?.allowlist_source) setAllowlistSource(approverData.allowlist_source)
+      } else {
+        partialFailures.push('approvers')
+      }
+
+      if (notifCfgResp.status === 'fulfilled') {
+        const notifCfg = notifCfgResp.value as TenantNotificationConfig
         setNotificationConfig(notifCfg)
         const slack = notifCfg.notify?.find((n: any) => n.kind === 'slack')
         const webhook = notifCfg.notify?.find((n: any) => n.kind === 'webhook')
@@ -238,8 +264,12 @@ export default function TenantDetail() {
           webhook_url: webhook?.url || '',
           webhook_secret_ref: webhook?.secret_ref || '',
         })
-      } else if (notifCfgFetchError) {
-        setNotifError(notifCfgFetchError)
+      } else {
+        setNotifError(notifCfgResp.reason?.message || 'Failed to load notification config')
+      }
+
+      if (partialFailures.length > 0) {
+        setError(`Some tenant sections could not be loaded: ${partialFailures.join(', ')}.`)
       }
     } catch (err: any) {
       if (seq === fetchSeq.current) setError(err.message)
@@ -255,12 +285,26 @@ export default function TenantDetail() {
     setAlertsError('')
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      const [rulesResp, eventsResp] = await Promise.all([
-        api.get(`/admin/tenants/${id}/alerts/rules`).catch(() => []),
-        api.get(`/admin/tenants/${id}/alerts/events?limit=50&since=${encodeURIComponent(since)}`).catch(() => []),
+      const [rulesResp, eventsResp] = await Promise.allSettled([
+        api.get(`/admin/tenants/${id}/alerts/rules`),
+        api.get(`/admin/tenants/${id}/alerts/events?limit=50&since=${encodeURIComponent(since)}`),
       ])
-      setAlertRules(Array.isArray(rulesResp) ? rulesResp as AlertRule[] : [])
-      setAlertEvents(Array.isArray(eventsResp) ? eventsResp as AlertEvent[] : [])
+      const failures: string[] = []
+      if (rulesResp.status === 'fulfilled') {
+        setAlertRules(Array.isArray(rulesResp.value) ? rulesResp.value as AlertRule[] : [])
+      } else {
+        setAlertRules([])
+        failures.push('rules')
+      }
+      if (eventsResp.status === 'fulfilled') {
+        setAlertEvents(Array.isArray(eventsResp.value) ? eventsResp.value as AlertEvent[] : [])
+      } else {
+        setAlertEvents([])
+        failures.push('events')
+      }
+      if (failures.length > 0) {
+        setAlertsError(`Some alert data could not be loaded: ${failures.join(', ')}.`)
+      }
     } catch (err: any) {
       setAlertsError(err?.message || 'Failed to load alerts')
     } finally {
@@ -542,7 +586,7 @@ export default function TenantDetail() {
   if (loading) return <div className="loading">Loading tenant…</div>
   if (error && !tenant) return (
     <div>
-      <div className="error-msg">{error}</div>
+      <InlineErrorState message={error} onRetry={() => void fetchAll()} />
       <Link to="/tenants" className="btn btn-outline" style={{ marginTop: 16 }}>← Back to Tenants</Link>
     </div>
   )
@@ -882,7 +926,7 @@ export default function TenantDetail() {
         <>
           <div className="section-title mt-16">Alerts</div>
 
-          {alertsError && <div className="error-msg">{alertsError}</div>}
+          {alertsError && <InlineErrorState message={alertsError} onRetry={() => void fetchAlerts()} />}
 
           <div className="form-card mt-16">
             <h3>+ New deny_spike rule</h3>
@@ -1061,6 +1105,7 @@ export default function TenantDetail() {
                   <th>Rule</th>
                   <th>Status</th>
                   <th>Severity</th>
+                  <th>Attempts</th>
                   <th>Message</th>
                   <th>Fired</th>
                   <th>Delivered</th>
@@ -1069,13 +1114,13 @@ export default function TenantDetail() {
               <tbody>
                 {alertsLoading ? (
                   <tr>
-                    <td colSpan={6} className="loading">
+                    <td colSpan={7} className="loading">
                       Loading…
                     </td>
                   </tr>
                 ) : alertEvents.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
                       No alert events yet
                     </td>
                   </tr>
@@ -1097,9 +1142,18 @@ export default function TenantDetail() {
                           {ev.severity}
                         </span>
                       </td>
-                      <td>{ev.message}</td>
+                      <td>{ev.attempt_count ?? 0}</td>
+                      <td>
+                        <div>{ev.message}</div>
+                        {ev.last_error ? <div className="table-subtext">Last error: {ev.last_error}</div> : null}
+                      </td>
                       <td>{formatDate(ev.created_at, 'date')}</td>
-                      <td>{formatDate(ev.delivered_at || null, 'date')}</td>
+                      <td>
+                        <div>{formatDate(ev.delivered_at || null, 'date')}</div>
+                        {!ev.delivered_at && ev.next_attempt_at ? (
+                          <div className="table-subtext">Retry {formatDate(ev.next_attempt_at, 'date')}</div>
+                        ) : null}
+                      </td>
                     </tr>
                   ))
                 )}

@@ -30,6 +30,7 @@ var (
 	ErrTenantNotFound        = errors.New("tenant not found")
 	ErrAPIKeyNotFound        = errors.New("api key not found")
 	ErrAPIKeyAlreadyRevoked  = errors.New("api key already revoked")
+	ErrAlertRuleNotFound     = errors.New("alert rule not found")
 	ErrSessionTenantRequired = errors.New("tenant_id required for ambiguous session_id")
 )
 
@@ -2086,7 +2087,13 @@ func (s *Store) GetEventDetail(ctx context.Context, eventID string) (*EventDetai
 		       e.payload_json, e.policy_result, e.hash, e.prev_hash,
 		       r.status, r.output_json, r.error_msg, r.duration_ms
 		FROM tool_events e
-		LEFT JOIN tool_results r ON r.event_id = e.event_id
+		LEFT JOIN LATERAL (
+			SELECT r.status, r.output_json, r.error_msg, r.duration_ms
+			FROM tool_results r
+			WHERE r.event_id = e.event_id
+			ORDER BY r.created_at DESC, r.id DESC
+			LIMIT 1
+		) r ON true
 		WHERE e.event_id = $1`, eventID,
 	).Scan(
 		&d.EventID, &d.TenantID, &d.AgentID,
@@ -2874,7 +2881,7 @@ func (s *Store) UpdateAlertRule(ctx context.Context, tenantID, id string, name s
 		return fmt.Errorf("console.UpdateAlertRule: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("console.UpdateAlertRule: rule %s not found for tenant", id)
+		return ErrAlertRuleNotFound
 	}
 	return nil
 }
@@ -2980,7 +2987,7 @@ func (s *Store) DeleteAlertRule(ctx context.Context, tenantID, ruleID string) er
 		return fmt.Errorf("console.DeleteAlertRule delete rule: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("console.DeleteAlertRule: rule %s not found", ruleID)
+		return ErrAlertRuleNotFound
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -3049,7 +3056,7 @@ func (s *Store) AlertEventExistsInWindow(ctx context.Context, tenantID, ruleID s
 func (s *Store) ListAlertEventsSince(ctx context.Context, tenantID string, since time.Time, limit int) ([]AlertEvent, error) {
 	limit = clampLimit(limit)
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, created_at
+		SELECT id, rule_id, tenant_id, severity, message, details, status, delivered_at, attempt_count, last_error, next_attempt_at, created_at
 		FROM alert_events
 		WHERE tenant_id = $1
 		  AND created_at >= $2
@@ -3064,7 +3071,7 @@ func (s *Store) ListAlertEventsSince(ctx context.Context, tenantID string, since
 	for rows.Next() {
 		var ae AlertEvent
 		if err := rows.Scan(&ae.ID, &ae.RuleID, &ae.TenantID, &ae.Severity,
-			&ae.Message, &ae.ContextJSON, &ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.LastError, &ae.CreatedAt); err != nil {
+			&ae.Message, &ae.ContextJSON, &ae.Status, &ae.DeliveredAt, &ae.AttemptCount, &ae.LastError, &ae.NextAttemptAt, &ae.CreatedAt); err != nil {
 			return nil, fmt.Errorf("console.ListAlertEventsSince scan: %w", err)
 		}
 		out = append(out, ae)

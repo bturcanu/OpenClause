@@ -134,8 +134,20 @@ func (s *Store) CheckIdempotency(ctx context.Context, tenantID, idempotencyKey s
 		       r.status, r.output_json, r.error_msg, r.duration_ms,
 		       ar.id
 		FROM tool_events e
-		LEFT JOIN tool_results r ON r.event_id = e.event_id
-		LEFT JOIN approval_requests ar ON ar.event_id = e.event_id
+		LEFT JOIN LATERAL (
+			SELECT r.status, r.output_json, r.error_msg, r.duration_ms
+			FROM tool_results r
+			WHERE r.event_id = e.event_id
+			ORDER BY r.created_at DESC, r.id DESC
+			LIMIT 1
+		) r ON true
+		LEFT JOIN LATERAL (
+			SELECT ar.id
+			FROM approval_requests ar
+			WHERE ar.event_id = e.event_id
+			ORDER BY ar.created_at DESC, ar.id DESC
+			LIMIT 1
+		) ar ON true
 		WHERE e.tenant_id = $1 AND e.idempotency_key = $2
 		LIMIT 1`, tenantID, idempotencyKey)
 
@@ -203,7 +215,13 @@ func (s *Store) GetEvent(ctx context.Context, eventID string) (*types.ToolCallEn
 		       received_at, requested_at, hash, prev_hash,
 		       r.status, r.output_json, r.error_msg, r.duration_ms
 		FROM tool_events e
-		LEFT JOIN tool_results r ON r.event_id = e.event_id
+		LEFT JOIN LATERAL (
+			SELECT r.status, r.output_json, r.error_msg, r.duration_ms
+			FROM tool_results r
+			WHERE r.event_id = e.event_id
+			ORDER BY r.created_at DESC, r.id DESC
+			LIMIT 1
+		) r ON true
 		WHERE e.event_id = $1`, eventID)
 
 	var env types.ToolCallEnvelope
@@ -288,7 +306,13 @@ func (s *Store) GetExecutionByParentEvent(ctx context.Context, parentEventID str
 		       r.status, r.output_json, r.error_msg, r.duration_ms
 		FROM tool_executions x
 		JOIN tool_events e ON e.event_id = x.execution_event_id
-		LEFT JOIN tool_results r ON r.event_id = e.event_id
+		LEFT JOIN LATERAL (
+			SELECT r.status, r.output_json, r.error_msg, r.duration_ms
+			FROM tool_results r
+			WHERE r.event_id = e.event_id
+			ORDER BY r.created_at DESC, r.id DESC
+			LIMIT 1
+		) r ON true
 		WHERE x.parent_event_id = $1`, parentEventID)
 
 	var eventID string
@@ -373,7 +397,13 @@ func (s *Store) GetChainEvents(ctx context.Context, tenantID string, afterSeq in
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.event_seq, e.event_id, e.prev_hash, e.hash, e.payload_canon, r.result_canon, e.received_at
 		FROM tool_events e
-		LEFT JOIN tool_results r ON r.event_id = e.event_id
+		LEFT JOIN LATERAL (
+			SELECT r.result_canon
+			FROM tool_results r
+			WHERE r.event_id = e.event_id
+			ORDER BY r.created_at DESC, r.id DESC
+			LIMIT 1
+		) r ON true
 		WHERE e.tenant_id = $1
 		  AND e.event_seq > $2
 		ORDER BY e.event_seq ASC

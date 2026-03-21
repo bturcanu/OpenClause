@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -201,6 +202,10 @@ func (api *ConsoleAPI) handleUpdateTenantAlertRule(w http.ResponseWriter, r *htt
 
 	if err := api.alertsStore.UpdateAlertRule(r.Context(), tenantID, ruleID, name, kind, canonBytes, in.Enabled); err != nil {
 		api.log.Error("update alert rule failed", "error", err, "tenant_id", tenantID, "rule_id", ruleID)
+		if errors.Is(err, console.ErrAlertRuleNotFound) {
+			writeError(w, http.StatusNotFound, "alert rule not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to update alert rule")
 		return
 	}
@@ -224,6 +229,10 @@ func (api *ConsoleAPI) handleDeleteTenantAlertRule(w http.ResponseWriter, r *htt
 	}
 	if err := api.alertsStore.DeleteAlertRule(r.Context(), tenantID, ruleID); err != nil {
 		api.log.Error("delete alert rule failed", "error", err, "tenant_id", tenantID, "rule_id", ruleID)
+		if errors.Is(err, console.ErrAlertRuleNotFound) {
+			writeError(w, http.StatusNotFound, "alert rule not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to delete alert rule")
 		return
 	}
