@@ -1,5 +1,7 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { readJSONResponse } from '../api'
+import { InlineErrorState } from '../ui'
 
 type InitResp = {
   initialized: boolean
@@ -34,7 +36,7 @@ export default function SetupWizard(props: { onInitialized?: () => void }) {
           first_tenant_name: firstTenantName,
         }),
       })
-      const data: InitResp = await resp.json().catch(() => ({} as any))
+      const data: InitResp = await readJSONResponse(resp)
       if (!resp.ok) {
         throw new Error((data as any)?.message || (data as any)?.error || 'Failed to initialize')
       }
@@ -57,7 +59,7 @@ export default function SetupWizard(props: { onInitialized?: () => void }) {
         <p>Create the initial platform admin + first tenant.</p>
       </div>
 
-      {error && <div className="error-msg">{error}</div>}
+      {error ? <InlineErrorState message={error} /> : null}
       {status && <div className="success-msg">{status}</div>}
 
       <form onSubmit={submit} className="form-card" style={{ maxWidth: 720 }}>
@@ -82,7 +84,7 @@ export default function SetupWizard(props: { onInitialized?: () => void }) {
           <input value={firstTenantName} onChange={e => setFirstTenantName(e.target.value)} required />
         </div>
 
-        <div style={{ marginTop: 16, color: '#64748b', fontSize: 13 }}>
+        <div className="form-helper-text" style={{ marginTop: 16 }}>
           Tip: use the provided secret generator scripts (see README) for `CONSOLE_JWT_SECRET` and JWT bootstrap settings.
         </div>
 
@@ -93,4 +95,3 @@ export default function SetupWizard(props: { onInitialized?: () => void }) {
     </div>
   )
 }
-

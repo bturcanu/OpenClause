@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, formatDate } from '../api'
+import { api, formatDate, toQueryTimestamp } from '../api'
 import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, buildQuery, decisionTone, downloadBlob, formatRequester, shortID } from '../ui'
 
 type Event = {
@@ -30,6 +30,8 @@ type EventFilters = {
   session_id: string
   risk_min: string
   risk_max: string
+  since: string
+  until: string
 }
 
 const defaultFilters: EventFilters = {
@@ -43,6 +45,8 @@ const defaultFilters: EventFilters = {
   session_id: '',
   risk_min: '',
   risk_max: '',
+  since: '',
+  until: '',
 }
 
 export default function Events() {
@@ -55,6 +59,10 @@ export default function Events() {
   const limit = 25
 
   const selectedTenant = filters.tenant_id.trim()
+  const hasActiveFilters = useMemo(
+    () => Object.values(filters).some(value => value.trim() !== ''),
+    [filters],
+  )
   const isPlatformAdmin = useMemo(() => {
     const token = localStorage.getItem('oc_token')
     if (!token) return false
@@ -77,6 +85,8 @@ export default function Events() {
     try {
       const query = buildQuery({
         ...filters,
+        since: toQueryTimestamp(filters.since),
+        until: toQueryTimestamp(filters.until),
         limit,
         offset: page * limit,
       })
@@ -96,6 +106,11 @@ export default function Events() {
 
   function updateFilter(key: keyof EventFilters, value: string) {
     setFilters(current => ({ ...current, [key]: value }))
+    setPage(0)
+  }
+
+  function clearFilters() {
+    setFilters(defaultFilters)
     setPage(0)
   }
 
@@ -131,20 +146,26 @@ export default function Events() {
         title="Audit Trail"
         description="Inspect every governed tool event with clear user, agent, session, and trace attribution."
         actions={
-          <div className="btn-group">
-            <button className="btn btn-outline" type="button" onClick={exportCSV}>
-              Export CSV
-            </button>
-            <button className="btn btn-outline" type="button" onClick={exportBundle}>
-              Export bundle
-            </button>
-          </div>
+          <details className="action-menu">
+            <summary className="btn btn-outline" aria-disabled={loading}>
+              Export ▾
+            </summary>
+            <div className="action-menu-list">
+              <button className="action-menu-item" type="button" onClick={exportCSV} disabled={loading}>
+                Export CSV
+              </button>
+              <button className="action-menu-item" type="button" onClick={exportBundle} disabled={loading}>
+                Export evidence bundle
+              </button>
+            </div>
+          </details>
         }
       />
 
       {error ? <InlineErrorState message={error} onRetry={() => void fetchEvents()} /> : null}
 
       <div className="filters-panel">
+        <div className="filters-panel-note">Audit filters use your local browser time. Export actions use the selected tenant scope.</div>
         <div className="filters-bar filters-bar-dense">
           <div className="form-group">
             <label>Tenant</label>
@@ -185,11 +206,24 @@ export default function Events() {
           </div>
           <div className="form-group form-group-small">
             <label>Risk min</label>
-            <input value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
+            <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
           </div>
           <div className="form-group form-group-small">
             <label>Risk max</label>
-            <input value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+            <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+          </div>
+          <div className="form-group">
+            <label>Since (local time)</label>
+            <input type="datetime-local" value={filters.since} onChange={e => updateFilter('since', e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>Until (local time)</label>
+            <input type="datetime-local" value={filters.until} onChange={e => updateFilter('until', e.target.value)} />
+          </div>
+          <div className="form-actions-row form-actions-row-end">
+            <button className="btn btn-outline btn-sm" type="button" onClick={clearFilters} disabled={!hasActiveFilters || loading}>
+              Clear filters
+            </button>
           </div>
         </div>
       </div>
@@ -213,7 +247,12 @@ export default function Events() {
             ) : events.length === 0 ? (
               <tr>
                 <td colSpan={7}>
-                  <EmptyState icon="▤" title="No audit events match these filters" description="Adjust the tenant, user, agent, or session filters to widen the search." />
+                  <EmptyState
+                    icon="▤"
+                    title={hasActiveFilters ? 'No audit events match these filters' : 'No audit events yet'}
+                    description={hasActiveFilters ? 'Adjust the tenant, user, agent, session, or time filters to widen the search.' : 'Tool calls will appear here once agents start sending governed runs through the gateway.'}
+                    action={hasActiveFilters ? <button className="btn btn-outline btn-sm" type="button" onClick={clearFilters}>Clear filters</button> : undefined}
+                  />
                 </td>
               </tr>
             ) : (
@@ -227,7 +266,7 @@ export default function Events() {
                   </td>
                   <td>
                     <div className="table-primary">{formatRequester(event.user_id, event.user_name, event.user_email, event.agent_id)}</div>
-                    <div className="table-subtext">Agent {event.agent_id || '(none)'}</div>
+                    <div className="table-subtext">Agent <span className="mono">{event.agent_id || '(none)'}</span></div>
                   </td>
                   <td>
                     <div className="table-primary">{event.tool}.{event.action}</div>
@@ -237,11 +276,11 @@ export default function Events() {
                     <span className={`badge badge-${decisionTone(event.decision)}`}>{event.decision}</span>
                   </td>
                   <td>
-                    <code>{shortID(event.tenant_id, 12)}</code>
+                    <span className="mono">{shortID(event.tenant_id, 12)}</span>
                   </td>
                   <td>
                     {event.session_id ? (
-                      <Link to={`/sessions/${encodeURIComponent(event.session_id)}${buildQuery({ tenant_id: event.tenant_id })}`}>{shortID(event.session_id)}</Link>
+                      <Link to={`/sessions/${encodeURIComponent(event.session_id)}${buildQuery({ tenant_id: event.tenant_id })}`} className="mono">{shortID(event.session_id)}</Link>
                     ) : (
                       '(none)'
                     )}

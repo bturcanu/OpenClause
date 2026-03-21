@@ -76,6 +76,17 @@ function toAPIClientError(status: number, fallback: string, payload: any) {
   })
 }
 
+export async function readJSONResponse(res: Response) {
+  const text = await res.text()
+  if (!text.trim()) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    if (res.ok) return {}
+    return { error: `${res.status} ${res.statusText}` }
+  }
+}
+
 async function apiFetch(path: string, options?: RequestInit) {
   const token = localStorage.getItem('oc_token');
   const headers: Record<string, string> = {
@@ -92,7 +103,7 @@ async function apiFetch(path: string, options?: RequestInit) {
     throw new Error('Unauthorized');
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({} as any));
+    const err = await readJSONResponse(res);
     throw toAPIClientError(res.status, res.statusText, err);
   }
   return res;
@@ -105,20 +116,20 @@ async function unauthFetch(path: string, body: unknown) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({} as any));
+    const err = await readJSONResponse(res);
     throw toAPIClientError(res.status, res.statusText, err);
   }
-  return res.json();
+  return readJSONResponse(res);
 }
 
 export const api = {
-  get: (path: string) => apiFetch(path).then(r => r.json()),
+  get: (path: string) => apiFetch(path).then(readJSONResponse),
   post: (path: string, body?: unknown) =>
-    apiFetch(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+    apiFetch(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }).then(readJSONResponse),
   put: (path: string, body?: unknown) =>
-    apiFetch(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+    apiFetch(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }).then(readJSONResponse),
   delete: (path: string) =>
-    apiFetch(path, { method: 'DELETE' }).then(r => r.status === 204 ? {} : r.json()),
+    apiFetch(path, { method: 'DELETE' }).then(r => r.status === 204 ? {} : readJSONResponse(r)),
   getBlob: (path: string) => apiFetch(path).then(r => r.blob()),
   unauthPost: unauthFetch,
 };

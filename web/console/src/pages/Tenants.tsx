@@ -1,6 +1,7 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
+import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, shortID } from '../ui'
 
 interface Tenant {
   id: string
@@ -18,11 +19,13 @@ export default function Tenants() {
   const [creating, setCreating] = useState(false)
 
   async function fetchTenants() {
+    setLoading(true)
+    setError('')
     try {
       const data = await api.get('/admin/tenants')
       setTenants(Array.isArray(data) ? data : data?.tenants || [])
     } catch (err: any) {
-      setError(err.message)
+      setError(err?.message || 'Failed to load tenants')
     } finally {
       setLoading(false)
     }
@@ -48,17 +51,22 @@ export default function Tenants() {
 
   return (
     <div>
-      <div className="flex-between">
-        <div className="page-header">
-          <h2>Tenants</h2>
-          <p>Manage organizations using OpenClause</p>
-        </div>
-        <button className="btn btn-primary" onClick={() => setShowForm(f => !f)}>
-          {showForm ? 'Cancel' : '+ New Tenant'}
-        </button>
-      </div>
+      <PageHeaderBlock
+        title="Tenants"
+        description="Manage organizations using OpenClause, review their current state, and jump straight into tenant-level operations."
+        actions={
+          <div className="btn-group">
+            <button className="btn btn-outline" type="button" onClick={() => void fetchTenants()} disabled={loading}>
+              Refresh
+            </button>
+            <button className="btn btn-primary" type="button" onClick={() => setShowForm(f => !f)}>
+              {showForm ? 'Cancel' : '+ New Tenant'}
+            </button>
+          </div>
+        }
+      />
 
-      {error && <div className="error-msg">{error}</div>}
+      {error ? <InlineErrorState message={error} onRetry={() => void fetchTenants()} /> : null}
 
       {showForm && (
         <div className="form-card">
@@ -90,14 +98,25 @@ export default function Tenants() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={5} className="loading">Loading…</td></tr>
+              <TableSkeleton columns={5} rows={6} />
             ) : tenants.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32, color: '#94a3b8' }}>No tenants yet</td></tr>
+              <tr>
+                <td colSpan={5} style={{ padding: 0 }}>
+                  <EmptyState
+                    icon="⊞"
+                    title="No tenants yet"
+                    description="Create the first tenant to start registering agents, API keys, approvers, and policy settings."
+                  />
+                </td>
+              </tr>
             ) : (
               tenants.map(t => (
                 <tr key={t.id}>
-                  <td><Link to={`/tenants/${t.id}`}>{t.name}</Link></td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{t.id.slice(0, 12)}</td>
+                  <td>
+                    <Link to={`/tenants/${t.id}`} className="table-primary">{t.name}</Link>
+                    <div className="table-subtext mono">{shortID(t.id, 12)}</div>
+                  </td>
+                  <td className="mono">{shortID(t.id, 12)}</td>
                   <td>
                     <span className={`badge ${t.status === 'active' ? 'badge-green' : 'badge-red'}`}>
                       {t.status}

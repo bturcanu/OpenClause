@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react'
 import { api } from '../api'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import { InlineErrorState } from '../ui'
 
 export default function PasswordReset() {
   const [searchParams] = useSearchParams()
@@ -54,7 +55,7 @@ export default function PasswordReset() {
         <p>Request a reset token, then confirm with the token.</p>
       </div>
 
-      {error && <div className="error-msg">{error}</div>}
+      {error ? <InlineErrorState message={error} /> : null}
 
       <div className="grid-2 mt-16">
         <div className="form-card">
@@ -63,6 +64,7 @@ export default function PasswordReset() {
             <div className="form-group">
               <label>Email</label>
               <input value={requestEmail} onChange={e => setRequestEmail(e.target.value)} required />
+              <div className="form-helper-text">In local development, reset links may also be logged by console-api if SMTP is not configured.</div>
             </div>
             <button className="btn btn-primary mt-8" type="submit" disabled={requestLoading}>
               {requestLoading ? 'Requesting…' : 'Request'}
@@ -76,7 +78,8 @@ export default function PasswordReset() {
           <form onSubmit={handleResetConfirm}>
             <div className="form-group">
               <label>Token</label>
-              <input value={confirmToken} onChange={e => setConfirmToken(e.target.value)} required />
+              <input className="mono" value={confirmToken} onChange={e => setConfirmToken(e.target.value)} required />
+              <div className="form-helper-text">If you came from a reset email, the token should already be populated from the link.</div>
             </div>
             <div className="form-group">
               <label>New Password</label>
@@ -89,7 +92,9 @@ export default function PasswordReset() {
           {confirmStatus && <div className="success-msg mt-8">{confirmStatus}</div>}
         </div>
       </div>
+      <div className="auth-page-links">
+        <Link to="/login" className="auth-page-link">Back to sign in</Link>
+      </div>
     </div>
   )
 }
-

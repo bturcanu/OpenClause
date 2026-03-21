@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, decisionTone, formatRequester, buildQuery, noneText, shortID } from '../ui'
+import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, buildQuery, copyText, decisionTone, formatRequester, noneText, shortID } from '../ui'
 
 type Approval = {
   id: string
@@ -46,12 +46,13 @@ export default function Approvals() {
       if (seq !== fetchSeq.current) return
       const nextApprovals = Array.isArray(data) ? data : data?.approvals || []
       setApprovals(nextApprovals)
+      setError('')
       if (approvalID) {
         const match = nextApprovals.find((approval: Approval) => approval.id === approvalID)
         if (match) setSelected(match)
       }
     } catch (err: any) {
-      if (!silent) setError(err.message)
+      if (seq === fetchSeq.current) setError(err?.message || (silent ? 'Approval queue refresh failed.' : 'Failed to load approvals'))
     } finally {
       if (!silent && seq === fetchSeq.current) setLoading(false)
     }
@@ -91,6 +92,19 @@ export default function Approvals() {
       setError(err.message)
     } finally {
       setActionLoading(null)
+    }
+  }
+
+  async function handleCopy(label: string, value?: string | null) {
+    const text = (value || '').trim()
+    if (!text) return
+    try {
+      await copyText(text)
+      setCopyStatus(`${label} copied`)
+      window.setTimeout(() => setCopyStatus(''), 1500)
+    } catch {
+      setCopyStatus('Copy failed')
+      window.setTimeout(() => setCopyStatus(''), 1500)
     }
   }
 
@@ -145,10 +159,10 @@ export default function Approvals() {
               approvals.map(approval => (
                 <tr key={approval.id}>
                   <td>
-                    <button className="link-button" onClick={() => setSelected(approval)} type="button">
+                    <button className="link-button table-primary" onClick={() => setSelected(approval)} type="button">
                       {shortID(approval.id)}
                     </button>
-                    <div className="table-subtext">Risk {approval.risk_score}</div>
+                    <div className="table-subtext">Risk {approval.risk_score} · Event {shortID(approval.event_id)}</div>
                   </td>
                   <td>
                     <div className="table-primary">{formatRequester(approval.user_id, approval.user_name, approval.user_email, approval.agent_id)}</div>
@@ -170,6 +184,9 @@ export default function Approvals() {
                   </td>
                   <td>
                     <div className="btn-group">
+                      <Link to={`/events/${approval.event_id}`} className="btn btn-outline btn-sm">
+                        Event
+                      </Link>
                       <button className="btn btn-success btn-sm" disabled={actionLoading === approval.id} onClick={() => handleAction(approval.id, 'approve')}>
                         Approve
                       </button>
@@ -193,54 +210,80 @@ export default function Approvals() {
                 <h3>Approval detail</h3>
                 <p className="table-subtext">{selected.tool}.{selected.action}</p>
               </div>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => setSelected(null)}>
-                Close
-              </button>
+              <div className="btn-group">
+                <Link to={`/events/${selected.event_id}`} className="btn btn-outline btn-sm">
+                  Open event
+                </Link>
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => setSelected(null)}>
+                  Close
+                </button>
+              </div>
             </div>
 
-            <div className="detail-row">
-              <div className="detail-label">Requested by</div>
-              <div className="detail-value">{formatRequester(selected.user_id, selected.user_name, selected.user_email, selected.agent_id)}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Approval reason</div>
-              <div className="detail-value">{selected.reason || 'Not recorded'}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Status</div>
-              <div className="detail-value">
-                <span className={`badge badge-${decisionTone(selected.status)}`}>{selected.status}</span>
+            <div className="detail-panel">
+              <h3>Approval context</h3>
+              <div className="identity-grid">
+                <div className="identity-card">
+                  <span className="meta-label">Requested by</span>
+                  <div className="identity-primary">{formatRequester(selected.user_id, selected.user_name, selected.user_email, selected.agent_id)}</div>
+                  <div className="identity-secondary">High-risk actions land here when policy requires a human decision before execution.</div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Approval ID</span>
+                  <div className="identity-copy-row">
+                    <code className="mono">{selected.id}</code>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Approval ID', selected.id)}>
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Event ID</span>
+                  <div className="identity-copy-row">
+                    <Link to={`/events/${selected.event_id}`} className="mono">{selected.event_id}</Link>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Event ID', selected.event_id)}>
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Session</span>
+                  <div className="identity-copy-row">
+                    {selected.session_id ? (
+                      <Link to={`/sessions/${encodeURIComponent(selected.session_id)}${buildQuery({ tenant_id: selected.tenant_id })}`} className="mono">
+                        {selected.session_id}
+                      </Link>
+                    ) : (
+                      <code className="mono">(none)</code>
+                    )}
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Session ID', selected.session_id)} disabled={!selected.session_id}>
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Trace</span>
+                  <div className="identity-copy-row">
+                    <code className="mono">{noneText(selected.trace_id)}</code>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Trace ID', selected.trace_id)} disabled={!selected.trace_id}>
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Status</span>
+                  <div className="identity-primary">
+                    <span className={`badge badge-${decisionTone(selected.status)}`}>{selected.status}</span>
+                  </div>
+                  <div className="identity-secondary">Created {formatDate(selected.created_at)} · Expires {formatDate(selected.expires_at)}</div>
+                </div>
               </div>
             </div>
-            <div className="detail-row">
-              <div className="detail-label">Event</div>
-              <div className="detail-value mono">
-                <Link to={`/events/${selected.event_id}`}>{selected.event_id}</Link>
-              </div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Session</div>
-              <div className="detail-value">
-                {selected.session_id ? (
-                  <Link to={`/sessions/${encodeURIComponent(selected.session_id)}${buildQuery({ tenant_id: selected.tenant_id })}`}>
-                    {selected.session_id}
-                  </Link>
-                ) : (
-                  '(none)'
-                )}
-              </div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Trace</div>
-              <div className="detail-value">{noneText(selected.trace_id)}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Created</div>
-              <div className="detail-value">{formatDate(selected.created_at)}</div>
-            </div>
-            <div className="detail-row">
-              <div className="detail-label">Expires</div>
-              <div className="detail-value">{formatDate(selected.expires_at)}</div>
+
+            <div className="session-callout">
+              <strong>Why this request needs review</strong>
+              <p>{selected.reason || 'A specific approval reason was not recorded, but policy flagged this action for human review.'}</p>
+              {selected.deny_reason ? <p className="table-subtext">Last deny reason: {selected.deny_reason}</p> : null}
             </div>
 
             <div className="btn-group mt-16">
@@ -266,7 +309,7 @@ export default function Approvals() {
                   <label>Gateway API key</label>
                   <input value={executeApiKey} onChange={e => setExecuteApiKey(e.target.value)} placeholder="sk-oc-..." style={{ fontFamily: 'monospace' }} />
                 </div>
-                <textarea readOnly value={executeCommand} className="code-textarea" />
+                <pre className="code-block">{executeCommand}</pre>
                 <div className="btn-group mt-16">
                   <button
                     className="btn btn-outline btn-sm"

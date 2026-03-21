@@ -1,6 +1,7 @@
 import { useEffect, useState, FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
+import { InlineErrorState } from '../ui'
 
 export default function InviteAccept() {
   const [searchParams] = useSearchParams()
@@ -53,19 +54,22 @@ export default function InviteAccept() {
         <p>Set your password to activate your account.</p>
       </div>
 
-      {error && <div className="error-msg">{error}</div>}
+      {error ? <InlineErrorState message={error} /> : null}
       {status && <div className="success-msg">{status}</div>}
       {acceptedRole === 'tenant_admin' && acceptedTenantId && (
-        <div style={{ marginTop: 12, fontSize: 13, color: '#475569' }}>
+        <div className="banner-note" style={{ marginTop: 12 }}>
+          <span>
           After logging in, jump to{' '}
           <Link to={`/tenants/${acceptedTenantId}?tab=api_keys`}>Tenant API Keys</Link>.
+          </span>
         </div>
       )}
 
       <form onSubmit={submit} className="form-card" style={{ maxWidth: 520 }}>
         <div className="form-group">
           <label>Token</label>
-          <input value={token} onChange={e => setToken(e.target.value)} required />
+          <input className="mono" value={token} onChange={e => setToken(e.target.value)} required />
+          <div className="form-helper-text">If you opened the invite from email, this field should already be filled in.</div>
         </div>
         <div className="form-group">
           <label>Password</label>
@@ -80,7 +84,9 @@ export default function InviteAccept() {
           {loading ? 'Accepting…' : 'Accept Invite'}
         </button>
       </form>
+      <div className="auth-page-links">
+        <Link to="/login" className="auth-page-link">Back to sign in</Link>
+      </div>
     </div>
   )
 }
-

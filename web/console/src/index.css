@@ -1167,6 +1167,29 @@ tbody tr:nth-child(even) .badge {
   padding: 48px 20px 72px;
 }
 
+.auth-page-links {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.auth-page-link {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-page-link:hover {
+  text-decoration: underline;
+}
+
+.login-card .error-msg-rich {
+  margin-bottom: 18px;
+}
+
 .grid-2,
 .form-grid-2 {
   display: grid;

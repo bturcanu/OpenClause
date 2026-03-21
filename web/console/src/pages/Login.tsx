@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { storeAuthSession } from '../api'
+import { readJSONResponse, storeAuthSession } from '../api'
+import { InlineErrorState } from '../ui'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -19,11 +20,10 @@ export default function Login() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       })
+      const data = await readJSONResponse(res)
       if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: 'Login failed' }))
         throw new Error(data.message || data.error || 'Login failed')
       }
-      const data = await res.json()
       storeAuthSession(data.token, data.session_id)
       navigate('/')
     } catch (err: any) {
@@ -38,7 +38,7 @@ export default function Login() {
       <div className="login-card">
         <h1>OpenClause</h1>
         <p className="login-subtitle">Sign in to the admin console</p>
-        {error && <div className="error-msg">{error}</div>}
+        {error ? <InlineErrorState message={error} /> : null}
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>Email</label>
@@ -65,8 +65,8 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-        <div style={{ textAlign: 'center', marginTop: 16 }}>
-          <Link to="/reset" style={{ fontSize: 13, color: '#64748b' }}>Forgot password?</Link>
+        <div className="auth-page-links">
+          <Link to="/reset" className="auth-page-link">Forgot password?</Link>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, formatDate } from '../api'
-import { InlineErrorState, PageHeaderBlock, TableSkeleton } from '../ui'
+import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, shortID } from '../ui'
 
 interface AlertRule {
   id: string
@@ -126,9 +126,14 @@ export default function Alerts() {
         title="Alerts"
         description="Monitor tenant alert rules, delivery status, and the retry state of triggered alert events."
         actions={(
-          <button className="btn btn-primary" onClick={() => setShowCreate(current => !current)}>
-            {showCreate ? 'Cancel' : '+ New Rule'}
-          </button>
+          <div className="btn-group">
+            <button className="btn btn-outline" type="button" onClick={() => void fetchAll()} disabled={loading}>
+              Refresh
+            </button>
+            <button className="btn btn-primary" type="button" onClick={() => setShowCreate(current => !current)}>
+              {showCreate ? 'Cancel' : '+ New Rule'}
+            </button>
+          </div>
         )}
       />
 
@@ -137,6 +142,7 @@ export default function Alerts() {
       {showCreate ? (
         <div className="form-card">
           <h3>Create Alert Rule</h3>
+          <p className="form-helper-text">Use global alerts to watch retry state and tenant-level deny spikes across the whole console.</p>
           <form onSubmit={handleCreate}>
             {(isPlatformAdmin || !scopedTenantID) && (
               <div className="form-group">
@@ -158,8 +164,8 @@ export default function Alerts() {
                 required
               />
             </div>
-            <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
-              <div className="form-group" style={{ minWidth: 180 }}>
+            <div className="form-grid alert-rule-form-grid">
+              <div className="form-group">
                 <label>N (deny count threshold)</label>
                 <input
                   type="number"
@@ -169,7 +175,7 @@ export default function Alerts() {
                   required
                 />
               </div>
-              <div className="form-group" style={{ minWidth: 220 }}>
+              <div className="form-group">
                 <label>M (window minutes)</label>
                 <input
                   type="number"
@@ -180,19 +186,22 @@ export default function Alerts() {
                 />
               </div>
               <div className="form-group">
-                <label>Enabled</label>
-                <div style={{ marginTop: 6 }}>
+                <label>Activation</label>
+                <label className="toggle-field">
                   <input
                     type="checkbox"
                     checked={form.enabled}
                     onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))}
                   />
-                </div>
+                  <span>{form.enabled ? 'Enabled immediately' : 'Save as disabled'}</span>
+                </label>
+              </div>
+              <div className="form-actions-row form-actions-row-end">
+                <button className="btn btn-primary" disabled={creating}>
+                  {creating ? 'Creating…' : 'Create Rule'}
+                </button>
               </div>
             </div>
-            <button className="btn btn-primary" disabled={creating}>
-              {creating ? 'Creating…' : 'Create Rule'}
-            </button>
           </form>
         </div>
       ) : null}
@@ -214,15 +223,25 @@ export default function Alerts() {
               <TableSkeleton columns={5} rows={5} />
             ) : rules.length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#746250' }}>
-                  No alert rules configured yet.
+                <td colSpan={5} style={{ padding: 0 }}>
+                  <EmptyState
+                    icon="⚠"
+                    title="No global alert rules yet"
+                    description="Create a deny_spike rule to watch for unusual policy-deny volume across one or more tenants."
+                  />
                 </td>
               </tr>
             ) : (
               rules.map(rule => (
                 <tr key={rule.id}>
-                  <td className="mono">{rule.tenant_id || '—'}</td>
-                  <td className="table-primary">{rule.name}</td>
+                  <td>
+                    <div className="table-primary mono">{shortID(rule.tenant_id || '—', 12)}</div>
+                    <div className="table-subtext">Tenant scope</div>
+                  </td>
+                  <td>
+                    <div className="table-primary">{rule.name}</div>
+                    <div className="table-subtext mono">{rule.kind}</div>
+                  </td>
                   <td className="mono">{rule.kind}</td>
                   <td>
                     {rule.enabled !== false
@@ -256,15 +275,25 @@ export default function Alerts() {
               <TableSkeleton columns={7} rows={6} />
             ) : events.length === 0 ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: '#746250' }}>
-                  No alert events yet.
+                <td colSpan={7} style={{ padding: 0 }}>
+                  <EmptyState
+                    icon="⌁"
+                    title="No alert events yet"
+                    description="Triggered deliveries and retry attempts will appear here as soon as a rule fires."
+                  />
                 </td>
               </tr>
             ) : (
               events.map(event => (
                 <tr key={event.id}>
-                  <td className="mono">{event.tenant_id || '—'}</td>
-                  <td className="table-primary mono">{event.rule_id || '—'}</td>
+                  <td>
+                    <div className="table-primary mono">{shortID(event.tenant_id || '—', 12)}</div>
+                    <div className="table-subtext">Tenant</div>
+                  </td>
+                  <td>
+                    <div className="table-primary mono">{shortID(event.rule_id || '—', 12)}</div>
+                    <div className="table-subtext">Rule ID</div>
+                  </td>
                   <td>
                     <span className={`badge ${
                       event.status === 'sent'
@@ -277,7 +306,7 @@ export default function Alerts() {
                     </span>
                     {event.delivered_at ? <div className="table-subtext">Delivered {formatDate(event.delivered_at)}</div> : null}
                     {!event.delivered_at && event.next_attempt_at ? (
-                      <div className="table-subtext">Retrying {formatDate(event.next_attempt_at)}</div>
+                      <div className="table-subtext">Retry scheduled {formatDate(event.next_attempt_at)}</div>
                     ) : null}
                   </td>
                   <td>

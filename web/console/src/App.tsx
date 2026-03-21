@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
-import { api, clearStoredAuth } from './api'
+import { api, clearStoredAuth, readJSONResponse } from './api'
 import { InlineErrorState } from './ui'
 import Login from './pages/Login'
 import Overview from './pages/Overview'
@@ -102,7 +102,7 @@ export default function App() {
           setSetupError('')
         }
         const resp = await fetch('/api/setup/status', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
-        const data = await resp.json().catch(() => ({} as any))
+        const data = await readJSONResponse(resp)
         if (cancelled) return
         if (!resp.ok) {
           setSetupError(data?.message || data?.error || 'Failed to check setup status. Verify console-api is reachable and try again.')
