@@ -25,70 +25,70 @@ Branch: `feature/console-sessions-polish`
   - Files: `pkg/console/store.go`, `cmd/console-api/main.go`, `cmd/console-api/session_handlers_test.go`
   - Screenshot: N/A (backend)
   - Verification: `go test ./cmd/console-api ./pkg/console -count=1`; `go test ./... -count=1`; `go test -race ./... -count=1`
-  - Commit: pending
+  - Commit: `c41b2de`
 
 - [x] Backend: add session detail/export endpoints and deterministic explanation summaries
   - Scope: timeline chain, approval/execution linkage, CSV/JSON export
   - Files: `pkg/console/store.go`, `cmd/console-api/main.go`, `cmd/console-api/session_handlers_test.go`
   - Screenshot: N/A (backend)
   - Verification: `go test ./cmd/console-api ./pkg/console -count=1`; `go test ./... -count=1`
-  - Commit: pending
+  - Commit: `c41b2de`
 
 - [x] UI: rebuild Sessions list/detail into operator workflow
   - Scope: filters, metrics, timeline chain, explain drawer, copy/export actions, empty/loading/error states
   - Files: `web/console/src/pages/Sessions.tsx`, `web/console/src/pages/SessionTimeline.tsx`, `web/console/src/ui.tsx`, `web/console/src/index.css`
   - Screenshot: not captured in terminal environment
   - Verification: `npm --prefix web/console run build`
-  - Commit: pending
+  - Commit: `a516ea6`
 
 - [x] Semantics: surface `user_id`, `agent_id`, `session_id`, `trace_id`, and label-based user identity consistently
   - Scope: Sessions, Approvals, Audit Trail, Event detail
   - Files: `pkg/console/store.go`, `pkg/approvals/types.go`, `pkg/approvals/store.go`, `cmd/console-api/main.go`, `web/console/src/pages/Approvals.tsx`, `web/console/src/pages/Events.tsx`, `web/console/src/pages/EventDetail.tsx`, `web/console/src/pages/Sessions.tsx`, `web/console/src/pages/SessionTimeline.tsx`
   - Screenshot: not captured in terminal environment
   - Verification: `go test ./cmd/console-api ./pkg/console ./pkg/approvals -count=1`; `npm --prefix web/console run build`
-  - Commit: pending
+  - Commit: `c41b2de`, `a516ea6`
 
 - [x] UI polish: shared product-grade states and consistency pass
   - Scope: layout, page headers, tables, badges, empty/error/loading states, copy tone
   - Files: `web/console/src/index.css`, `web/console/src/ui.tsx`, selected page files
   - Screenshot: not captured in terminal environment
   - Verification: `npm --prefix web/console run build`
-  - Commit: pending
+  - Commit: `a516ea6`
 
 - [x] Docs: document session/operator workflows and demo guidance
   - Scope: README + local testing guide
   - Files: `readme.md`, `docs/LOCAL_TESTING.md`
   - Screenshot: N/A
   - Verification: pending
-  - Commit: pending
+  - Commit: `a516ea6`
 
 - [x] Hardening: make session timeline joins defensive against duplicate related rows
   - Scope: stable timeline rows even if `tool_results` or `approval_requests` drift from one-row-per-event assumptions
   - Files: `pkg/console/store.go`, `pkg/console/store_test.go`
   - Screenshot: N/A (backend)
   - Verification: `go test ./pkg/console ./cmd/console-api -count=1`; `go test ./... -count=1`; `go test -race ./... -count=1`
-  - Commit: pending
+  - Commit: `d2c80f3`
 
 - [x] UX: recover from ambiguous platform-admin session lookups with tenant candidates
   - Scope: structured API error payload + Session detail tenant picker that retries with `tenant_id`
   - Files: `pkg/console/store.go`, `cmd/console-api/main.go`, `cmd/console-api/session_handlers_test.go`, `web/console/src/api.ts`, `web/console/src/pages/SessionTimeline.tsx`, `web/console/src/pages/Sessions.tsx`
   - Screenshot: not captured in terminal environment
   - Verification: `go test ./pkg/console ./cmd/console-api -count=1`; `npm --prefix web/console run build`; live curl ambiguity smoke
-  - Commit: pending
+  - Commit: `d2c80f3`
 
 - [x] UI sanity: contrast/readability pass for the polished theme
   - Scope: sidebar links, badge readability over zebra rows, and code block containment on smaller screens
   - Files: `web/console/src/index.css`
   - Screenshot: not captured in terminal environment
   - Verification: `npm --prefix web/console run build`
-  - Commit: pending
+  - Commit: `d2c80f3`
 
 - [x] Demo: prove Sessions and attribution in a fresh run
   - Scope: demo payloads include `session_id`, `user_id`, `trace_id`, `labels.user_name`, and `labels.user_email`, plus a Sessions API confirmation step
   - Files: `scripts/demo.sh`, `readme.md`, `docs/LOCAL_TESTING.md`
   - Screenshot: N/A
   - Verification: `./scripts/dev.sh`; `./scripts/demo.sh`
-  - Commit: pending
+  - Commit: `d2c80f3`
 
 ## Findings
 

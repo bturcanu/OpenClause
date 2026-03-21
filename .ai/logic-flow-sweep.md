@@ -52,6 +52,7 @@ Status: Complete
 ### Follow-up Notes
 
 - Initial direct localhost curl smoke failed inside the sandbox with `curl: (7) Failed to connect to localhost...`; this was an environment restriction, not a repo bug. Rerunning the same smoke outside the sandbox succeeded and produced the expected ambiguity payload.
+- Follow-up implementation commit: `d2c80f3` (`fix(console): harden sessions timeline and tenant recovery`)
 
 ## Flow Map
 
