@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/console"
 )
@@ -14,8 +15,10 @@ import (
 // AuthLoginInput represents the credentials submitted to the console login endpoint.
 // OIDC will map its user claims into the same semantic inputs/outputs.
 type AuthLoginInput struct {
-	Email    string
-	Password string
+	Email     string
+	Password  string
+	UserAgent string
+	ClientIP  string
 }
 
 type AuthUser struct {
@@ -26,8 +29,9 @@ type AuthUser struct {
 }
 
 type AuthLoginResponse struct {
-	Token string   `json:"token"`
-	User  AuthUser `json:"user"`
+	Token     string   `json:"token"`
+	SessionID string   `json:"session_id,omitempty"`
+	User      AuthUser `json:"user"`
 }
 
 // AuthProvider is the seam that allows swapping authentication mechanisms
@@ -59,10 +63,15 @@ type UserAuthenticator interface {
 	AuthenticateUser(ctx context.Context, email, password string) (*console.User, []console.UserRole, error)
 }
 
+type AuthSessionIssuer interface {
+	CreateAuthSession(ctx context.Context, in console.AuthSessionCreateInput) (*console.AuthSession, error)
+}
+
 type EmailPasswordAuthProvider struct {
-	log    *slog.Logger
-	store  UserAuthenticator
-	jwtCfg console.JWTConfig
+	log      *slog.Logger
+	store    UserAuthenticator
+	sessions AuthSessionIssuer
+	jwtCfg   console.JWTConfig
 	// TODO: add issuerID to JWT claims when multi-issuer OIDC is needed
 }
 
@@ -93,9 +102,31 @@ func (p *EmailPasswordAuthProvider) Login(ctx context.Context, in AuthLoginInput
 	if scopedTenant == "" && !containsRole(roleNames, "platform_admin") {
 		return nil, authProviderError(http.StatusForbidden, "user has no tenant assignment")
 	}
+	if p.sessions == nil {
+		return nil, authProviderError(http.StatusInternalServerError, "auth session store not configured")
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Duration(p.jwtCfg.ExpiryHours) * time.Hour)
+	session, err := p.sessions.CreateAuthSession(ctx, console.AuthSessionCreateInput{
+		UserID:    user.ID,
+		Email:     user.Email,
+		Name:      user.Name,
+		TenantID:  scopedTenant,
+		Roles:     roleNames,
+		UserAgent: in.UserAgent,
+		ClientIP:  in.ClientIP,
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		if p.log != nil {
+			p.log.Error("create auth session failed", "error", err)
+		}
+		return nil, authProviderError(http.StatusInternalServerError, "failed to create auth session")
+	}
 
 	token, err := console.GenerateToken(p.jwtCfg, console.JWTClaims{
 		Sub:    user.ID,
+		SID:    session.ID,
 		Email:  user.Email,
 		Name:   user.Name,
 		Roles:  roleNames,
@@ -109,7 +140,8 @@ func (p *EmailPasswordAuthProvider) Login(ctx context.Context, in AuthLoginInput
 	}
 
 	return &AuthLoginResponse{
-		Token: token,
+		Token:     token,
+		SessionID: session.ID,
 		User: AuthUser{
 			ID:    user.ID,
 			Email: user.Email,
@@ -120,9 +152,10 @@ func (p *EmailPasswordAuthProvider) Login(ctx context.Context, in AuthLoginInput
 }
 
 type AuthProviderDeps struct {
-	log    *slog.Logger
-	store  UserAuthenticator
-	jwtCfg console.JWTConfig
+	log      *slog.Logger
+	store    UserAuthenticator
+	sessions AuthSessionIssuer
+	jwtCfg   console.JWTConfig
 }
 
 func authProviderFromEnv(deps AuthProviderDeps) (AuthProvider, error) {
@@ -138,12 +171,12 @@ func newAuthProvider(name string, deps AuthProviderDeps) (AuthProvider, error) {
 	switch name {
 	case "email_password", "password", "local":
 		return &EmailPasswordAuthProvider{
-			log:    deps.log,
-			store:  deps.store,
-			jwtCfg: deps.jwtCfg,
+			log:      deps.log,
+			store:    deps.store,
+			sessions: deps.sessions,
+			jwtCfg:   deps.jwtCfg,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown auth provider %q", name)
 	}
 }
-

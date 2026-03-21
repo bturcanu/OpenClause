@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -99,9 +100,10 @@ func main() {
 	allowedOrigins := parseCORSOrigins(os.Getenv("CONSOLE_CORS_ORIGINS"))
 
 	authProvider, err := authProviderFromEnv(AuthProviderDeps{
-		log:    log,
-		store:  store,
-		jwtCfg: jwtCfg,
+		log:      log,
+		store:    store,
+		sessions: store,
+		jwtCfg:   jwtCfg,
 	})
 	if err != nil {
 		log.Error("auth provider init failed", "error", err)
@@ -120,6 +122,7 @@ func main() {
 		approverAuth:            approverAuth,
 		approverAuthSource:      allowlistSource,
 		authProvider:            authProvider,
+		authSessionStore:        store,
 		gatewayURL:              config.EnvOr("GATEWAY_URL", defaultGatewayURL),
 		httpClient:              &http.Client{Timeout: 10 * time.Second},
 		devLogRawTokens:         devLogRawTokens,
@@ -167,6 +170,8 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(api.jwtAuthMiddleware)
 
+		r.Post("/auth/logout", api.handleLogout)
+
 		r.Get("/admin/analytics/overview", api.handleAnalyticsOverview)
 		r.Get("/admin/analytics/timeseries", api.handleAnalyticsTimeseries)
 		r.Get("/admin/tenants/{tenant_id}/analytics/summary", api.requireTenantRole("tenant_admin", api.handleTenantAnalyticsSummary))
@@ -179,6 +184,8 @@ func main() {
 
 		r.Post("/admin/invites", api.handleCreateInvite)
 		r.Get("/admin/invites", api.handleListInvites)
+		r.Get("/admin/auth-sessions", api.requireRole("tenant_admin", api.handleListAuthSessions))
+		r.Post("/admin/auth-sessions/{session_id}/revoke", api.requireRole("tenant_admin", api.handleRevokeAuthSession))
 
 		r.Post("/admin/tenants", api.requireRole("platform_admin", api.handleCreateTenant))
 		r.Get("/admin/tenants", api.handleListTenants)
@@ -277,6 +284,7 @@ type ConsoleAPI struct {
 	alertsStore             alertsStore
 	notificationConfigStore notificationConfigStore
 	exportStore             exportEventsStore
+	authSessionStore        authSessionStore
 	jwtCfg                  console.JWTConfig
 	authProvider            AuthProvider
 	approvalsStore          *approvals.Store
@@ -312,6 +320,13 @@ type analyticsStore interface {
 	GetTenantAnalyticsSummary(ctx context.Context, tenantID string, since time.Time, bucketMinutes int, topAgents int) (*console.TenantAnalyticsSummary, error)
 }
 
+type authSessionStore interface {
+	TouchAuthSession(ctx context.Context, sessionID, userID string, seenAt time.Time) (bool, error)
+	ListAuthSessions(ctx context.Context, tenantID, userID string, limit, offset int) ([]console.AuthSession, error)
+	ListActiveAuthSessionCounts(ctx context.Context, tenantID string) (map[string]int64, error)
+	RevokeAuthSession(ctx context.Context, sessionID, tenantID, revokedBy string, now time.Time) (bool, error)
+}
+
 type claimsKey struct{}
 
 func (api *ConsoleAPI) jwtAuthMiddleware(next http.Handler) http.Handler {
@@ -326,6 +341,18 @@ func (api *ConsoleAPI) jwtAuthMiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid token: "+err.Error())
 			return
+		}
+		if claims.SID != "" && api.authSessionStore != nil {
+			active, err := api.authSessionStore.TouchAuthSession(r.Context(), claims.SID, claims.Sub, time.Now().UTC())
+			if err != nil {
+				api.log.Error("touch auth session failed", "error", err, "session_id", claims.SID, "user_id", claims.Sub)
+				writeError(w, http.StatusInternalServerError, "failed to validate session")
+				return
+			}
+			if !active {
+				writeError(w, http.StatusUnauthorized, "session expired or revoked")
+				return
+			}
 		}
 		ctx := context.WithValue(r.Context(), claimsKey{}, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -443,8 +470,10 @@ func (api *ConsoleAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := api.authProvider.Login(r.Context(), AuthLoginInput{
-		Email:    strings.TrimSpace(in.Email),
-		Password: in.Password,
+		Email:     strings.TrimSpace(in.Email),
+		Password:  in.Password,
+		UserAgent: r.UserAgent(),
+		ClientIP:  requestClientIP(r),
 	})
 	if err != nil {
 		if ae, ok := err.(*AuthProviderError); ok {
@@ -456,6 +485,25 @@ func (api *ConsoleAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (api *ConsoleAPI) handleLogout(w http.ResponseWriter, r *http.Request) {
+	claims := claimsFromCtx(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.SID == "" || api.authSessionStore == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+		return
+	}
+	_, err := api.authSessionStore.RevokeAuthSession(r.Context(), claims.SID, "", claims.Sub, time.Now().UTC())
+	if err != nil {
+		api.log.Error("logout revoke session failed", "error", err, "session_id", claims.SID, "user_id", claims.Sub)
+		writeError(w, http.StatusInternalServerError, "failed to log out")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -480,13 +528,14 @@ func validateRoleName(role string) bool {
 }
 
 type userWithRoles struct {
-	ID          string             `json:"id"`
-	Email       string             `json:"email"`
-	Name        string             `json:"name"`
-	SlackUserID *string            `json:"slack_user_id,omitempty"`
-	Status      string             `json:"status"`
-	CreatedAt   time.Time          `json:"created_at"`
-	Roles       []console.UserRole `json:"roles"`
+	ID                 string             `json:"id"`
+	Email              string             `json:"email"`
+	Name               string             `json:"name"`
+	SlackUserID        *string            `json:"slack_user_id,omitempty"`
+	Status             string             `json:"status"`
+	CreatedAt          time.Time          `json:"created_at"`
+	Roles              []console.UserRole `json:"roles"`
+	ActiveSessionCount int64              `json:"active_session_count,omitempty"`
 }
 
 func (api *ConsoleAPI) handleListUsers(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +563,17 @@ func (api *ConsoleAPI) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		tenantID = &scope
 	}
 
+	var err error
+	sessionCounts := make(map[string]int64)
+	if api.authSessionStore != nil && (hasRole(claims, "platform_admin") || hasRole(claims, "tenant_admin")) {
+		sessionCounts, err = api.authSessionStore.ListActiveAuthSessionCounts(r.Context(), scope)
+		if err != nil {
+			api.log.Error("list auth session counts failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to list users")
+			return
+		}
+	}
+
 	users, err := api.store.ListUsers(r.Context(), tenantID, emailQuery, limit, offset)
 	if err != nil {
 		api.log.Error("list users failed", "error", err)
@@ -530,13 +590,14 @@ func (api *ConsoleAPI) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = append(out, userWithRoles{
-			ID:          u.ID,
-			Email:       u.Email,
-			Name:        u.Name,
-			SlackUserID: u.SlackUserID,
-			Status:      u.Status,
-			CreatedAt:   u.CreatedAt,
-			Roles:       roles,
+			ID:                 u.ID,
+			Email:              u.Email,
+			Name:               u.Name,
+			SlackUserID:        u.SlackUserID,
+			Status:             u.Status,
+			CreatedAt:          u.CreatedAt,
+			Roles:              roles,
+			ActiveSessionCount: sessionCounts[u.ID],
 		})
 	}
 
@@ -1999,6 +2060,76 @@ func (api *ConsoleAPI) handleListSessions(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, sessions)
 }
 
+func (api *ConsoleAPI) handleListAuthSessions(w http.ResponseWriter, r *http.Request) {
+	claims := claimsFromCtx(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if api.authSessionStore == nil {
+		writeError(w, http.StatusInternalServerError, "auth session store not configured")
+		return
+	}
+	scope := tenantScope(claims)
+	if scope == tenantDenySentinel {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	tenantID := scope
+	if hasRole(claims, "platform_admin") {
+		tenantID = strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	}
+
+	limit, offset := parsePagination(r)
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	sessions, err := api.authSessionStore.ListAuthSessions(r.Context(), tenantID, userID, limit, offset)
+	if err != nil {
+		api.log.Error("list auth sessions failed", "error", err, "tenant_id", tenantID, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "failed to list auth sessions")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+func (api *ConsoleAPI) handleRevokeAuthSession(w http.ResponseWriter, r *http.Request) {
+	claims := claimsFromCtx(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if api.authSessionStore == nil {
+		writeError(w, http.StatusInternalServerError, "auth session store not configured")
+		return
+	}
+	sessionID := chi.URLParam(r, "session_id")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id required")
+		return
+	}
+
+	tenantID := ""
+	if !hasRole(claims, "platform_admin") {
+		tenantID = tenantScope(claims)
+		if tenantID == tenantDenySentinel {
+			writeError(w, http.StatusForbidden, "insufficient permissions")
+			return
+		}
+	}
+
+	revoked, err := api.authSessionStore.RevokeAuthSession(r.Context(), sessionID, tenantID, claims.Sub, time.Now().UTC())
+	if err != nil {
+		api.log.Error("revoke auth session failed", "error", err, "session_id", sessionID, "tenant_id", tenantID)
+		writeError(w, http.StatusInternalServerError, "failed to revoke session")
+		return
+	}
+	if !revoked {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
 func (api *ConsoleAPI) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
 	claims := claimsFromCtx(r.Context())
@@ -2290,6 +2421,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 		}
 	}
 	apiErr.WriteJSON(w)
+}
+
+func requestClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func parsePagination(r *http.Request) (limit, offset int) {

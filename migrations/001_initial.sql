@@ -99,7 +99,33 @@ CREATE TABLE IF NOT EXISTS password_resets (
 
 CREATE INDEX IF NOT EXISTS idx_password_resets_email_expires ON password_resets(email, expires_at);
 
--- ── Sessions ────────────────────────────────────────────────────────────────
+-- ── Auth sessions (console JWT sessions) ────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id           TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL REFERENCES users(id),
+    email        TEXT NOT NULL,
+    name         TEXT NOT NULL DEFAULT '',
+    tenant_id    TEXT NOT NULL DEFAULT '',
+    roles        JSONB NOT NULL DEFAULT '[]',
+    user_agent   TEXT NOT NULL DEFAULT '',
+    client_ip    TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    revoked_at   TIMESTAMPTZ,
+    revoked_by   TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_active
+    ON auth_sessions(user_id, last_seen_at DESC)
+    WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_tenant_active
+    ON auth_sessions(tenant_id, last_seen_at DESC)
+    WHERE revoked_at IS NULL;
+
+-- ── Sessions (agent interaction timelines) ──────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,

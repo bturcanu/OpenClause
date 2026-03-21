@@ -37,8 +37,9 @@ type TenantStatusChecker interface {
 // when the key comes from the env-based store.
 func APIKeyAuth(keys KeyLookup, tenantChecker TenantStatusChecker) func(http.Handler) http.Handler {
 	skipPaths := map[string]bool{
-		"/healthz": true,
-		"/readyz":  true,
+		"/healthz":       true,
+		"/readyz":        true,
+		"/v1/connectors": true,
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

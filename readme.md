@@ -112,6 +112,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 - [Go 1.25+](https://go.dev/dl/) (for local development)
 - [Node.js 22+](https://nodejs.org/) (for console UI development)
 - [OPA CLI](https://www.openpolicyagent.org/docs/latest/#running-opa) (for policy tests)
+- Java 11+ and Python 3.10+ if you plan to run the Java/Python SDK tests locally
 
 ### 1. Clone and configure
 
@@ -146,6 +147,8 @@ curl -s -X POST http://localhost:8090/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"<platform-admin-email>","password":"<platform-admin-password>"}' | jq
 ```
+
+The login response includes both `token` and `session_id`. New console JWTs are tracked server-side so admins can revoke active logins from the Users page, and `POST /auth/logout` revokes the current login session on sign-out.
 
 ### 5. Create a tenant, agent, and API key
 
@@ -265,16 +268,16 @@ The admin console (http://localhost:3000) provides:
 
 | Page | Description |
 |---|---|
-| **Overview** | Decision analytics — allow/deny/approve counts, risk trends, pending approvals |
+| **Overview** | Decision analytics — allow/deny/approve counts, decision timeseries, pending approvals |
 | **Approvals** | Pending approval queue with approve/deny actions and detail view |
 | **Audit Trail** | Searchable event list with filters (tenant, tool, action, decision) + event detail |
 | **Tenants** | Create/list/disable tenants, view config and usage |
 | **Tenant Detail** | Manage agents, API keys, tenant-scoped approvers, analytics, alerts, and notification routing |
-| **Sessions** | Session list with event counts, click into timeline view |
+| **Sessions** | Agent interaction session timelines with event counts and per-session history |
 | **Policies** | Tenant rule builder, policy versions, diff/rollback, and policy simulation |
 | **Alerts** | Tenant alert rules (`deny_spike`) and alert events |
-| **Connectors** | Installed connectors with supported actions |
-| **Users** | Invite users, assign/remove roles, and handle invite acceptance + password reset flows |
+| **Connectors** | Registered connector catalog with supported actions |
+| **Users** | Manage console users, roles, invite tokens, and active console login sessions; invite acceptance and password reset happen on dedicated public routes |
 
 ### Console Auth
 
@@ -287,13 +290,15 @@ The admin console (http://localhost:3000) provides:
 
 The console UI includes token-based pages for invite acceptance and password reset (`/invite/accept` and `/reset`).
 
-Admin-side, users/invites/password resets are created via the console API (`POST /admin/invites`, `POST /auth/reset/request`), and the token is consumed by `POST /auth/invite/accept` / `POST /auth/reset/confirm`.
+Admin-side invites are created from the Users page via `POST /admin/invites`. The same Users page shows active console login sessions and lets tenant admins or platform admins revoke them immediately. Password resets are self-service via `POST /auth/reset/request`, and both flows are completed by `POST /auth/invite/accept` / `POST /auth/reset/confirm`. In local development, console-api can log raw invite/reset URLs unless `CONSOLE_DEV_LOG_RAW_TOKENS=false`.
 
 ---
 
 ## API Reference
 
-Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
+OpenAPI 3.1 spec for the core gateway + approvals surface: [`api/openapi.yaml`](api/openapi.yaml)
+
+The console-api surface has outgrown the generated spec, so the current admin/auth endpoints are documented below.
 
 ### Gateway (`:8080`)
 
@@ -306,17 +311,24 @@ Full OpenAPI 3.1 spec: [`api/openapi.yaml`](api/openapi.yaml)
 | `GET` | `/healthz` | Liveness probe |
 | `GET` | `/readyz` | Readiness probe (checks Postgres) |
 
+Gateway auth notes:
+- `POST /v1/toolcalls`, `GET /v1/toolcalls/{event_id}`, and `POST /v1/toolcalls/{event_id}/execute` require an API key via `X-API-Key` or `Authorization: Bearer <key>`.
+- `/healthz`, `/readyz`, and `/v1/connectors` are unauthenticated.
+
 Prometheus metrics are served on a **separate internal-only listener** (default `127.0.0.1:9090/metrics`, see `METRICS_ADDR`).
 
 ### Console API (`:8090`)
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
+| `GET` | `/healthz` | — | Liveness probe |
+| `GET` | `/readyz` | — | Readiness probe (checks Postgres) |
 | `GET` | `/setup/status` | — | First-run setup status (used by console UI wizard) |
 | `POST` | `/setup/initialize` | — | Initialize console bootstrap (creates initial platform admin + first tenant; only works when DB has zero users) |
 | `POST` | `/auth/login` | — | Authenticate with email/password, receive JWT |
+| `POST` | `/auth/logout` | JWT | Revoke the current console login session and sign out |
 | `POST` | `/auth/invite/accept` | — (token-based) | Accept an invite token (creates user + assigns role/tenant scope) |
-| `POST` | `/auth/reset/request` | — (token-based) | Request a password reset token |
+| `POST` | `/auth/reset/request` | — | Request a password reset token |
 | `POST` | `/auth/reset/confirm` | — (token-based) | Confirm password reset token and set a new password |
 | `GET` | `/admin/users` | `platform_admin` or `tenant_admin` | List users (scoped by caller's tenant scope) |
 | `POST` | `/admin/users` | `platform_admin` or `tenant_admin` | Create a user |
@@ -324,54 +336,69 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `DELETE` | `/admin/users/{id}/roles/{role_id}` | `platform_admin` or `tenant_admin` | Remove a role assignment from a user |
 | `POST` | `/admin/invites` | `platform_admin` or `tenant_admin` | Create an invite token (email + tenant + role) |
 | `GET` | `/admin/invites` | `platform_admin` or `tenant_admin` | List pending invites |
-| `GET` | `/admin/analytics/overview` | JWT | Decision counts, pending approvals, active tenants/agents |
-| `GET` | `/admin/analytics/timeseries` | JWT | Time-bucketed decision counts |
-| `GET` | `/admin/tenants/{tenant_id}/analytics/summary` | JWT (`tenant_admin`) | Tenant-scoped analytics summary for dashboards (range, buckets, heatmap, onboarding) |
-| `GET/PUT` | `/admin/tenants/{tenant_id}/notification-config` | JWT (`tenant_admin`) | Get/update per-tenant notification routing config |
+| `GET` | `/admin/auth-sessions` | `platform_admin` or `tenant_admin` | List active console login sessions (optionally filter by `user_id`) |
+| `POST` | `/admin/auth-sessions/{session_id}/revoke` | `platform_admin` or `tenant_admin` | Revoke an active console login session |
+| `GET` | `/admin/analytics/overview` | JWT (scoped by role) | Decision counts, pending approvals, active tenants/agents |
+| `GET` | `/admin/analytics/timeseries` | JWT (scoped by role) | Time-bucketed decision counts |
+| `GET` | `/admin/tenants/{tenant_id}/analytics/summary` | `tenant_admin` or `platform_admin` | Tenant-scoped analytics summary for dashboards (range, buckets, heatmap, onboarding) |
 | `POST` | `/admin/tenants` | platform_admin | Create tenant |
 | `GET` | `/admin/tenants` | JWT | List tenants (scoped by role) |
-| `GET` | `/admin/tenants/{id}` | JWT | Get tenant detail |
-| `POST` | `/admin/tenants/{id}/agents` | tenant_admin | Register agent |
-| `GET` | `/admin/tenants/{id}/agents` | JWT | List agents |
-| `POST` | `/admin/tenants/{id}/apikeys` | tenant_admin | Create API key (returns raw key once) |
-| `GET` | `/admin/tenants/{id}/apikeys` | JWT | List API keys (never returns hashes) |
-| `POST` | `/admin/tenants/{id}/apikeys/{key_id}/revoke` | tenant_admin | Revoke API key |
-| `POST` | `/admin/tenants/{id}/apikeys/rotate` | tenant_admin | Rotate key (create new, optional primary switch, optional revoke old primary) |
-| `GET` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | List tenant-scoped approvers |
-| `POST` | `/admin/tenants/{tenant_id}/approvers` | tenant_admin | Upsert a tenant-scoped approver |
-| `DELETE` | `/admin/tenants/{tenant_id}/approvers/{user_id}` | tenant_admin | Remove a tenant-scoped approver |
+| `GET` | `/admin/tenants/{tenant_id}` | JWT | Get tenant detail |
+| `POST` | `/admin/tenants/{tenant_id}/status` | platform_admin | Set tenant status to `active` or `disabled` |
+| `POST` | `/admin/tenants/{tenant_id}/agents` | `tenant_admin` or `platform_admin` | Register agent |
+| `GET` | `/admin/tenants/{tenant_id}/agents` | JWT (tenant access) | List agents |
+| `POST` | `/admin/tenants/{tenant_id}/apikeys` | `tenant_admin` or `platform_admin` | Create API key (returns raw key once) |
+| `GET` | `/admin/tenants/{tenant_id}/apikeys` | JWT (tenant access) | List API keys (never returns hashes) |
+| `POST` | `/admin/tenants/{tenant_id}/apikeys/{key_id}/revoke` | `tenant_admin` or `platform_admin` | Revoke API key |
+| `POST` | `/admin/tenants/{tenant_id}/apikeys/rotate` | `tenant_admin` or `platform_admin` | Rotate key (create new, optional primary switch, optional revoke old primary) |
+| `GET` | `/admin/tenants/{tenant_id}/notification-config` | `tenant_admin` or `platform_admin` | Get per-tenant notification routing config |
+| `PUT` | `/admin/tenants/{tenant_id}/notification-config` | `tenant_admin` or `platform_admin` | Update per-tenant notification routing config |
+| `GET` | `/admin/tenants/{tenant_id}/approvers` | `tenant_admin` or `platform_admin` | List tenant-scoped approvers |
+| `POST` | `/admin/tenants/{tenant_id}/approvers` | `tenant_admin` or `platform_admin` | Upsert a tenant-scoped approver |
+| `DELETE` | `/admin/tenants/{tenant_id}/approvers/{user_id}` | `tenant_admin` or `platform_admin` | Remove a tenant-scoped approver |
 | `GET` | `/admin/approvals/pending` | JWT | List pending approvals |
-| `POST` | `/admin/approvals/{id}/approve` | approver | Approve request (transactional with grant) |
-| `POST` | `/admin/approvals/{id}/deny` | approver | Deny request |
+| `POST` | `/admin/approvals/{id}/approve` | `approver` or `platform_admin` | Approve request (transactional with grant) |
+| `POST` | `/admin/approvals/{id}/deny` | `approver` or `platform_admin` | Deny request |
 | `GET` | `/admin/events` | JWT | List events (filterable) |
-| `GET` | `/admin/events/{id}` | JWT | Event detail with policy result + hash chain |
+| `GET` | `/admin/events/{event_id}` | JWT | Event detail with policy result + hash chain |
 | `GET` | `/admin/events/export/csv` | JWT | Export events as CSV |
 | `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON |
-| `GET` | `/admin/sessions` | JWT | List sessions with event counts |
+| `GET` | `/admin/reports/activity` | JWT | Legacy alias for `/admin/events` |
+| `GET` | `/admin/reports/export/csv` | JWT | Legacy alias for `/admin/events/export/csv` |
+| `GET` | `/admin/sessions` | JWT | List agent interaction sessions with event counts |
 | `GET` | `/admin/connectors` | JWT | List the full connector registry for the console (works before any toolcalls) |
-| `GET` | `/admin/sessions/{id}/timeline` | JWT | Session event timeline |
-| `GET/POST` | `/admin/policy/versions` | JWT | List/create policy versions |
+| `GET` | `/v1/connectors` | JWT | Legacy console-api alias for `/admin/connectors` |
+| `GET` | `/admin/sessions/{session_id}/timeline` | JWT | Agent session event timeline |
+| `GET` | `/admin/policy/versions` | JWT | List policy versions |
+| `POST` | `/admin/policy/versions` | `tenant_admin` or `platform_admin` | Create policy version |
 | `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
-| `GET/PUT` | `/admin/tenants/{tenant_id}/policy/config` | JWT (`tenant_admin`) | Get/update tenant rule-builder policy config |
-| `GET/POST` | `/admin/tenants/{tenant_id}/policy/versions` | JWT (`tenant_admin`) | List/create tenant policy config snapshots |
-| `POST` | `/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback` | JWT (`tenant_admin`) | Roll back tenant policy config to a previous version |
-| `POST` | `/admin/tenants/{tenant_id}/policy/simulate` | JWT (`tenant_admin`) | Simulate decision using tenant policy builder config |
-| `GET/POST/PUT/DELETE` | `/admin/tenants/{tenant_id}/alerts/rules` | JWT (`tenant_admin`) | CRUD alert rules (currently `deny_spike`) |
-| `GET` | `/admin/tenants/{tenant_id}/alerts/events` | JWT (`tenant_admin`) | List alert events for a tenant |
-| `GET/POST` | `/admin/alerts/rules` | JWT | Legacy global alert rules (preserved for backward compatibility) |
-| `GET` | `/admin/alerts/events` | JWT | Legacy global alert events (preserved for backward compatibility) |
+| `GET` | `/admin/tenants/{tenant_id}/policy/config` | JWT (tenant access) | Get tenant rule-builder policy config |
+| `PUT` | `/admin/tenants/{tenant_id}/policy/config` | `tenant_admin` or `platform_admin` | Update tenant rule-builder policy config |
+| `GET` | `/admin/tenants/{tenant_id}/policy/versions` | JWT (tenant access) | List tenant policy config snapshots |
+| `POST` | `/admin/tenants/{tenant_id}/policy/versions` | `tenant_admin` or `platform_admin` | Create tenant policy config snapshot |
+| `POST` | `/admin/tenants/{tenant_id}/policy/versions/{version_id}/rollback` | `tenant_admin` or `platform_admin` | Roll back tenant policy config to a previous version |
+| `POST` | `/admin/tenants/{tenant_id}/policy/simulate` | JWT (tenant access) | Simulate decision using tenant policy builder config |
+| `GET` | `/admin/tenants/{tenant_id}/alerts/rules` | `tenant_admin` or `platform_admin` | List alert rules (currently `deny_spike`) |
+| `POST` | `/admin/tenants/{tenant_id}/alerts/rules` | `tenant_admin` or `platform_admin` | Create alert rule |
+| `PUT` | `/admin/tenants/{tenant_id}/alerts/rules/{rule_id}` | `tenant_admin` or `platform_admin` | Update alert rule |
+| `DELETE` | `/admin/tenants/{tenant_id}/alerts/rules/{rule_id}` | `tenant_admin` or `platform_admin` | Delete alert rule |
+| `GET` | `/admin/tenants/{tenant_id}/alerts/events` | `tenant_admin` or `platform_admin` | List alert events for a tenant |
+| `GET` | `/admin/alerts/rules` | JWT | Legacy global alert rule listing (scoped by caller role/tenant) |
+| `POST` | `/admin/alerts/rules` | `tenant_admin` or `platform_admin` | Legacy/global alert rule creation endpoint |
+| `GET` | `/admin/alerts/events` | JWT | Legacy global alert event listing (scoped by caller role/tenant) |
 
 ### Approvals (`:8081`)
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/v1/approvals/requests` | Create an approval request (internal) |
-| `GET` | `/v1/approvals/requests/{id}` | Get approval request details |
-| `POST` | `/v1/approvals/requests/{id}/approve` | Approve a pending request |
-| `POST` | `/v1/approvals/requests/{id}/deny` | Deny a pending request |
-| `GET` | `/v1/approvals/pending?tenant_id=...&limit=...&offset=...` | List pending approvals (paginated, default limit 200) |
-| `POST` | `/v1/integrations/slack/interactions` | Slack Block Kit approve/deny callback endpoint |
-| `GET` | `/ui/pending?tenant_id=...` | Web UI for pending approvals |
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/healthz` | — | Liveness probe |
+| `POST` | `/v1/approvals/requests` | `X-Internal-Token` | Create an approval request (internal) |
+| `GET` | `/v1/approvals/requests/{id}` | `X-Internal-Token` | Get approval request details |
+| `POST` | `/v1/approvals/requests/{id}/approve` | `X-Internal-Token` | Approve a pending request |
+| `POST` | `/v1/approvals/requests/{id}/deny` | `X-Internal-Token` | Deny a pending request |
+| `GET` | `/v1/approvals/pending?tenant_id=...&limit=...&offset=...` | `X-Internal-Token` | List pending approvals (paginated, default limit 200) |
+| `GET` | `/ui/pending?tenant_id=...` | `X-Internal-Token` | Minimal internal HTML view for pending approvals |
+| `POST` | `/v1/integrations/slack/interactions` | Slack signature headers | Slack Block Kit approve/deny callback endpoint |
 
 ### ToolCallRequest Schema
 
@@ -643,11 +670,13 @@ API keys are validated via **two stores** in sequence:
 
 Pass keys via `X-API-Key` header or `Authorization: Bearer <key>`.
 
-Health endpoints (`/healthz`, `/readyz`) are unauthenticated. Metrics are served on a separate internal-only port (not exposed on the gateway port).
+Health endpoints (`/healthz`, `/readyz`) and `GET /v1/connectors` are unauthenticated so the connector catalog can be discovered before any tenant/API key exists. Metrics are served on a separate internal-only port (not exposed on the gateway port).
 
 ### Console Authentication (JWT)
 
-The Console API uses JWT (HS256) tokens issued via `POST /auth/login`. Tokens include user ID, email, roles, and optional tenant scope. Configure the signing secret via `CONSOLE_JWT_SECRET`.
+The Console API uses JWT (HS256) tokens issued via `POST /auth/login`. Tokens include user ID, email, roles, optional tenant scope, and a server-tracked session ID (`sid`) for revocation. Configure the signing secret via `CONSOLE_JWT_SECRET`.
+
+Console login sessions are tracked in Postgres. Admins can inspect and revoke active sessions from the Users page or via `GET /admin/auth-sessions` and `POST /admin/auth-sessions/{session_id}/revoke`. The UI sign-out action calls `POST /auth/logout`, which revokes the current session instead of only clearing browser storage.
 
 ### RBAC Roles
 
@@ -660,13 +689,13 @@ The Console API uses JWT (HS256) tokens issued via `POST /auth/login`. Tokens in
 
 ### Internal Service Authentication
 
-Approvals and connector services **require** an `X-Internal-Token` header for service-to-service calls. Configure via:
+Approvals and remote connector services use an `X-Internal-Token` header for service-to-service calls. Configure via:
 
 ```
 INTERNAL_AUTH_TOKEN=your-shared-secret
 ```
 
-**Required** — all services will refuse to start if this is empty. Token comparisons use constant-time comparison to prevent timing attacks.
+`approvals`, `connector-slack`, `connector-jira`, and `alert-worker` require this to be set at startup; gateway uses it for downstream internal calls. Token comparisons use constant-time comparison to prevent timing attacks.
 
 ---
 
@@ -708,6 +737,8 @@ curl -s http://localhost:8090/admin/connectors \
 ```
 
 This returns the same full connector catalog even on a fresh install with zero toolcalls.
+
+In the default dev stack this should return 8 connectors: 2 remote (`slack`, `jira`) and 6 built-in (`github`, `aws`, `servicenow`, `email`, `postgres`, `webhook`).
 
 ### Mock Mode
 
@@ -781,12 +812,12 @@ The response includes:
 
 ### API Key Lifecycle UX (Tier 3 item 10)
 API keys now support lifecycle metadata and safer rotation:
-- Metadata fields returned by `GET /admin/tenants/{id}/apikeys`:
+- Metadata fields returned by `GET /admin/tenants/{tenant_id}/apikeys`:
   - `last_used_at`
   - `expires_at` (nullable)
   - `is_primary`
 - Rotation endpoint:
-  - `POST /admin/tenants/{id}/apikeys/rotate`
+  - `POST /admin/tenants/{tenant_id}/apikeys/rotate`
   - Payload:
     ```json
     {
@@ -892,7 +923,7 @@ Webhook URLs are validated server-side (`https` only; private/loopback IPs rejec
 
 ### Metrics (Prometheus)
 
-Available at `GET /metrics` on the internal metrics listener (default `127.0.0.1:9090`). Key metrics:
+Gateway currently exposes Prometheus metrics at `GET /metrics` on the internal metrics listener (default `127.0.0.1:9090`). Key metrics:
 
 - `oc_decisions_total` — decisions by type (allow/deny/approve)
 - `oc_policy_eval_duration_seconds` — policy evaluation latency
@@ -916,6 +947,8 @@ A pre-built dashboard is provided at `deploy/dashboards/gateway.json`. Import it
 
 All configuration is via environment variables. See [`.env.example`](.env.example) for the full list.
 
+Defaults below describe runtime behavior when a variable is unset. The checked-in `.env.example` may pre-populate some local-development values.
+
 | Variable | Default | Description |
 |---|---|---|
 | `POSTGRES_HOST` | `localhost` | Postgres host |
@@ -928,14 +961,19 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `GATEWAY_ADDR` | `:8080` | Gateway listen address |
 | `CONSOLE_API_ADDR` | `:8090` | Console API listen address |
 | `GATEWAY_URL` | `http://localhost:8080` | Gateway base URL used by console-api for connector discovery |
-| `CONSOLE_JWT_SECRET` | — | **Required for production.** JWT signing secret for console |
+| `PUBLIC_APPROVALS_URL` | `APPROVALS_URL` | Public base URL embedded in `approval_url` responses |
+| `CONSOLE_JWT_SECRET` | — | **Required at runtime.** JWT signing secret for console; local dev scripts generate one if missing |
 | `CONSOLE_JWT_EXPIRY_HOURS` | `24` | JWT token expiry in hours |
+| `CONSOLE_CORS_ORIGINS` | — | Comma-separated allowed origins for console-api CORS responses |
+| `CONSOLE_AUTH_PROVIDER` | `email_password` | Console auth provider implementation (`email_password`, `password`, `local`) |
+| `CONSOLE_DEV_LOG_RAW_TOKENS` | `true` | In dev, log raw invite/reset URLs unless explicitly disabled |
+| `INVITE_RESET_TOKEN_HMAC_SECRET` | `CONSOLE_JWT_SECRET` | Keyed-HMAC secret for storing invite/reset tokens hashed at rest |
 | `APPROVALS_ADDR` | `:8081` | Approvals service listen address |
 | `APPROVALS_URL` | `http://localhost:8081` | Approvals service URL (for gateway) |
 | `CONNECTOR_SLACK_URL` | `http://localhost:8082` | Slack connector URL |
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
-| `API_KEYS` | — | Comma-separated `tenant:key` pairs (env-var auth) |
-| `INTERNAL_AUTH_TOKEN` | — | **Required.** Shared secret for service-to-service auth |
+| `API_KEYS` | — | Comma-separated `tenant:key` pairs (env-var auth); env keys still respect tenant disable status in the DB |
+| `INTERNAL_AUTH_TOKEN` | — | Shared secret for approvals/connectors/alert-worker internal auth; effectively required for a working stack |
 | `ALLOWLIST_SOURCE` | `db` | Approver authorization source (`db`, `env`, `both`). Default is DB-backed approvers. |
 | `APPROVER_EMAIL_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
 | `APPROVER_SLACK_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
@@ -944,12 +982,20 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `ALERT_WORKER_INTERVAL_SEC` | `30` | Poll interval for evaluating alert rules (`cmd/alert-worker`). |
 | `ALERT_WORKER_BATCH_SIZE` | `100` | Batch size for retrying pending alert events. |
 | `APPROVALS_NOTIFIER_ENABLED` | `true` | Enable transactional outbox dispatcher |
+| `APPROVALS_NOTIFIER_INTERVAL_SEC` | `5` | Poll interval for approval notification dispatch + request expiry |
+| `APPROVALS_NOTIFIER_SOURCE` | `oc://approvals` | CloudEvents source value for approval notifications |
 | `WEBHOOK_SECRET_REFS` | — | Mapping `secret_ref=secret` used for HMAC signatures |
 | `EVIDENCE_S3_ENDPOINT` | `localhost:9000` | MinIO/S3 endpoint for archiver |
 | `EVIDENCE_S3_BUCKET` | `openclause-evidence` | Bucket for archived bundles |
+| `EVIDENCE_S3_ACCESS_KEY` | `minioadmin` | MinIO/S3 access key for archiver uploads |
+| `EVIDENCE_S3_SECRET_KEY` | `minioadmin` | MinIO/S3 secret key for archiver uploads |
+| `EVIDENCE_S3_SECURE` | `false` | Whether archiver should use HTTPS for the S3 endpoint |
 | `RATE_LIMIT_PER_TENANT` | `100` | Max requests/sec per tenant |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint for traces |
 | `METRICS_ADDR` | `127.0.0.1:9090` | Internal Prometheus metrics listener address |
+| `ARCHIVER_RUN_ONCE` | `true` | Run archiver once and exit instead of polling |
+| `ARCHIVER_INTERVAL_SEC` | `300` | Poll interval for background archival mode |
+| `ARCHIVER_TENANT_ID` | — | Optional tenant filter for one-shot/local archive runs |
 
 ---
 
@@ -959,6 +1005,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 OpenClause/
 ├── api/openapi.yaml                # OpenAPI 3.1 specification
 ├── cmd/
+│   ├── alert-worker/               # Deny-spike alert evaluation + notification worker
 │   ├── gateway/                    # Gateway service (:8080)
 │   ├── console-api/                # Console API service (:8090)
 │   ├── approvals/                  # Approvals service (:8081)
@@ -998,8 +1045,10 @@ OpenClause/
 │   ├── LOCAL_TESTING.md          # Local testing guide + curl recipes
 │   └── seed_dev.sql              # Optional development seed SQL (tenant/agent/api-key)
 ├── scripts/
+│   ├── demo.sh
 │   ├── dev.ps1
 │   ├── dev.sh
+│   ├── e2e-curl-happy-path.sh
 │   ├── migrate.ps1
 │   ├── migrate.sh
 │   ├── gen-secret.ps1
@@ -1008,7 +1057,7 @@ OpenClause/
 │   └── seed-dev.sh
 ├── deploy/
 │   ├── docker-compose.yml          # Local development stack
-│   ├── helm/                       # Helm charts (gateway, approvals, connectors, console-api, console-ui)
+│   ├── helm/                       # Helm charts (gateway, approvals, connectors, console-api, console-ui, alert-worker)
 │   ├── terraform/                  # AWS infrastructure (EKS, RDS, S3, ALB)
 │   └── dashboards/                 # Grafana dashboard JSON
 ├── CONTRIBUTING.md                 # Contribution guide
@@ -1074,6 +1123,10 @@ For local development, `./scripts/dev.sh` / `./scripts/dev.ps1` also ensure `CON
 go test ./...             # All Go tests
 go test -race ./...       # With race detector
 opa test policy/bundles/v0/ policy/tests/ -v   # Policy tests
+npm --prefix web/console run build             # Console UI build
+npm --prefix sdk/typescript run build          # TypeScript SDK build
+(cd sdk/java && ./gradlew test)                # Java SDK tests
+PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v   # Python SDK tests
 ```
 
 ### Console UI development
@@ -1088,7 +1141,15 @@ npm run dev    # Starts on http://localhost:3000 with API proxy to :8090
 
 ```bash
 make build
-# Binaries: bin/gateway, bin/approvals, bin/console-api, bin/connector-*, bin/archiver, bin/verify
+# Binaries: bin/gateway, bin/approvals, bin/connector-slack, bin/connector-jira, bin/connector-template, bin/archiver
+```
+
+For binaries not covered by `make build`, use direct `go build`, for example:
+
+```bash
+go build ./cmd/console-api
+go build ./cmd/alert-worker
+go build ./cmd/verify
 ```
 
 ---
@@ -1105,7 +1166,7 @@ Runs all services including the console UI. See `deploy/docker-compose.yml`.
 
 ### Kubernetes (Helm)
 
-Helm charts are in `deploy/helm/` for each service. Current charts include `gateway`, `approvals`, `connector-jira`, `connector-slack`, `console-api`, and `console-ui`.
+Helm charts are in `deploy/helm/` for each service. Current charts include `gateway`, `approvals`, `connector-jira`, `connector-slack`, `console-api`, `console-ui`, and `alert-worker`.
 
 Chart capabilities (chart-specific):
 

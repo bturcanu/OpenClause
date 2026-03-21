@@ -1,5 +1,6 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { storeAuthSession } from '../api'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -23,7 +24,7 @@ export default function Login() {
         throw new Error(data.message || data.error || 'Login failed')
       }
       const data = await res.json()
-      localStorage.setItem('oc_token', data.token)
+      storeAuthSession(data.token, data.session_id)
       navigate('/')
     } catch (err: any) {
       setError(err.message)

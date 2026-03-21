@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
+import { api, clearStoredAuth } from './api'
 import Login from './pages/Login'
 import Overview from './pages/Overview'
 import Approvals from './pages/Approvals'
@@ -26,8 +27,13 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function Layout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
 
-  function handleLogout() {
-    localStorage.removeItem('oc_token')
+  async function handleLogout() {
+    try {
+      await api.post('/auth/logout')
+    } catch {
+      // Best-effort server-side logout; client state is always cleared below.
+    }
+    clearStoredAuth()
     navigate('/login')
   }
 

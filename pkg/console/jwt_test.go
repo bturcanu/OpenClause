@@ -10,6 +10,7 @@ func TestGenerateAndValidateToken(t *testing.T) {
 	cfg := JWTConfig{Secret: "test-secret-key", Issuer: "openclause-test", ExpiryHours: 1}
 	claims := JWTClaims{
 		Sub:    "user-123",
+		SID:    "sess-123",
 		Email:  "alice@example.com",
 		Name:   "Alice",
 		Roles:  []string{"admin"},
@@ -31,6 +32,9 @@ func TestGenerateAndValidateToken(t *testing.T) {
 
 	if got.Sub != claims.Sub {
 		t.Errorf("Sub = %q, want %q", got.Sub, claims.Sub)
+	}
+	if got.SID != claims.SID {
+		t.Errorf("SID = %q, want %q", got.SID, claims.SID)
 	}
 	if got.Email != claims.Email {
 		t.Errorf("Email = %q, want %q", got.Email, claims.Email)

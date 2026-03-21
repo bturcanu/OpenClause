@@ -83,7 +83,7 @@ func main() {
 	connectorReg.Register("slack", config.EnvOr("CONNECTOR_SLACK_URL", "http://localhost:8082"),
 		"msg.post", "channel.list", "approval.request")
 	connectorReg.Register("jira", config.EnvOr("CONNECTOR_JIRA_URL", "http://localhost:8083"),
-		"issue.create", "issue.list", "issue.delete")
+		"issue.create", "issue.list")
 	connectorReg.SetInternalToken(os.Getenv("INTERNAL_AUTH_TOKEN"))
 
 	for _, bc := range builtins.All() {

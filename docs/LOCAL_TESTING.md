@@ -92,7 +92,7 @@ $body = @{ email = "<platform-admin-email>"; password = "<platform-admin-passwor
 $token = (Invoke-RestMethod -Method Post -Uri "http://localhost:8090/auth/login" -ContentType "application/json" -Body $body).token
 ```
 
-Save the `token` from the response:
+The login response includes both `token` and `session_id`. Save the `token` from the response:
 
 ```bash
 export TOKEN="<paste token here>"
@@ -341,8 +341,21 @@ curl -s "http://localhost:8090/admin/events?tenant_id=$TENANT_ID" \
 curl -s "http://localhost:8090/admin/events/$EVENT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
-# List sessions
+# List agent interaction sessions
 curl -s "http://localhost:8090/admin/sessions?tenant_id=$TENANT_ID" \
+  -H "Authorization: Bearer $TOKEN"
+
+# List active console login sessions
+curl -s "http://localhost:8090/admin/auth-sessions" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Revoke an active console login session
+SESSION_ID="<session_id from /admin/auth-sessions>"
+curl -s -X POST "http://localhost:8090/admin/auth-sessions/$SESSION_ID/revoke" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Log out the current console session
+curl -s -X POST "http://localhost:8090/auth/logout" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

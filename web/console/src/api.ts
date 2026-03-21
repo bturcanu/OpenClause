@@ -1,5 +1,47 @@
 const API_BASE = '/api';
 
+export type StoredAuthClaims = {
+  sub?: string
+  sid?: string
+  email?: string
+  name?: string
+  roles?: string[]
+  tenant?: string
+}
+
+function decodeTokenClaims(token: string | null): StoredAuthClaims | null {
+  if (!token) return null
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=')
+    return JSON.parse(atob(padded))
+  } catch {
+    return null
+  }
+}
+
+export function clearStoredAuth() {
+  localStorage.removeItem('oc_token')
+  localStorage.removeItem('oc_session_id')
+}
+
+export function getStoredAuthClaims(): StoredAuthClaims | null {
+  return decodeTokenClaims(localStorage.getItem('oc_token'))
+}
+
+export function getStoredSessionID(): string {
+  return localStorage.getItem('oc_session_id') || getStoredAuthClaims()?.sid || ''
+}
+
+export function storeAuthSession(token: string, sessionID?: string) {
+  localStorage.setItem('oc_token', token)
+  const sid = sessionID || decodeTokenClaims(token)?.sid || ''
+  if (sid) localStorage.setItem('oc_session_id', sid)
+  else localStorage.removeItem('oc_session_id')
+}
+
 async function apiFetch(path: string, options?: RequestInit) {
   const token = localStorage.getItem('oc_token');
   const headers: Record<string, string> = {
@@ -11,7 +53,7 @@ async function apiFetch(path: string, options?: RequestInit) {
     headers: { ...headers, ...(options?.headers as Record<string, string>) },
   });
   if (res.status === 401) {
-    localStorage.removeItem('oc_token');
+    clearStoredAuth();
     window.location.href = '/login';
     throw new Error('Unauthorized');
   }

@@ -23,6 +23,23 @@ func (f *fakeUserAuthenticator) AuthenticateUser(ctx context.Context, email, pas
 	return f.u, f.roles, f.err
 }
 
+type fakeAuthSessionIssuer struct {
+	session *console.AuthSession
+	err     error
+	gotIn   console.AuthSessionCreateInput
+}
+
+func (f *fakeAuthSessionIssuer) CreateAuthSession(ctx context.Context, in console.AuthSessionCreateInput) (*console.AuthSession, error) {
+	f.gotIn = in
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.session != nil {
+		return f.session, nil
+	}
+	return &console.AuthSession{ID: "sess-123"}, nil
+}
+
 func testJWTConfig() console.JWTConfig {
 	// 32+ bytes secret to satisfy token signing checks.
 	secret := "0123456789abcdef0123456789abcdef"
@@ -35,9 +52,10 @@ func testJWTConfig() console.JWTConfig {
 
 func Test_newAuthProvider_default(t *testing.T) {
 	p, err := newAuthProvider("email_password", AuthProviderDeps{
-		log:    slog.Default(),
-		store:  &fakeUserAuthenticator{},
-		jwtCfg: testJWTConfig(),
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{},
+		sessions: &fakeAuthSessionIssuer{},
+		jwtCfg:   testJWTConfig(),
 	})
 	if err != nil {
 		t.Fatalf("newAuthProvider returned error: %v", err)
@@ -49,9 +67,10 @@ func Test_newAuthProvider_default(t *testing.T) {
 
 func Test_newAuthProvider_unknown(t *testing.T) {
 	_, err := newAuthProvider("weird", AuthProviderDeps{
-		log:    slog.Default(),
-		store:  &fakeUserAuthenticator{},
-		jwtCfg: testJWTConfig(),
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{},
+		sessions: &fakeAuthSessionIssuer{},
+		jwtCfg:   testJWTConfig(),
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -61,9 +80,10 @@ func Test_newAuthProvider_unknown(t *testing.T) {
 func Test_authProviderFromEnv_defaultEmailPassword(t *testing.T) {
 	t.Setenv("CONSOLE_AUTH_PROVIDER", "")
 	p, err := authProviderFromEnv(AuthProviderDeps{
-		log:    slog.Default(),
-		store:  &fakeUserAuthenticator{},
-		jwtCfg: testJWTConfig(),
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{},
+		sessions: &fakeAuthSessionIssuer{},
+		jwtCfg:   testJWTConfig(),
 	})
 	if err != nil {
 		t.Fatalf("authProviderFromEnv returned error: %v", err)
@@ -79,9 +99,10 @@ func Test_EmailPasswordAuthProvider_Login_rejectsNoTenantNonPlatformAdmin(t *tes
 	roles := []console.UserRole{{Role: "viewer", TenantID: roleNoTenant}}
 
 	p := &EmailPasswordAuthProvider{
-		log:    slog.Default(),
-		store:  &fakeUserAuthenticator{u: u, roles: roles},
-		jwtCfg: testJWTConfig(),
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{u: u, roles: roles},
+		sessions: &fakeAuthSessionIssuer{},
+		jwtCfg:   testJWTConfig(),
 	}
 
 	_, err := p.Login(context.Background(), AuthLoginInput{Email: "x", Password: "y"})
@@ -105,9 +126,10 @@ func Test_EmailPasswordAuthProvider_Login_allowsPlatformAdminWithoutTenant(t *te
 	roles := []console.UserRole{{Role: "platform_admin", TenantID: nil}}
 
 	p := &EmailPasswordAuthProvider{
-		log:    slog.Default(),
-		store:  &fakeUserAuthenticator{u: u, roles: roles},
-		jwtCfg: testJWTConfig(),
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{u: u, roles: roles},
+		sessions: &fakeAuthSessionIssuer{session: &console.AuthSession{ID: "sess-platform"}},
+		jwtCfg:   testJWTConfig(),
 	}
 
 	res, err := p.Login(context.Background(), AuthLoginInput{Email: "x", Password: "y"})
@@ -124,6 +146,9 @@ func Test_EmailPasswordAuthProvider_Login_allowsPlatformAdminWithoutTenant(t *te
 	}
 	if claims.Tenant != "" {
 		t.Fatalf("expected empty tenant claim, got %q", claims.Tenant)
+	}
+	if claims.SID != "sess-platform" {
+		t.Fatalf("expected sid claim sess-platform, got %q", claims.SID)
 	}
 	if len(claims.Roles) != 1 || claims.Roles[0] != "platform_admin" {
 		t.Fatalf("unexpected roles claim: %+v", claims.Roles)

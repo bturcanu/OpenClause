@@ -20,6 +20,7 @@ type JWTConfig struct {
 // JWTClaims represents the claims in a JWT token.
 type JWTClaims struct {
 	Sub    string   `json:"sub"`
+	SID    string   `json:"sid,omitempty"`
 	Email  string   `json:"email"`
 	Name   string   `json:"name"`
 	Roles  []string `json:"roles"`
