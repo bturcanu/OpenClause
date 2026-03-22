@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 from unittest.mock import MagicMock, patch
+import requests
 
 from openclause import (
     OpenClauseClient,
@@ -13,6 +14,7 @@ from openclause import (
     ExecutionResult,
 )
 from openclause.exceptions import APIError, AuthenticationError, ValidationError
+from openclause.exceptions import TimeoutError
 
 
 class TestToolCallRequestSerialization(unittest.TestCase):
@@ -230,6 +232,45 @@ class TestHTTPErrorMapping(unittest.TestCase):
         with self.assertRaises(APIError) as ctx:
             client.get_event("evt-x")
         self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_submit_tool_call_includes_trace_header_and_json_body(self) -> None:
+        client = self._make_client()
+        resp = self._mock_response(
+            200,
+            json.dumps({"event_id": "evt-1", "decision": "allow"}),
+        )
+        client._session.post.return_value = resp
+
+        req = ToolCallRequest(
+            tenant_id="t1",
+            agent_id="a1",
+            tool="slack",
+            action="msg.post",
+            idempotency_key="key-1",
+            trace_id="trace-123",
+        )
+        result = client.submit_tool_call(req)
+
+        self.assertEqual(result.event_id, "evt-1")
+        client._session.post.assert_called_once()
+        call = client._session.post.call_args
+        self.assertEqual(call.args[0], "http://localhost:8080/v1/toolcalls")
+        self.assertEqual(call.kwargs["headers"]["X-Trace-ID"], "trace-123")
+        self.assertEqual(json.loads(call.kwargs["data"].decode())["idempotency_key"], "key-1")
+
+    def test_post_timeout_maps_to_timeout_error(self) -> None:
+        client = self._make_client()
+        client._session.post.side_effect = requests.exceptions.Timeout("boom")
+
+        req = ToolCallRequest(
+            tenant_id="t1",
+            agent_id="a1",
+            tool="slack",
+            action="msg.post",
+            idempotency_key="key-timeout",
+        )
+        with self.assertRaises(TimeoutError):
+            client.submit_tool_call(req)
 
 
 class TestWaitForApproval(unittest.TestCase):

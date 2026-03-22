@@ -2,15 +2,21 @@ package dev.openclause.sdk;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.sun.net.httpserver.HttpServer;
+import dev.openclause.sdk.exceptions.APIException;
 import dev.openclause.sdk.models.ExecutionResult;
 import dev.openclause.sdk.models.ToolCallRequest;
 import dev.openclause.sdk.models.ToolCallResponse;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -197,5 +203,95 @@ class OpenClauseClientTest {
         assertEquals("u", request.getUserId());
         assertEquals("s", request.getSessionId());
         assertEquals("tr", request.getTraceId());
+    }
+
+    @Test
+    void submitToolCallSendsApiKeyAndJsonBody() throws Exception {
+        AtomicReference<String> apiKeyHeader = new AtomicReference<>();
+        AtomicReference<String> bodyRef = new AtomicReference<>();
+        HttpServer server = startServer(exchange -> {
+            apiKeyHeader.set(exchange.getRequestHeaders().getFirst("X-API-Key"));
+            bodyRef.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = "{\"event_id\":\"evt-1\",\"decision\":\"allow\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        }, "/v1/toolcalls");
+
+        try {
+            OpenClauseClient client = new OpenClauseClient(baseUrl(server), "test-key");
+            ToolCallRequest request = ToolCallRequest.builder(
+                    "tenant-1", "agent-1", "slack", "msg.post", "key-1"
+            ).traceId("trace-1").build();
+
+            ToolCallResponse response = client.submitToolCall(request);
+            assertEquals("evt-1", response.getEventId());
+            assertEquals("test-key", apiKeyHeader.get());
+            assertTrue(bodyRef.get().contains("\"tenant_id\":\"tenant-1\""));
+            assertTrue(bodyRef.get().contains("\"trace_id\":\"trace-1\""));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void getEventMaps401ToApiException() throws Exception {
+        HttpServer server = startServer(exchange -> {
+            byte[] body = "{\"message\":\"bad key\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(401, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        }, "/v1/toolcalls/evt-auth");
+
+        try {
+            OpenClauseClient client = new OpenClauseClient(baseUrl(server), "test-key");
+            APIException err = assertThrows(APIException.class, () -> client.getEvent("evt-auth"));
+            assertEquals(401, err.getStatusCode());
+            assertTrue(err.getResponseBody().contains("bad key"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void executeMaps500ToApiException() throws Exception {
+        HttpServer server = startServer(exchange -> {
+            byte[] body = "{\"message\":\"server error\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(500, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        }, "/v1/toolcalls/evt-500/execute");
+
+        try {
+            OpenClauseClient client = new OpenClauseClient(baseUrl(server), "test-key");
+            APIException err = assertThrows(APIException.class, () -> client.execute("evt-500"));
+            assertEquals(500, err.getStatusCode());
+            assertTrue(err.getResponseBody().contains("server error"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private static HttpServer startServer(ThrowingHttpHandler handler, String path) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext(path, exchange -> {
+            try {
+                handler.handle(exchange);
+            } catch (Exception e) {
+                throw new IOException(e);
+            }
+        });
+        server.start();
+        return server;
+    }
+
+    private static String baseUrl(HttpServer server) {
+        return "http://localhost:" + server.getAddress().getPort();
+    }
+
+    @FunctionalInterface
+    private interface ThrowingHttpHandler {
+        void handle(com.sun.net.httpserver.HttpExchange exchange) throws Exception;
     }
 }

@@ -6,6 +6,10 @@ describe("OpenClauseClient", () => {
   const BASE_URL = "https://api.openclause.dev";
   const API_KEY = "test-api-key-123";
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   describe("constructor", () => {
     it("should create a client with valid options", () => {
       const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
@@ -232,6 +236,65 @@ describe("OpenClauseClient", () => {
       expect(err).toBeInstanceOf(OpenClauseError);
       expect(err.name).toBe("TimeoutError");
       expect(err.message).toBe("custom timeout");
+    });
+  });
+
+  describe("HTTP request behavior", () => {
+    it("submitToolCall builds the request with X-API-Key and JSON body", async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({ event_id: "evt_1", decision: "allow" }),
+      });
+      (global as any).fetch = fetchMock;
+
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const req: ToolCallRequest = {
+        tenant_id: "tenant-1",
+        agent_id: "agent-1",
+        tool: "slack",
+        action: "msg.post",
+        idempotency_key: "idem-1",
+        trace_id: "trace-1",
+      };
+
+      const res = await client.submitToolCall(req);
+
+      expect(res.event_id).toBe("evt_1");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe(`${BASE_URL}/v1/toolcalls`);
+      expect(init.method).toBe("POST");
+      expect(init.headers).toMatchObject({
+        "Content-Type": "application/json",
+        "X-API-Key": API_KEY,
+      });
+      expect(JSON.parse(init.body)).toEqual(req);
+    });
+
+    it("getEvent maps 401 responses to AuthenticationError", async () => {
+      (global as any).fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        headers: { get: () => null },
+        text: async () => '{"message":"bad key"}',
+      });
+
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+
+      await expect(client.getEvent("evt-auth")).rejects.toBeInstanceOf(AuthenticationError);
+    });
+
+    it("maps abort errors to TimeoutError", async () => {
+      const abortError = new DOMException("aborted", "AbortError");
+      (global as any).fetch = jest.fn().mockRejectedValue(abortError);
+
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY, timeout: 1 });
+
+      await expect(client.getEvent("evt-timeout")).rejects.toBeInstanceOf(TimeoutError);
     });
   });
 });
