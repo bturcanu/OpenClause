@@ -662,33 +662,33 @@ export default function TenantDetail() {
         </div>
       </div>
 
-      <div className="tabs mt-16" style={{ display: 'flex', gap: 8 }}>
+      <div className="tabs tenant-tabs mt-16">
         <button
-          className={`btn btn-outline btn-sm ${activeTab === 'agents' ? 'active' : ''}`}
+          className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'agents' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('agents')}
         >
           Agents
         </button>
         <button
-          className={`btn btn-outline btn-sm ${activeTab === 'api_keys' ? 'active' : ''}`}
+          className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'api_keys' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('api_keys')}
         >
           API Keys
         </button>
         <button
-          className={`btn btn-outline btn-sm ${activeTab === 'approvers' ? 'active' : ''}`}
+          className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'approvers' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('approvers')}
         >
           Approvers
         </button>
         <button
-          className={`btn btn-outline btn-sm ${activeTab === 'alerts' ? 'active' : ''}`}
+          className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'alerts' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('alerts')}
         >
           Alerts
         </button>
         <button
-          className={`btn btn-outline btn-sm ${activeTab === 'analytics' ? 'active' : ''}`}
+          className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'analytics' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('analytics')}
         >
           Analytics
@@ -697,7 +697,7 @@ export default function TenantDetail() {
 
       {activeTab === 'agents' && (
         <>
-          <div className="section-title">Agents</div>
+          <div className="section-title section-title-spacious">Agents</div>
           <div className="form-card">
             <h3>Register Agent</h3>
             <form onSubmit={createAgent}>
@@ -709,7 +709,7 @@ export default function TenantDetail() {
                 <button className="btn btn-primary" disabled={creating}>Create</button>
               </div>
             </form>
-            <div className="toggle-stack" style={{ marginTop: 16 }}>
+            <div className="toggle-stack mt-16">
               <label className="toggle-field">
                 <input
                   type="checkbox"
@@ -764,7 +764,7 @@ export default function TenantDetail() {
 
       {activeTab === 'api_keys' && (
         <>
-          <div className="section-title mt-16">API Keys</div>
+          <div className="section-title section-title-spacious">API Keys</div>
           <div className="form-card">
             <h3>Create API Key</h3>
             <form onSubmit={createKey}>
@@ -842,7 +842,7 @@ export default function TenantDetail() {
             )}
           </div>
 
-          <div className="section-title mt-16">Notification Routing</div>
+          <div className="section-title section-title-spacious">Notification Routing</div>
           <div className="form-card">
             <h3>Approval notifications</h3>
             {notifError && <div className="error-msg">{notifError}</div>}
@@ -989,7 +989,7 @@ export default function TenantDetail() {
 
       {activeTab === 'alerts' && (
         <>
-          <div className="section-title mt-16">Alerts</div>
+          <div className="section-title section-title-spacious">Alerts</div>
 
           {alertsError && <InlineErrorState message={alertsError} onRetry={() => void fetchAlerts()} />}
 
@@ -1049,7 +1049,7 @@ export default function TenantDetail() {
             </form>
           </div>
 
-          <div className="section-title mt-16">Alert Rules</div>
+          <div className="section-title section-title-spacious">Alert Rules</div>
           <div className="table-container">
             <table>
               <thead>
@@ -1161,7 +1161,7 @@ export default function TenantDetail() {
             </table>
           </div>
 
-          <div className="section-title mt-16">Alert Events</div>
+          <div className="section-title section-title-spacious">Alert Events</div>
           <div className="table-container">
             <table>
               <thead>
@@ -1225,7 +1225,7 @@ export default function TenantDetail() {
 
       {activeTab === 'analytics' && (
         <>
-          <div className="section-title mt-16">Analytics</div>
+          <div className="section-title section-title-spacious">Analytics</div>
 
           <div className="form-card mt-16">
             <h3>Tenant analytics</h3>
@@ -1368,7 +1368,7 @@ export default function TenantDetail() {
                   </div>
                 </div>
 
-                <div className="section-title mt-16">Per-Agent Breakdown</div>
+                <div className="section-title section-title-spacious">Per-Agent Breakdown</div>
                 <div className="table-container">
                   <table>
                     <thead>
@@ -1446,7 +1446,7 @@ export default function TenantDetail() {
             </div>
           )}
 
-          <div className="section-title mt-16">Approvers</div>
+          <div className="section-title section-title-spacious">Approvers</div>
 
           <div className="form-card">
             <h3>Add Approver</h3>
@@ -1468,7 +1468,7 @@ export default function TenantDetail() {
                   <label>Name (optional)</label>
                   <input value={approverName} onChange={e => setApproverName(e.target.value)} placeholder="Full name" />
                 </div>
-                <div className="form-actions-row form-actions-row-end">
+                <div className="form-actions-row form-actions-row-end approver-form-actions">
                   <button className="btn btn-primary" disabled={creating}>Add approver</button>
                 </div>
               </div>

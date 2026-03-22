@@ -411,8 +411,8 @@ export default function Users() {
           <div className="form-card mt-16">
             <h3>Assign Role</h3>
             <form onSubmit={handleAssignRole}>
-              <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
-                <div className="form-group" style={{ minWidth: 280 }}>
+              <div className="form-grid assign-role-grid">
+                <div className="form-group">
                   <label>User</label>
                   <select value={assignRoleForm.user_id} onChange={e => setAssignRoleForm({ ...assignRoleForm, user_id: e.target.value })}>
                     <option value="">Select user…</option>
@@ -423,7 +423,7 @@ export default function Users() {
                     ))}
                   </select>
                 </div>
-                <div className="form-group" style={{ minWidth: 220 }}>
+                <div className="form-group">
                   <label>Role</label>
                   <select value={assignRoleForm.role} onChange={e => setAssignRoleForm({ ...assignRoleForm, role: e.target.value as any })}>
                     <option value="tenant_admin">tenant_admin</option>
@@ -431,7 +431,7 @@ export default function Users() {
                     <option value="viewer">viewer</option>
                   </select>
                 </div>
-                <div className="form-group" style={{ minWidth: 280 }}>
+                <div className="form-group">
                   <label>Tenant ID</label>
                   <input
                     value={assignRoleForm.tenant_id}
@@ -439,9 +439,11 @@ export default function Users() {
                     placeholder="tenant1"
                   />
                 </div>
-                <button className="btn btn-primary" type="submit">
-                  Assign
-                </button>
+                <div className="form-actions-row form-actions-row-end assign-role-actions">
+                  <button className="btn btn-primary" type="submit">
+                    Assign
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -454,7 +456,7 @@ export default function Users() {
       )}
 
       <div className="table-container mt-16">
-        <table>
+        <table className="users-table">
           <thead>
             <tr>
               <th>Email</th>
@@ -480,7 +482,7 @@ export default function Users() {
                   <tr key={u.id}>
                     <td>{u.email}</td>
                     <td>{u.name || '—'}</td>
-                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{u.slack_user_id ? u.slack_user_id : '—'}</td>
+                    <td className="users-slack-cell" style={{ fontFamily: 'monospace', fontSize: 12 }}>{u.slack_user_id ? u.slack_user_id : '—'}</td>
                     <td>{formatDate(u.created_at, 'date')}</td>
                     <td>
                       {u.roles.length === 0 ? (
@@ -506,7 +508,7 @@ export default function Users() {
                       )}
                     </td>
                     {canManageSessions ? (
-                      <td style={{ minWidth: 180 }}>
+                      <td className="users-sessions-cell">
                         <div className="session-summary-cell">
                           <span className={`badge ${(u.active_session_count || 0) > 0 ? 'badge-green' : 'badge-gray'}`}>
                             {u.active_session_count || 0} active

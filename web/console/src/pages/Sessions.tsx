@@ -150,7 +150,7 @@ export default function Sessions() {
 
       <div className="filters-panel">
         <div className="filters-panel-note">Date filters use your local browser time.</div>
-        <div className="filters-bar filters-bar-dense">
+        <div className="form-grid sessions-filter-grid">
           <div className="form-group">
             <label>Tenant</label>
             <input value={filters.tenant_id} onChange={e => updateFilter('tenant_id', e.target.value)} placeholder="tenant_id" />
@@ -188,7 +188,7 @@ export default function Sessions() {
               <option value="approve">Approve</option>
             </select>
           </div>
-          <div className="form-group form-group-small">
+          <div className="form-group form-group-small session-filter-field-short">
             <label>Risk min</label>
             <input
               type="number"
@@ -200,7 +200,7 @@ export default function Sessions() {
               placeholder="0"
             />
           </div>
-          <div className="form-group form-group-small">
+          <div className="form-group form-group-small session-filter-field-short">
             <label>Risk max</label>
             <input
               type="number"
@@ -212,11 +212,11 @@ export default function Sessions() {
               placeholder="10"
             />
           </div>
-          <div className="form-group">
+          <div className="form-group session-filter-field-wide">
             <label>Since (local time)</label>
             <input value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
           </div>
-          <div className="form-group">
+          <div className="form-group session-filter-field-wide">
             <label>Until (local time)</label>
             <input value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
           </div>
@@ -224,7 +224,7 @@ export default function Sessions() {
       </div>
 
       <div className="table-container table-sticky">
-        <table>
+        <table className="sessions-table">
           <thead>
             <tr>
               <th>Session</th>
@@ -265,7 +265,7 @@ export default function Sessions() {
                     </div>
                     <div className="table-subtext">{session.event_count} events</div>
                   </td>
-                  <td>
+                  <td className="session-requester-cell">
                     <div className="table-primary">{formatRequester(session.user_id, session.user_name, session.user_email, session.agent_id)}</div>
                     <div className="table-subtext">Agent {noneText(session.agent_id)}</div>
                   </td>
@@ -277,14 +277,14 @@ export default function Sessions() {
                   </td>
                   <td>{formatDate(session.started_at)}</td>
                   <td>{formatDate(session.last_event_at)}</td>
-                  <td>
+                  <td className="session-decision-cell">
                     <div className="stacked-badges">
                       <span className="badge badge-green">Allow {session.allow_count || 0}</span>
                       <span className="badge badge-red">Deny {session.deny_count || 0}</span>
                       <span className="badge badge-yellow">Approve {session.approve_count || 0}</span>
                     </div>
                   </td>
-                  <td>
+                  <td className="session-last-action-cell">
                     <div className="table-primary">
                       {session.last_tool || '(unknown)'}.{session.last_action || '(unknown)'}
                     </div>
@@ -293,7 +293,7 @@ export default function Sessions() {
                       {' · '}Risk {session.last_risk_score ?? 0}
                     </div>
                   </td>
-                  <td>
+                  <td className="session-open-cell">
                     <Link
                       to={`/sessions/${encodeURIComponent(session.id)}${buildQuery({ tenant_id: session.tenant_id })}`}
                       className="btn btn-outline btn-sm"
