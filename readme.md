@@ -114,7 +114,7 @@ AI agents are being given access to production tools — Slack, Jira, cloud APIs
 - [Go 1.25+](https://go.dev/dl/) (for local development)
 - [Node.js 22+](https://nodejs.org/) (for console UI development)
 - [OPA CLI](https://www.openpolicyagent.org/docs/latest/#running-opa) (for policy tests)
-- Java 11+ and Python 3.10+ if you plan to run the Java/Python SDK tests locally
+- Java 11+ and Python 3.9+ if you plan to run the Java/Python SDK tests locally
 
 ### 1. Clone and configure
 
@@ -289,6 +289,10 @@ The admin console (http://localhost:3000) provides:
 | **Connectors** | Registered connector catalog with supported actions |
 | **Users** | Manage console users, roles, invite delivery status, and active console login sessions; invite acceptance and password reset happen on dedicated public routes |
 
+Tenant Detail / Agents notes:
+- Agents can be disabled or re-enabled; the product keeps audit history instead of hard-deleting agents.
+- Tenant Detail includes a `Hide disabled` toggle. The default view keeps disabled agents visible for operator awareness; checking the toggle hides them by requesting `include_disabled=false`.
+
 ### Console Auth
 
 - **Login**: email + password (bcrypt hashed)
@@ -461,9 +465,12 @@ Note: the SDK examples below are written for the local dev seed data (`tenant_id
 
 ```bash
 cd sdk/python
-# The package metadata currently requires Python 3.10+ for editable installs.
-python3.10 -m pip install -U pip setuptools wheel
-python3.10 -m pip install -e .
+# Core SDK supports Python 3.9+.
+python3 -m pip install -U pip setuptools wheel
+python3 -m pip install -e .
+
+# Optional LangChain integration
+python3 -m pip install -e ".[langchain]"
 ```
 
 ```python
@@ -483,7 +490,7 @@ if response.decision == "approve":
     result = client.wait_for_approval(response.event_id)
 ```
 
-LangChain integration: `from openclause.langchain import OpenClauseTool`
+LangChain integration: `from openclause.langchain import OpenClauseTool` (install with `openclause[langchain]`)
 
 ### TypeScript
 
@@ -1155,6 +1162,20 @@ On console-ui startup, the app will call `GET /api/setup/status` and show a firs
 
 For local development, `./scripts/dev.sh` / `./scripts/dev.ps1` also ensure `CONSOLE_JWT_SECRET` is set in `.env` (generating a strong secret if missing) and run `docker compose` with `--env-file` so compose interpolation uses the correct values.
 
+### Testing
+
+The repo has broad automated coverage across the main data flows and contracts:
+
+- Schema-isolated Postgres integration tests via [`internal/testdb`](internal/testdb)
+- DB-backed handler/store coverage for console setup, auth, tenants, agents, API keys, sessions, exports, analytics, and notification flows
+- Approvals and evidence concurrency/idempotency coverage, including grant consumption, hash-chain behavior, and duplicate-request handling
+- Alert-worker loop tests covering retry scheduling and sent/failure transitions
+- Gateway tests for allow/deny/approve paths, idempotency, and session/trace persistence
+- SDK contract tests for Go, TypeScript, Python, and Java
+- Policy verification via `opa test policy/bundles/v0/ policy/tests/ -v`
+
+The detailed inventory lives in [`.ai/test-coverage-sweep.md`](.ai/test-coverage-sweep.md).
+
 ### Running tests
 
 ```bash
@@ -1166,6 +1187,8 @@ npm --prefix sdk/typescript run build          # TypeScript SDK build
 (cd sdk/java && ./gradlew test)                # Java SDK tests
 PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v   # Python SDK tests
 ```
+
+Core Python SDK import/tests should run on Python 3.9+. Run any LangChain-specific checks in an environment where the `openclause[langchain]` extra is installed.
 
 ### Console UI development
 
