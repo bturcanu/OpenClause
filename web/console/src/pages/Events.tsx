@@ -63,6 +63,8 @@ export default function Events() {
     () => Object.values(filters).some(value => value.trim() !== ''),
     [filters],
   )
+  const resolvedSince = useMemo(() => toQueryTimestamp(filters.since), [filters.since])
+  const resolvedUntil = useMemo(() => toQueryTimestamp(filters.until), [filters.until])
   const isPlatformAdmin = useMemo(() => {
     const token = localStorage.getItem('oc_token')
     if (!token) return false
@@ -124,7 +126,10 @@ export default function Events() {
 
   function exportErrorMessage(err: unknown, kind: 'csv' | 'bundle') {
     if (err instanceof APIClientError) {
-      if (kind === 'bundle' && err.status === 400 && /range too large/i.test(err.message)) {
+      const reason = typeof err.details === 'object' && err.details !== null
+        ? String((err.details as Record<string, unknown>).reason || '')
+        : ''
+      if (kind === 'bundle' && err.status === 400 && reason === 'range_too_large') {
         return 'Evidence bundle exports are limited to 10,000 events. Narrow the time window and try again.'
       }
       return err.message
@@ -184,6 +189,11 @@ export default function Events() {
 
       <div className="filters-panel">
         <div className="filters-panel-note">Audit filters use your local browser time. Export actions follow the selected tenant and current time window; blank time fields fall back to the server default window.</div>
+        <div className="table-subtext">
+          Export window (UTC):
+          {' '}since <code className="mono">{resolvedSince || 'server default: last 7 days'}</code>
+          {' '}· until <code className="mono">{resolvedUntil || 'server default: request time'}</code>
+        </div>
         <div className="filters-bar filters-bar-dense">
           <div className="form-group">
             <label>Tenant</label>

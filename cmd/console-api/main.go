@@ -2145,7 +2145,13 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if eventCount > maxBundleEvents {
-		types.ErrBadRequest(fmt.Sprintf("bundle export range too large; narrow the time window below %d events", maxBundleEvents)).WriteJSON(w)
+		(&types.APIError{
+			Code:      "BAD_REQUEST",
+			Message:   fmt.Sprintf("bundle export range too large; narrow the time window below %d events", maxBundleEvents),
+			Details:   map[string]any{"reason": "range_too_large", "max_events": maxBundleEvents},
+			HTTPCode:  http.StatusBadRequest,
+			Retryable: false,
+		}).WriteJSON(w)
 		return
 	}
 

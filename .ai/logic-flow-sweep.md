@@ -851,3 +851,19 @@ Status: Complete
 - Watch items carried forward:
   - large-tenant evidence bundle count-before-export performance
   - reusing the tolerant bearer helper pattern for any future auth entry point
+
+## Follow-up: 2026-03-21 Export Error Contract + Time Window Clarity
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-049 | Low | Audit Trail export UX | The friendly “narrow the time window” bundle-export error still depended on regex against free-form backend message text, so a wording change could silently degrade the operator UX | `Events.tsx` detected the 10,000-event cap by matching the `message` string rather than a structured error contract | Kept the public message, but added `details.reason=range_too_large` and `details.max_events=10000` to the backend error payload, then switched the UI to key off the structured field instead of regex | `cmd/console-api/main.go`, `cmd/console-api/export_handlers_test.go`, `web/console/src/pages/Events.tsx` | Fixed |
+| LF-050 | Low | Audit Trail time filters / exports | Operators could still misunderstand how local `datetime-local` inputs mapped onto the actual export request window, especially when mixing explicit fields with blank defaults | The UI converted local time to RFC3339 correctly, but it did not show the resolved UTC values anywhere | Added a visible “Export window (UTC)” preview that shows the exact RFC3339 values when present and the server-default behavior when fields are blank | `web/console/src/pages/Events.tsx` | Fixed |
+
+### Verification
+
+- `go test ./cmd/console-api -run TestHandleExportBundle_RejectsOversizedRanges -count=1`
+  - Pass
+- `npm --prefix web/console run build`
+  - Pass

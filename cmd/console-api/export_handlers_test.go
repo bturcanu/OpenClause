@@ -314,4 +314,14 @@ func TestHandleExportBundle_RejectsOversizedRanges(t *testing.T) {
 	if !strings.Contains(apiErr.Message, "bundle export range too large") {
 		t.Fatalf("unexpected message: %q", apiErr.Message)
 	}
+	details, ok := apiErr.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details map, got %#v", apiErr.Details)
+	}
+	if got := details["reason"]; got != "range_too_large" {
+		t.Fatalf("expected details.reason range_too_large, got %#v", got)
+	}
+	if got := details["max_events"]; got != float64(10000) {
+		t.Fatalf("expected details.max_events 10000, got %#v", got)
+	}
 }
