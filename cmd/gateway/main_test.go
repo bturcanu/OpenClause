@@ -550,6 +550,81 @@ func TestHandleToolCall_IdempotentReplayPreservesExecutionResult(t *testing.T) {
 	}
 }
 
+func TestHandleToolCall_IdempotentDuplicateDoesNotExecuteTwice(t *testing.T) {
+	fe := newFakeEvidence()
+	fc := &fakeConnectors{output: json.RawMessage(`{"ok":true}`)}
+	gw := newTestGateway(fe, fc, &fakeApprovals{}, fakePolicy{decision: types.DecisionAllow, reason: "ok"})
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		Resource:       "channel/general",
+		IdempotencyKey: "duplicate-key",
+	})
+
+	first := postToolCall(t, gw, body)
+	second := postToolCall(t, gw, body)
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("expected duplicate calls to return 200, got first=%d second=%d", first.Code, second.Code)
+	}
+
+	var firstResp types.ToolCallResponse
+	var secondResp types.ToolCallResponse
+	if err := json.NewDecoder(first.Body).Decode(&firstResp); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+	if err := json.NewDecoder(second.Body).Decode(&secondResp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if firstResp.EventID != secondResp.EventID {
+		t.Fatalf("expected duplicate request to replay event %q, got %q", firstResp.EventID, secondResp.EventID)
+	}
+	if len(fe.events) != 1 {
+		t.Fatalf("expected exactly one evidence event for duplicate idempotency key, got %d", len(fe.events))
+	}
+	fc.mu.Lock()
+	calls := fc.calls
+	fc.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected connector to execute once for duplicate idempotency key, got %d", calls)
+	}
+}
+
+func TestHandleToolCall_PersistsSessionAndTraceIdentifiers(t *testing.T) {
+	fe := newFakeEvidence()
+	gw := newTestGateway(fe, &fakeConnectors{output: json.RawMessage(`{"ok":true}`)}, &fakeApprovals{}, fakePolicy{decision: types.DecisionAllow, reason: "ok"})
+
+	body, _ := json.Marshal(types.ToolCallRequest{
+		TenantID:       "tenant1",
+		AgentID:        "agent-1",
+		Tool:           "slack",
+		Action:         "msg.post",
+		Resource:       "channel/general",
+		IdempotencyKey: "trace-key",
+		SessionID:      "session-123",
+		TraceID:        "trace-123",
+	})
+
+	rr := postToolCall(t, gw, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	if len(fe.events) != 1 {
+		t.Fatalf("expected exactly one recorded event, got %d", len(fe.events))
+	}
+	for _, env := range fe.events {
+		if env.Request.SessionID != "session-123" || env.Request.TraceID != "trace-123" {
+			t.Fatalf("expected session/trace ids to persist, got %+v", env.Request)
+		}
+		if !bytes.Contains(env.PayloadJSON, []byte(`"session_id":"session-123"`)) || !bytes.Contains(env.PayloadJSON, []byte(`"trace_id":"trace-123"`)) {
+			t.Fatalf("expected payload json to preserve session/trace ids, got %s", string(env.PayloadJSON))
+		}
+	}
+}
+
 func TestHandleToolCall_IdempotentApproveReplayReconstructsApprovalURL(t *testing.T) {
 	fe := newFakeEvidence()
 	fe.replays[replayKey("tenant1", "k-approve")] = &evidence.ReplayResponse{

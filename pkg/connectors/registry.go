@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,7 @@ func (r *Registry) ListAll() []ConnectorInfo {
 		seen[tool] = true
 		out = append(out, ConnectorInfo{
 			Name:    tool,
-			Actions: entry.actions,
+			Actions: normalizeActions(entry.actions),
 			Type:    "remote",
 		})
 	}
@@ -92,10 +93,13 @@ func (r *Registry) ListAll() []ConnectorInfo {
 		}
 		out = append(out, ConnectorInfo{
 			Name:    name,
-			Actions: entry.actions,
+			Actions: normalizeActions(entry.actions),
 			Type:    "builtin",
 		})
 	}
+	slices.SortFunc(out, func(a, b ConnectorInfo) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 	return out
 }
 
@@ -172,4 +176,25 @@ func (r *Registry) SetInternalToken(token string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.internalToken = token
+}
+
+func normalizeActions(actions []string) []string {
+	if len(actions) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(actions))
+	out := make([]string, 0, len(actions))
+	for _, action := range actions {
+		action = strings.TrimSpace(action)
+		if action == "" {
+			continue
+		}
+		if _, ok := seen[action]; ok {
+			continue
+		}
+		seen[action] = struct{}{}
+		out = append(out, action)
+	}
+	slices.Sort(out)
+	return out
 }

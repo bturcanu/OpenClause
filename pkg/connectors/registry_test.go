@@ -63,3 +63,32 @@ func TestRegistry_SetTimeout(t *testing.T) {
 	reg := NewRegistry()
 	reg.SetTimeout(5 * time.Second)
 }
+
+func TestRegistry_ListAll_SortsAndDedupesCatalog(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register("zeta", "http://remote.example", "write", "read", "write")
+	reg.RegisterBuiltin("alpha", []string{"fetch", "fetch", "list"}, func(context.Context, ExecRequest) ExecResponse {
+		return ExecResponse{Status: "success"}
+	})
+	// Remote registrations should win for duplicate tool names.
+	reg.RegisterBuiltin("zeta", []string{"builtin-only"}, func(context.Context, ExecRequest) ExecResponse {
+		return ExecResponse{Status: "success"}
+	})
+
+	got := reg.ListAll()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 connectors, got %+v", got)
+	}
+	if got[0].Name != "alpha" || got[0].Type != "builtin" {
+		t.Fatalf("expected alpha builtin first, got %+v", got[0])
+	}
+	if len(got[0].Actions) != 2 || got[0].Actions[0] != "fetch" || got[0].Actions[1] != "list" {
+		t.Fatalf("expected alpha actions to be sorted and deduped, got %+v", got[0].Actions)
+	}
+	if got[1].Name != "zeta" || got[1].Type != "remote" {
+		t.Fatalf("expected zeta remote second, got %+v", got[1])
+	}
+	if len(got[1].Actions) != 2 || got[1].Actions[0] != "read" || got[1].Actions[1] != "write" {
+		t.Fatalf("expected zeta actions to be sorted and deduped, got %+v", got[1].Actions)
+	}
+}
