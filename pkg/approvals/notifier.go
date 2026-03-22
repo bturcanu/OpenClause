@@ -104,8 +104,8 @@ func (d *Dispatcher) DispatchOnce(ctx context.Context) error {
 	for _, item := range items {
 		switch strings.ToLower(item.NotifyKind) {
 		case "webhook":
-			if item.NotifyURL == "" {
-				_ = d.store.MarkNotificationFailed(ctx, item.ID, "webhook notify_url is empty")
+			if err := d.validateWebhookItem(item); err != nil {
+				_ = d.store.MarkNotificationFailed(ctx, item.ID, err.Error())
 				continue
 			}
 			if err := d.deliverWebhook(ctx, item); err != nil {
@@ -148,6 +148,20 @@ func (d *Dispatcher) DispatchOnce(ctx context.Context) error {
 		default:
 			_ = d.store.MarkNotificationFailed(ctx, item.ID, "unsupported notify kind")
 		}
+	}
+	return nil
+}
+
+func (d *Dispatcher) validateWebhookItem(item NotificationOutbox) error {
+	if item.NotifyURL == "" {
+		return fmt.Errorf("webhook notify_url is empty")
+	}
+	if strings.TrimSpace(item.SecretRef) == "" {
+		return fmt.Errorf("webhook secret_ref is empty")
+	}
+	secret, ok := d.secrets[item.SecretRef]
+	if !ok || strings.TrimSpace(secret) == "" {
+		return fmt.Errorf("webhook secret_ref %q is not configured", item.SecretRef)
 	}
 	return nil
 }
@@ -198,9 +212,11 @@ func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox
 	req.Header.Set("Ce-Type", "oc.approval.requested")
 	req.Header.Set("Ce-Id", item.ID)
 	req.Header.Set("Ce-Source", d.source)
-	if secret, ok := d.secrets[item.SecretRef]; ok && secret != "" {
-		req.Header.Set("X-OC-Signature-256", SignBodyHMACSHA256(body, secret))
+	secret, ok := d.secrets[item.SecretRef]
+	if !ok || strings.TrimSpace(secret) == "" {
+		return fmt.Errorf("webhook secret_ref %q is not configured", item.SecretRef)
 	}
+	req.Header.Set("X-OC-Signature-256", SignBodyHMACSHA256(body, secret))
 	resp, err := webhookClient.Do(req)
 	if err != nil {
 		return err

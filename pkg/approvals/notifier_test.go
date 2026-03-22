@@ -234,6 +234,106 @@ func TestDispatcherWebhookSignsBodyWhenSecretRefPresent(t *testing.T) {
 	}
 }
 
+func TestDispatcherFailsClosedForWebhookWithoutSecretRef(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := &fakeNotificationStore{
+		items: []NotificationOutbox{
+			{
+				ID:                "d-webhook-no-secret",
+				ApprovalRequestID: "r1",
+				TenantID:          "tenant1",
+				EventID:           "e1",
+				Tool:              "slack",
+				Action:            "msg.post",
+				Resource:          "channel/general",
+				ApprovalURL:       "http://localhost/x",
+				NotifyKind:        "webhook",
+				NotifyURL:         srv.URL,
+				SecretRef:         "",
+				CreatedAt:         time.Now().UTC(),
+			},
+		},
+		sent:    map[string]bool{},
+		failed:  map[string]bool{},
+		retries: map[string]int{},
+		lastErr: map[string]string{},
+	}
+	d := NewDispatcher(store, "oc://approvals", map[string]string{"configured-secret": "super-secret"}, "http://localhost:8082", "token")
+	d.SkipWebhookValidation = true
+
+	if err := d.DispatchOnce(context.Background()); err != nil {
+		t.Fatalf("DispatchOnce: %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("expected malformed webhook row not to be delivered, got %d HTTP hits", hits.Load())
+	}
+	if !store.failed["d-webhook-no-secret"] {
+		t.Fatalf("expected malformed webhook row to be marked failed")
+	}
+	if _, ok := store.retries["d-webhook-no-secret"]; ok {
+		t.Fatalf("expected malformed webhook row not to be retried")
+	}
+	if store.lastErr["d-webhook-no-secret"] != "webhook secret_ref is empty" {
+		t.Fatalf("unexpected failure reason: %q", store.lastErr["d-webhook-no-secret"])
+	}
+}
+
+func TestDispatcherFailsClosedForWebhookWithUnknownSecretRef(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := &fakeNotificationStore{
+		items: []NotificationOutbox{
+			{
+				ID:                "d-webhook-unknown-secret",
+				ApprovalRequestID: "r1",
+				TenantID:          "tenant1",
+				EventID:           "e1",
+				Tool:              "slack",
+				Action:            "msg.post",
+				Resource:          "channel/general",
+				ApprovalURL:       "http://localhost/x",
+				NotifyKind:        "webhook",
+				NotifyURL:         srv.URL,
+				SecretRef:         "missing-secret",
+				CreatedAt:         time.Now().UTC(),
+			},
+		},
+		sent:    map[string]bool{},
+		failed:  map[string]bool{},
+		retries: map[string]int{},
+		lastErr: map[string]string{},
+	}
+	d := NewDispatcher(store, "oc://approvals", map[string]string{"configured-secret": "super-secret"}, "http://localhost:8082", "token")
+	d.SkipWebhookValidation = true
+
+	if err := d.DispatchOnce(context.Background()); err != nil {
+		t.Fatalf("DispatchOnce: %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("expected malformed webhook row not to be delivered, got %d HTTP hits", hits.Load())
+	}
+	if !store.failed["d-webhook-unknown-secret"] {
+		t.Fatalf("expected malformed webhook row to be marked failed")
+	}
+	if _, ok := store.retries["d-webhook-unknown-secret"]; ok {
+		t.Fatalf("expected malformed webhook row not to be retried")
+	}
+	if store.lastErr["d-webhook-unknown-secret"] != `webhook secret_ref "missing-secret" is not configured` {
+		t.Fatalf("unexpected failure reason: %q", store.lastErr["d-webhook-unknown-secret"])
+	}
+}
+
 func TestBackoffForAttemptStopsGrowingAfterExponentCap(t *testing.T) {
 	if got := backoffForAttempt(1); got != 2*time.Second {
 		t.Fatalf("expected first retry backoff 2s, got %s", got)
