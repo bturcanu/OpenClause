@@ -21,7 +21,7 @@ Legend:
 | Item | Status | Tests | Notes |
 | --- | --- | --- | --- |
 | 5. Tenant create/list/status | `COVERED` | `cmd/console-api/store_backed_handlers_test.go`; `pkg/console/store_integration_test.go` | Covers name validation, platform-admin create/list, tenant-scoped list behavior, newest-first paging assumptions, and active/disabled status transitions. |
-| 6. Agents CRUD | `PARTIAL` | `cmd/console-api/store_backed_handlers_test.go`; `pkg/console/store_integration_test.go` | Covers create/list ordering and missing-tenant `404` path. Delete coverage remains backlog because the product currently exposes create/list plus status updates, not a delete handler. |
+| 6. Agents CRUD | `COVERED` | `cmd/console-api/store_backed_handlers_test.go`; `cmd/console-api/agents_status_handler_test.go`; `pkg/console/store_integration_test.go`; `pkg/console/agent_status_integration_test.go` | Covers create/list ordering, missing-tenant `404`, tenant-scoped active/disabled status toggles, wrong-tenant `404`, persisted `status` field, and optional `include_disabled=false` filtering. Product behavior now intentionally preserves audit history with status toggles instead of hard-delete. |
 | 7. API keys | `COVERED` | `cmd/console-api/store_backed_handlers_test.go`; `pkg/console/store_integration_test.go`; `pkg/auth/middleware_test.go`; `pkg/auth/apikey_test.go` | Covers create/list/revoke/rotate-primary workflow, lookup of rotated key, revoked key rejection, bearer/X-API-Key whitespace tolerance, and tenant-disabled middleware behavior. |
 
 ## C. Toolcall Governance
@@ -63,13 +63,13 @@ Legend:
 
 | Item | Status | Tests | Notes |
 | --- | --- | --- | --- |
-| 18. Overview + tenant analytics | `PARTIAL` | `cmd/console-api/tenant_analytics_handlers_test.go`; `pkg/console/store_integration_test.go` | Covers range/bucket/top-agent parsing, nil-summary stable JSON shape, and empty-state store behavior (11 risk buckets + zero totals). Remaining gap: no seeded-data integration test yet for timeseries bucket totals/per-agent ordering across multiple events. |
+| 18. Overview + tenant analytics | `COVERED` | `cmd/console-api/tenant_analytics_handlers_test.go`; `pkg/console/store_integration_test.go`; `pkg/console/analytics_integration_test.go` | Covers range/bucket/top-agent parsing, nil-summary stable JSON shape, seeded multi-event totals, deterministic trend buckets, per-agent ordering with `agent_id` tie-break, risk-heatmap totals, and non-null JSON arrays for handler responses. |
 
 ## I. Connectors Catalog
 
 | Item | Status | Tests | Notes |
 | --- | --- | --- | --- |
-| 19. Registry invariants + console proxy parity | `PARTIAL` | `pkg/connectors/registry_test.go`; `cmd/console-api/connectors_handler_test.go` | Covers execution, remote-over-builtin dedupe, sorted/deduped catalog ordering, concurrent exec access, and console proxy stripping `base_url`. Remaining gap: no exhaustive assertion that every builtin connector action list exactly matches expected product contract. |
+| 19. Registry invariants + console proxy parity | `COVERED` | `pkg/connectors/registry_test.go`; `pkg/connectors/builtins/registry_contract_test.go`; `cmd/console-api/connectors_handler_test.go` | Covers execution, remote-over-builtin dedupe, sorted/deduped catalog ordering, concurrent exec access, console proxy stripping `base_url`, and the exact builtin connector name/action contract. |
 
 ## J. SDKs
 
@@ -84,12 +84,8 @@ Legend:
 
 | Flow | Status | Coverage | Notes |
 | --- | --- | --- | --- |
-| Minimal end-to-end smoke | `PARTIAL` | `scripts/demo.sh`; `scripts/e2e-curl-happy-path.sh` | The repo already has shell-based smoke coverage for live-stack flows. I did not add a new Go e2e test because the sweep prioritized deterministic handler/store coverage first; a true approval-roundtrip integration test is still valid backlog if the team wants a CI-grade harness around the live stack. |
+| Minimal end-to-end smoke | `COVERED` | `scripts/demo.sh`; `scripts/e2e-curl-happy-path.sh`; `cmd/gateway/approval_roundtrip_integration_test.go` | Covers shell-based live-stack smokes plus an in-process Go approval roundtrip proving `toolcall -> pending approval -> grant -> execute -> console session timeline/CSV linkage` with real Postgres-backed evidence, approvals, and console stores. |
 
 ## True Backlog
 
-- Agent delete lifecycle: product/API surface still lacks a delete handler, so the checklist item remains only partially coverable without changing behavior.
-- Analytics seeded-data summary/timeseries verification: empty-state and handler parsing are covered, but a richer multi-event analytics fixture would improve confidence in bucket math and per-agent ranking.
-- Connector catalog completeness audit: ordering/deduping is now covered, but there is no “golden list” test that locks every builtin connector action set.
 - Python 3.9 installability: `sdk/python/pyproject.toml` still declares `requires-python >=3.10`; that compatibility gap remains product backlog, not a missing unit test.
-- CI-grade golden-path approval e2e: shell smokes exist, but there is still no dedicated automated test for `toolcall -> approval -> execute -> console session/event detail` across the full local stack.
