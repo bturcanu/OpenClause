@@ -76,8 +76,8 @@ export default function Connectors() {
             Remote connectors call external services. Built-in connectors run in-process inside the gateway. Use this catalog to confirm action names before running a demo or troubleshooting a policy decision.
           </p>
           <div className="stacked-badges mt-16">
-            <span className="badge badge-blue">{connectors.filter(c => c.type === 'remote').length} remote</span>
-            <span className="badge badge-gray">{connectors.filter(c => c.type !== 'remote').length} built-in</span>
+            <span className="badge connector-kind-remote">{connectors.filter(c => c.type === 'remote').length} remote</span>
+            <span className="badge connector-kind-builtin">{connectors.filter(c => c.type !== 'remote').length} built-in</span>
             <span className="badge badge-green">{connectors.reduce((total, connector) => total + (connector.actions?.length || 0), 0)} actions</span>
           </div>
         </div>
@@ -104,13 +104,13 @@ export default function Connectors() {
               <div className="flex-between">
                 <h4>{c.name}</h4>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  {c.type && <span className={`badge badge-${c.type === 'remote' ? 'blue' : 'gray'}`}>{c.type}</span>}
+                  {c.type && <span className={`badge ${c.type === 'remote' ? 'connector-type-remote' : 'connector-type-builtin'}`}>{c.type}</span>}
                   {c.event_count != null && <span className="badge badge-gray">{c.event_count} events</span>}
                 </div>
               </div>
               <div className="cc-actions">
                 {visibleActions.map(action => (
-                  <span key={action} className="badge badge-blue">{action}</span>
+                  <span key={action} className="badge connector-action-badge">{action}</span>
                 ))}
                 {hiddenCount > 0 ? (
                   <button

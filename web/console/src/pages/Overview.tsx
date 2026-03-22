@@ -42,6 +42,7 @@ export default function Overview() {
   const [events, setEvents] = useState<Event[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [inspectedBucketIndex, setInspectedBucketIndex] = useState<number | null>(null)
 
   async function fetchOverview() {
     setLoading(true)
@@ -94,6 +95,12 @@ export default function Overview() {
   }, [])
 
   const maxCount = Math.max(...timeseries.map(bucket => bucket.total || 0), 1)
+  const activeBucketIndex = timeseries.length === 0
+    ? null
+    : Math.min(inspectedBucketIndex ?? (timeseries.length - 1), timeseries.length - 1)
+  const activeBucket = activeBucketIndex == null ? null : timeseries[activeBucketIndex]
+  const scaleTicks = Array.from(new Set([maxCount, Math.ceil(maxCount / 2), 0])).sort((a, b) => b - a)
+  const midpointBucket = timeseries.length > 2 ? timeseries[Math.floor((timeseries.length - 1) / 2)] : null
 
   return (
     <div>
@@ -104,7 +111,7 @@ export default function Overview() {
 
       {error ? <InlineErrorState message={error} onRetry={() => void fetchOverview()} /> : null}
 
-      <div className="stats-grid">
+      <div className="stats-grid overview-stats-grid">
         <StatCard label="Total Events" value={overview.total_events.toLocaleString()} />
         <StatCard label="Allowed" value={overview.allow_count.toLocaleString()} tone="green" />
         <StatCard label="Denied" value={overview.deny_count.toLocaleString()} tone="red" />
@@ -114,26 +121,48 @@ export default function Overview() {
       </div>
 
       {!loading && timeseries.length > 0 ? (
-        <div className="detail-panel">
+        <div className="detail-panel event-volume-panel">
           <h3>Event Volume</h3>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 120, padding: '12px 0' }}>
-            {timeseries.map((bucket, index) => (
-              <div
-                key={`${bucket.bucket}-${index}`}
-                title={`${bucket.bucket}: ${bucket.total}`}
-                style={{
-                  flex: 1,
-                  background: 'linear-gradient(180deg, #0f766e, #0b5f58)',
-                  borderRadius: '6px 6px 0 0',
-                  height: `${((bucket.total || 0) / maxCount) * 100}%`,
-                  minHeight: 4,
-                  transition: 'height 0.3s',
-                }}
-              />
-            ))}
+          <div className="event-volume-header">
+            <div className="table-subtext">Hover or focus a bar to inspect a bucket count.</div>
+            {activeBucket ? (
+              <div className="event-volume-summary">
+                <span className="event-volume-total">{activeBucket.total}</span>
+                <span>
+                  {activeBucket.total === 1 ? 'event' : 'events'} on {formatDate(activeBucket.bucket, 'date')}
+                </span>
+              </div>
+            ) : null}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#746250' }}>
+          <div className="event-volume-layout">
+            <div className="event-volume-scale">
+              {scaleTicks.map(tick => (
+                <span key={tick}>{tick}</span>
+              ))}
+            </div>
+            <div className="event-volume-bars">
+              {timeseries.map((bucket, index) => (
+                <button
+                  key={`${bucket.bucket}-${index}`}
+                  type="button"
+                  className={`event-volume-bar ${index === activeBucketIndex ? 'is-active' : ''}`}
+                  title={`${formatDate(bucket.bucket, 'date')}: ${bucket.total} events`}
+                  aria-label={`${bucket.total} events on ${formatDate(bucket.bucket, 'date')}`}
+                  onMouseEnter={() => setInspectedBucketIndex(index)}
+                  onMouseLeave={() => setInspectedBucketIndex(null)}
+                  onFocus={() => setInspectedBucketIndex(index)}
+                  onBlur={() => setInspectedBucketIndex(null)}
+                  style={{
+                    height: `${((bucket.total || 0) / maxCount) * 100}%`,
+                    minHeight: 6,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="event-volume-axis">
             <span>{formatDate(timeseries[0].bucket, 'date')}</span>
+            {midpointBucket ? <span>{formatDate(midpointBucket.bucket, 'date')}</span> : null}
             <span>{formatDate(timeseries[timeseries.length - 1].bucket, 'date')}</span>
           </div>
         </div>
