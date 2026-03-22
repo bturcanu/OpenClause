@@ -15,6 +15,7 @@ interface Agent {
   id: string
   name: string
   tenant_id: string
+  status: 'active' | 'disabled'
   created_at: string
 }
 
@@ -137,6 +138,7 @@ export default function TenantDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const fetchSeq = useRef(0)
+  const [hideDisabledAgents, setHideDisabledAgents] = useState(false)
 
   const [agentForm, setAgentForm] = useState({ name: '' })
   const [keyForm, setKeyForm] = useState({ name: '' })
@@ -216,7 +218,7 @@ export default function TenantDetail() {
     try {
       const [tenantResp, agentsResp, keysResp, approversResp, notifCfgResp] = await Promise.allSettled([
         api.get(`/admin/tenants/${id}`),
-        api.get(`/admin/tenants/${id}/agents`),
+        api.get(`/admin/tenants/${id}/agents?include_disabled=${hideDisabledAgents ? 'false' : 'true'}`),
         api.get(`/admin/tenants/${id}/apikeys`),
         api.get(`/admin/tenants/${id}/approvers`),
         api.get(`/admin/tenants/${id}/notification-config`),
@@ -278,7 +280,7 @@ export default function TenantDetail() {
     }
   }
 
-  useEffect(() => { fetchAll() }, [id])
+  useEffect(() => { fetchAll() }, [id, hideDisabledAgents])
 
   async function fetchAlerts() {
     setAlertsLoading(true)
@@ -428,6 +430,19 @@ export default function TenantDetail() {
     try {
       await api.post(`/admin/tenants/${id}/agents`, agentForm)
       setAgentForm({ name: '' })
+      await fetchAll()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function updateAgentStatus(agentId: string, status: 'active' | 'disabled') {
+    setCreating(true)
+    setError('')
+    try {
+      await api.post(`/admin/tenants/${id}/agents/${agentId}/status`, { status })
       await fetchAll()
     } catch (err: any) {
       setError(err.message)
@@ -694,6 +709,16 @@ export default function TenantDetail() {
                 <button className="btn btn-primary" disabled={creating}>Create</button>
               </div>
             </form>
+            <div className="toggle-stack" style={{ marginTop: 16 }}>
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={hideDisabledAgents}
+                  onChange={e => setHideDisabledAgents(e.target.checked)}
+                />
+                <span>Hide disabled</span>
+              </label>
+            </div>
           </div>
 
           <div className="table-container">
@@ -702,18 +727,32 @@ export default function TenantDetail() {
                 <tr>
                   <th>ID</th>
                   <th>Name</th>
+                  <th>Status</th>
                   <th>Created</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {agents.length === 0 ? (
-                  <tr><td colSpan={3} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No agents</td></tr>
+                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No agents</td></tr>
                 ) : (
                   agents.map(a => (
                     <tr key={a.id}>
                       <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{a.id.slice(0, 12)}…</td>
                       <td>{a.name}</td>
+                      <td>
+                        <span className={`badge ${a.status === 'active' ? 'badge-green' : 'badge-red'}`}>{a.status}</span>
+                      </td>
                       <td>{formatDate(a.created_at, 'date')}</td>
+                      <td>
+                        <button
+                          className={`btn btn-sm ${a.status === 'active' ? 'btn-danger' : 'btn-outline'}`}
+                          onClick={() => updateAgentStatus(a.id, a.status === 'active' ? 'disabled' : 'active')}
+                          disabled={creating}
+                        >
+                          {a.status === 'active' ? 'Disable' : 'Enable'}
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}

@@ -28,6 +28,7 @@ import (
 
 var (
 	ErrTenantNotFound        = errors.New("tenant not found")
+	ErrAgentNotFound         = errors.New("agent not found")
 	ErrAPIKeyNotFound        = errors.New("api key not found")
 	ErrAPIKeyAlreadyRevoked  = errors.New("api key already revoked")
 	ErrAlertRuleNotFound     = errors.New("alert rule not found")
@@ -650,17 +651,27 @@ func (s *Store) CreateAgent(ctx context.Context, tenantID, name string) (*Agent,
 }
 
 func (s *Store) ListAgents(ctx context.Context, tenantID string, limit, offset int) ([]Agent, error) {
+	return s.ListAgentsFiltered(ctx, tenantID, true, limit, offset)
+}
+
+func (s *Store) ListAgentsFiltered(ctx context.Context, tenantID string, includeDisabled bool, limit, offset int) ([]Agent, error) {
 	limit = clampLimit(limit)
 	offset = clampOffset(offset)
 
-	rows, err := s.pool.Query(ctx, `
+	query := `
 		SELECT id, tenant_id, name, status, labels, created_at
 		FROM agents
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1`
+	if !includeDisabled {
+		query += ` AND status = 'active'`
+	}
+	query += `
 		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+		LIMIT $2 OFFSET $3`
+
+	rows, err := s.pool.Query(ctx, query, tenantID, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("console.ListAgents: %w", err)
+		return nil, fmt.Errorf("console.ListAgentsFiltered: %w", err)
 	}
 	defer rows.Close()
 
@@ -668,12 +679,12 @@ func (s *Store) ListAgents(ctx context.Context, tenantID string, limit, offset i
 	for rows.Next() {
 		var a Agent
 		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.Labels, &a.CreatedAt); err != nil {
-			return nil, fmt.Errorf("console.ListAgents scan: %w", err)
+			return nil, fmt.Errorf("console.ListAgentsFiltered scan: %w", err)
 		}
 		out = append(out, a)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("console.ListAgents iteration: %w", err)
+		return nil, fmt.Errorf("console.ListAgentsFiltered iteration: %w", err)
 	}
 	return out, nil
 }
@@ -686,6 +697,20 @@ func (s *Store) UpdateAgentStatus(ctx context.Context, id, status string) error 
 	}
 	if res.RowsAffected() == 0 {
 		return fmt.Errorf("console.UpdateAgentStatus: agent %s not found", id)
+	}
+	return nil
+}
+
+func (s *Store) UpdateAgentStatusForTenant(ctx context.Context, tenantID, agentID, status string) error {
+	res, err := s.pool.Exec(ctx, `
+		UPDATE agents
+		SET status = $3
+		WHERE id = $1 AND tenant_id = $2`, agentID, tenantID, status)
+	if err != nil {
+		return fmt.Errorf("console.UpdateAgentStatusForTenant: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.UpdateAgentStatusForTenant: %w: %s", ErrAgentNotFound, agentID)
 	}
 	return nil
 }

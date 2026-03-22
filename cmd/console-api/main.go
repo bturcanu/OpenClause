@@ -198,6 +198,7 @@ func main() {
 
 		r.Post("/admin/tenants/{tenant_id}/agents", api.requireTenantRole("tenant_admin", api.handleCreateAgent))
 		r.Get("/admin/tenants/{tenant_id}/agents", api.requireTenantAccess(api.handleListAgents))
+		r.Post("/admin/tenants/{tenant_id}/agents/{agent_id}/status", api.requireTenantRole("tenant_admin", api.handleUpdateAgentStatus))
 
 		r.Post("/admin/tenants/{tenant_id}/apikeys", api.requireTenantRole("tenant_admin", api.handleCreateAPIKey))
 		r.Get("/admin/tenants/{tenant_id}/apikeys", api.requireTenantAccess(api.handleListAPIKeys))
@@ -1458,13 +1459,54 @@ func (api *ConsoleAPI) handleCreateAgent(w http.ResponseWriter, r *http.Request)
 func (api *ConsoleAPI) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	tenantID := chi.URLParam(r, "tenant_id")
 	limit, offset := parsePagination(r)
-	agents, err := api.store.ListAgents(r.Context(), tenantID, limit, offset)
+	includeDisabled := true
+	rawIncludeDisabled := strings.TrimSpace(r.URL.Query().Get("include_disabled"))
+	if rawIncludeDisabled != "" {
+		parsed, err := strconv.ParseBool(rawIncludeDisabled)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "include_disabled must be true or false")
+			return
+		}
+		includeDisabled = parsed
+	}
+
+	agents, err := api.store.ListAgentsFiltered(r.Context(), tenantID, includeDisabled, limit, offset)
 	if err != nil {
 		api.log.Error("list agents failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
 	writeJSON(w, http.StatusOK, agents)
+}
+
+func (api *ConsoleAPI) handleUpdateAgentStatus(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "tenant_id")
+	agentID := chi.URLParam(r, "agent_id")
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
+	var in struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if in.Status != "active" && in.Status != "disabled" {
+		writeError(w, http.StatusBadRequest, "status must be 'active' or 'disabled'")
+		return
+	}
+
+	if err := api.store.UpdateAgentStatusForTenant(r.Context(), tenantID, agentID, in.Status); err != nil {
+		if errors.Is(err, console.ErrAgentNotFound) {
+			writeError(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		api.log.Error("update agent status failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to update agent status")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": in.Status})
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
