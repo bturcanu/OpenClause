@@ -120,3 +120,60 @@ func TestHandleUpdateAgentStatusRejectsInvalidInputs(t *testing.T) {
 		t.Fatalf("expected 400 for invalid include_disabled query, got %d body=%s", badQueryRR.Code, badQueryRR.Body.String())
 	}
 }
+
+func TestHandleListAgentsDefaultIncludesDisabledAndFilterHidesThem(t *testing.T) {
+	fx := newDBAPIFixture(t)
+	tenant := mustCreateTenantDB(t, fx.store, "Agents Filter Tenant")
+	activeAgent, err := fx.store.CreateAgent(context.Background(), tenant.ID, "active-agent")
+	if err != nil {
+		t.Fatalf("CreateAgent active: %v", err)
+	}
+	disabledAgent, err := fx.store.CreateAgent(context.Background(), tenant.ID, "disabled-agent")
+	if err != nil {
+		t.Fatalf("CreateAgent disabled: %v", err)
+	}
+	if err := fx.store.UpdateAgentStatusForTenant(context.Background(), tenant.ID, disabledAgent.ID, "disabled"); err != nil {
+		t.Fatalf("UpdateAgentStatusForTenant: %v", err)
+	}
+
+	defaultReq := withRouteParams(
+		httptest.NewRequest(http.MethodGet, "/admin/tenants/"+tenant.ID+"/agents", nil),
+		map[string]string{"tenant_id": tenant.ID},
+	)
+	defaultRR := httptest.NewRecorder()
+	fx.api.handleListAgents(defaultRR, defaultReq)
+	if defaultRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 from default list, got %d body=%s", defaultRR.Code, defaultRR.Body.String())
+	}
+	var defaultAgents []console.Agent
+	if err := json.Unmarshal(defaultRR.Body.Bytes(), &defaultAgents); err != nil {
+		t.Fatalf("decode default agents: %v", err)
+	}
+	if len(defaultAgents) != 2 {
+		t.Fatalf("expected default list to include active and disabled agents, got %+v", defaultAgents)
+	}
+	statusByID := map[string]string{}
+	for _, agent := range defaultAgents {
+		statusByID[agent.ID] = agent.Status
+	}
+	if statusByID[activeAgent.ID] != "active" || statusByID[disabledAgent.ID] != "disabled" {
+		t.Fatalf("unexpected default agent statuses: %+v", statusByID)
+	}
+
+	filteredReq := withRouteParams(
+		httptest.NewRequest(http.MethodGet, "/admin/tenants/"+tenant.ID+"/agents?include_disabled=false", nil),
+		map[string]string{"tenant_id": tenant.ID},
+	)
+	filteredRR := httptest.NewRecorder()
+	fx.api.handleListAgents(filteredRR, filteredReq)
+	if filteredRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 from filtered list, got %d body=%s", filteredRR.Code, filteredRR.Body.String())
+	}
+	var filteredAgents []console.Agent
+	if err := json.Unmarshal(filteredRR.Body.Bytes(), &filteredAgents); err != nil {
+		t.Fatalf("decode filtered agents: %v", err)
+	}
+	if len(filteredAgents) != 1 || filteredAgents[0].ID != activeAgent.ID || filteredAgents[0].Status != "active" {
+		t.Fatalf("expected filtered list to keep only the active agent, got %+v", filteredAgents)
+	}
+}
