@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -8,6 +9,8 @@ import (
 )
 
 const knownInsecureSSLMode = "disable"
+
+var ErrRequiredEnvNotSet = errors.New("required environment variable is not set")
 
 // PostgresDSN builds a Postgres connection string from standard env vars.
 // Defaults sslmode to "require"; allows "disable" for local dev but logs a warning.
@@ -26,11 +29,11 @@ func PostgresDSN() string {
 	return u.String()
 }
 
-// RequireEnv returns the value of an env var or calls fatal via the provided callback.
-func RequireEnv(key string) string {
+// RequireEnv returns the value of an env var or a typed error when it is missing.
+func RequireEnv(key string) (string, error) {
 	v := EnvOr(key, "")
 	if v == "" {
-		panic(fmt.Sprintf("required environment variable %s is not set", key))
+		return "", fmt.Errorf("%w: %s", ErrRequiredEnvNotSet, key)
 	}
-	return v
+	return v, nil
 }

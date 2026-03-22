@@ -356,14 +356,21 @@ type authSessionStore interface {
 
 type claimsKey struct{}
 
+func bearerToken(authHeader string) string {
+	fields := strings.Fields(authHeader)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(fields[1])
+}
+
 func (api *ConsoleAPI) jwtAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		token := bearerToken(r.Header.Get("Authorization"))
+		if token == "" {
 			writeError(w, http.StatusUnauthorized, "missing or invalid authorization header")
 			return
 		}
-		token := strings.TrimPrefix(auth, "Bearer ")
 		claims, err := console.ValidateToken(api.jwtCfg, token)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid token: "+err.Error())

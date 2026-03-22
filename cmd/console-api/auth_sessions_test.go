@@ -119,6 +119,30 @@ func TestJWTAuthMiddlewareAllowsLegacyTokenWithoutSessionID(t *testing.T) {
 	}
 }
 
+func TestJWTAuthMiddlewareAcceptsCaseInsensitiveTrimmedBearerToken(t *testing.T) {
+	store := &fakeAuthSessionStore{}
+	api := newTestAuthSessionAPI(store)
+	token, err := console.GenerateToken(testJWTConfig(), console.JWTClaims{
+		Sub:   "user-1",
+		Email: "user@example.com",
+	})
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	req.Header.Set("Authorization", "   bearer    "+token+"   ")
+	rr := httptest.NewRecorder()
+
+	api.jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandleListAuthSessionsScopesTenantAdminRequests(t *testing.T) {
 	store := &fakeAuthSessionStore{
 		listSessions: []console.AuthSession{{ID: "sess-1", UserID: "user-1"}},

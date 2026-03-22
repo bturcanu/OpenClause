@@ -1,6 +1,10 @@
 package console
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -107,4 +111,43 @@ func TestInvalidIssuer(t *testing.T) {
 	if !strings.Contains(err.Error(), "issuer") {
 		t.Errorf("expected issuer error, got: %v", err)
 	}
+}
+
+func TestTokenExpiresAtBoundary(t *testing.T) {
+	cfg := JWTConfig{Secret: "test-secret-key", Issuer: "openclause-test", ExpiryHours: 1}
+	claims := JWTClaims{
+		Sub:   "user-boundary",
+		Email: "boundary@example.com",
+		Iss:   cfg.Issuer,
+		Iat:   100,
+		Exp:   200,
+	}
+
+	token := signedTestToken(t, cfg, claims)
+
+	if _, err := validateTokenAt(cfg, token, time.Unix(199, 0)); err != nil {
+		t.Fatalf("expected token to be valid before exp, got %v", err)
+	}
+	if _, err := validateTokenAt(cfg, token, time.Unix(200, 0)); err == nil {
+		t.Fatal("expected token to be expired at exp boundary")
+	}
+}
+
+func signedTestToken(t *testing.T, cfg JWTConfig, claims JWTClaims) string {
+	t.Helper()
+
+	header := []byte(`{"alg":"HS256","typ":"JWT"}`)
+	headerEnc := base64.RawURLEncoding.EncodeToString(header)
+
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	payloadEnc := base64.RawURLEncoding.EncodeToString(payload)
+
+	signingInput := headerEnc + "." + payloadEnc
+	mac := hmac.New(sha256.New, []byte(cfg.Secret))
+	mac.Write([]byte(signingInput))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return signingInput + "." + sig
 }

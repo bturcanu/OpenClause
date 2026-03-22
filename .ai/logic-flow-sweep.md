@@ -787,3 +787,25 @@ Status: Complete
     - session step confirmed both list visibility and session detail export approval/execution linkage
     - bundle export returned `4 events`
     - connectors returned `8 registered` in both gateway and console
+
+## Follow-up: 2026-03-21 Auth Header / JWT Boundary Hardening
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-042 | High | Console auth middleware | Console API JWT auth still rejected harmless `Authorization` formatting differences like lowercase `bearer` or extra spacing, even though gateway/API-key auth had already been hardened | `jwtAuthMiddleware` used strict `strings.HasPrefix("Bearer ")` and `TrimPrefix` parsing | Added a tolerant bearer-token helper using `strings.Fields` + case-insensitive scheme matching and covered it with a regression test | `cmd/console-api/main.go`, `cmd/console-api/auth_sessions_test.go` | Fixed |
+| LF-043 | Medium | JWT validation | A token at the exact `exp` boundary could still be accepted for one second because validation used `now > exp` instead of `now >= exp` | Boundary semantics in `ValidateToken` were off by one second | Moved validation through a deterministic `validateTokenAt(...)` helper, changed expiry check to `>=`, and added an exact-boundary regression test | `pkg/console/jwt.go`, `pkg/console/jwt_test.go` | Fixed |
+| LF-044 | Medium | Shared config helpers | `pkg/config.RequireEnv` panicked on missing env vars instead of returning a typed error that callers can surface as controlled startup validation | Helper implementation encoded a panic path rather than an error contract | Changed `RequireEnv` to return `ErrRequiredEnvNotSet` and added direct unit coverage; current service startup remains on explicit `log.Error + os.Exit(1)` paths | `pkg/config/postgres.go`, `pkg/config/postgres_test.go` | Fixed |
+| LF-045 | Medium | Cross-service auth behavior | API key auth was tolerant of common header normalization after the gateway fix, but console JWT auth still behaved differently | Header parsing logic diverged across auth code paths | Landed the existing gateway API-key normalization fix and the new console JWT parser together so bearer handling is consistent across services | `pkg/auth/middleware.go`, `pkg/auth/middleware_test.go`, `cmd/console-api/main.go`, `cmd/console-api/auth_sessions_test.go` | Fixed |
+
+### Verification
+
+- `go test ./pkg/auth ./pkg/console ./pkg/config ./cmd/console-api ./cmd/gateway -count=1`
+  - Pass
+- `go test ./pkg/console -run 'TestTokenExpiresAtBoundary|TestTokenExpiry|TestGenerateAndValidateToken' -count=1`
+  - Pass
+- `go test ./... -count=1`
+  - Pass
+- `go test -race ./pkg/auth ./pkg/console ./pkg/config ./cmd/console-api ./cmd/gateway -count=1`
+  - Pass

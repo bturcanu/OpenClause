@@ -56,6 +56,10 @@ func GenerateToken(cfg JWTConfig, claims JWTClaims) (string, error) {
 
 // ValidateToken parses and validates a JWT token.
 func ValidateToken(cfg JWTConfig, tokenStr string) (*JWTClaims, error) {
+	return validateTokenAt(cfg, tokenStr, time.Now())
+}
+
+func validateTokenAt(cfg JWTConfig, tokenStr string, now time.Time) (*JWTClaims, error) {
 	parts := strings.SplitN(tokenStr, ".", 3)
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid token format")
@@ -86,7 +90,7 @@ func ValidateToken(cfg JWTConfig, tokenStr string) (*JWTClaims, error) {
 		return nil, fmt.Errorf("unmarshal claims: %w", err)
 	}
 
-	if time.Now().Unix() > claims.Exp {
+	if now.Unix() >= claims.Exp {
 		return nil, fmt.Errorf("token expired")
 	}
 
