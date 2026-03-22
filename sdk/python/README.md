@@ -8,6 +8,12 @@ Python client for the [OpenClause](https://openclause.dev) agentic access govern
 pip install openclause
 ```
 
+LangChain integration is optional:
+
+```bash
+pip install "openclause[langchain]"
+```
+
 ## Scope
 
 This SDK wraps the gateway tool-call APIs only. Console-admin flows such as invite delivery, session exports, and evidence bundle exports live on `console-api` and are documented in the repo [README](../../readme.md) and [Local Testing Guide](../../docs/LOCAL_TESTING.md).
@@ -93,9 +99,11 @@ except TimeoutError:
 ## Development
 
 ```bash
-# Editable installs require Python 3.10+ and current packaging tools.
-python3.10 -m pip install -U pip setuptools wheel
-python3.10 -m pip install -e ".[dev]"
+# Core SDK tests/imports should run on Python 3.9+.
+# Run any LangChain-specific checks in an environment with the extra installed.
+python3 -m pip install -U pip setuptools wheel
+python3 -m pip install -e ".[dev]"
+python3 -m pip install -e ".[langchain]"
 
 # Run tests
 pytest

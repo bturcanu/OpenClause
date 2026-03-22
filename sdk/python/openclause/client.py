@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from typing import Any, Dict, Optional
 
 try:
     import requests
@@ -133,7 +134,7 @@ class OpenClauseClient:
     # -- internal helpers -----------------------------------------------------
 
     @staticmethod
-    def _validate_risk_score(risk_score: int | None) -> None:
+    def _validate_risk_score(risk_score: Optional[int]) -> None:
         if risk_score is None:
             return
 
@@ -146,11 +147,11 @@ class OpenClauseClient:
     def _post(
         self,
         path: str,
-        body: dict | None,
-        extra_headers: dict | None = None,
-    ) -> dict:
+        body: Optional[Dict[str, Any]],
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         url = f"{self._base_url}{path}"
-        raw_body: bytes | None = None
+        raw_body: Optional[bytes] = None
         if body is not None:
             raw_body = json.dumps(body).encode()
             if len(raw_body) > _MAX_REQUEST_BYTES:
@@ -175,7 +176,7 @@ class OpenClauseClient:
 
         return self._handle_response(resp)
 
-    def _get(self, path: str) -> dict:
+    def _get(self, path: str) -> Dict[str, Any]:
         url = f"{self._base_url}{path}"
 
         try:
@@ -188,7 +189,7 @@ class OpenClauseClient:
         return self._handle_response(resp)
 
     @staticmethod
-    def _handle_response(resp: requests.Response) -> dict:
+    def _handle_response(resp: requests.Response) -> Dict[str, Any]:
         content_length = len(resp.content)
         if content_length > _MAX_RESPONSE_BYTES:
             raise ValidationError(

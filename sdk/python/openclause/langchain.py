@@ -15,7 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Dict, Optional, Union
+
+try:
+    from langchain_core.tools import BaseTool as _LangChainBaseTool
+except ImportError as exc:
+    raise ImportError(
+        "LangChain integration requires optional dependencies. "
+        "Install them with: pip install openclause[langchain]"
+    ) from exc
 
 from .client import OpenClauseClient
 from .models import ToolCallRequest
@@ -45,7 +53,7 @@ class OpenClauseTool:
         tenant_id: str = "",
         agent_id: str = "",
         resource: str = "",
-        description: str | None = None,
+        description: Optional[str] = None,
     ) -> None:
         self.client = client
         self.tool_name = tool_name
@@ -59,7 +67,7 @@ class OpenClauseTool:
             or f"Execute {tool_name}.{action} via OpenClause governance"
         )
 
-    def _run(self, params: dict[str, Any] | str | None = None) -> str:
+    def _run(self, params: Union[Dict[str, Any], str, None] = None) -> str:
         """Execute the governed tool call synchronously.
 
         Args:
@@ -86,7 +94,7 @@ class OpenClauseTool:
         if response.decision == "approve":
             response = self.client.wait_for_approval(response.event_id)
 
-        result: dict[str, Any] = {
+        result: Dict[str, Any] = {
             "event_id": response.event_id,
             "decision": response.decision,
             "reason": response.reason,
@@ -99,6 +107,6 @@ class OpenClauseTool:
             }
         return json.dumps(result)
 
-    async def _arun(self, params: dict[str, Any] | str | None = None) -> str:
+    async def _arun(self, params: Union[Dict[str, Any], str, None] = None) -> str:
         """Async variant — runs the sync implementation in a thread to avoid blocking the event loop."""
         return await asyncio.to_thread(self._run, params)

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import importlib
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
+import builtins
 import requests
 
 from openclause import (
@@ -74,6 +77,29 @@ class TestToolCallRequestSerialization(unittest.TestCase):
         )
         d = req.to_dict()
         self.assertEqual(d["risk_score"], 0)
+
+
+class TestImportBoundaries(unittest.TestCase):
+    def test_core_imports_do_not_require_langchain(self) -> None:
+        self.assertIsNotNone(importlib.import_module("openclause"))
+        self.assertIsNotNone(importlib.import_module("openclause.client"))
+        self.assertIsNotNone(importlib.import_module("openclause.models"))
+
+    def test_langchain_import_without_extra_shows_helpful_message(self) -> None:
+        real_import = builtins.__import__
+
+        def failing_import(name, globals=None, locals=None, fromlist=(), level=0):  # type: ignore[no-untyped-def]
+            if name == "langchain_core.tools" or name.startswith("langchain_core"):
+                raise ImportError("No module named 'langchain_core'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        sys.modules.pop("openclause.langchain", None)
+        with patch("builtins.__import__", side_effect=failing_import):
+            with self.assertRaises(ImportError) as ctx:
+                importlib.import_module("openclause.langchain")
+
+        self.assertIn("pip install openclause[langchain]", str(ctx.exception))
+        sys.modules.pop("openclause.langchain", None)
 
 
 class TestRiskScoreValidation(unittest.TestCase):

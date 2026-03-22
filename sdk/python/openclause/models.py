@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -14,19 +15,19 @@ class ToolCallRequest:
     tool: str
     action: str
     idempotency_key: str
-    params: dict | None = None
+    params: Optional[Dict[str, Any]] = None
     resource: str = ""
     # Optional so that callers can explicitly send `risk_score=0` while still
     # allowing omission for a minimal payload (server default is 0).
-    risk_score: int | None = None
-    risk_factors: list[str] | None = None
+    risk_score: Optional[int] = None
+    risk_factors: Optional[List[str]] = None
     user_id: str = ""
     session_id: str = ""
     trace_id: str = ""
     schema_version: str = "1.0"
 
-    def to_dict(self) -> dict:
-        payload: dict = {
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
             "tenant_id": self.tenant_id,
             "agent_id": self.agent_id,
             "tool": self.tool,
@@ -56,12 +57,12 @@ class ExecutionResult:
     """Result returned after a tool call is executed."""
 
     status: str
-    output_json: dict | None = None
+    output_json: Optional[Dict[str, Any]] = None
     error: str = ""
     duration_ms: int = 0
 
     @classmethod
-    def from_dict(cls, data: dict) -> ExecutionResult:
+    def from_dict(cls, data: Dict[str, Any]) -> ExecutionResult:
         return cls(
             status=data.get("status", ""),
             output_json=data.get("output_json"),
@@ -78,10 +79,10 @@ class ToolCallResponse:
     decision: str
     reason: str = ""
     approval_url: str = ""
-    result: ExecutionResult | None = None
+    result: Optional[ExecutionResult] = None
 
     @classmethod
-    def from_dict(cls, data: dict) -> ToolCallResponse:
+    def from_dict(cls, data: Dict[str, Any]) -> ToolCallResponse:
         result = None
         if data.get("result") is not None:
             result = ExecutionResult.from_dict(data["result"])
@@ -106,10 +107,10 @@ class ToolCallEvent:
     action: str = ""
     reason: str = ""
     approval_url: str = ""
-    result: ExecutionResult | None = None
+    result: Optional[ExecutionResult] = None
 
     @classmethod
-    def from_dict(cls, data: dict) -> ToolCallEvent:
+    def from_dict(cls, data: Dict[str, Any]) -> ToolCallEvent:
         result = None
         if data.get("result") is not None:
             result = ExecutionResult.from_dict(data["result"])
