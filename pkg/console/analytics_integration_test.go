@@ -1,0 +1,222 @@
+package console
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/bturcanu/OpenClause/pkg/evidence"
+	"github.com/bturcanu/OpenClause/pkg/types"
+)
+
+type analyticsFixture struct {
+	store    *Store
+	evidence *evidence.Store
+	ctx      context.Context
+	tenantID string
+	since    time.Time
+}
+
+func newAnalyticsFixture(t *testing.T) *analyticsFixture {
+	t.Helper()
+
+	store, ctx := newIntegrationStore(t)
+	tenant := mustCreateTenant(t, ctx, store, "Analytics Tenant")
+	evStore := evidence.NewStore(store.Pool())
+
+	for _, agentID := range []string{"agent-a", "agent-b"} {
+		if _, err := store.Pool().Exec(ctx, `
+			INSERT INTO agents (id, tenant_id, name, status, labels)
+			VALUES ($1, $2, $3, 'active', '{}'::jsonb)`,
+			agentID, tenant.ID, agentID,
+		); err != nil {
+			t.Fatalf("insert analytics agent %s: %v", agentID, err)
+		}
+	}
+
+	since := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	events := []struct {
+		eventID   string
+		agentID   string
+		decision  types.Decision
+		riskScore int
+		at        time.Time
+	}{
+		{eventID: "00000000-0000-0000-0000-000000000001", agentID: "agent-a", decision: types.DecisionAllow, riskScore: 2, at: since.Add(5 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000002", agentID: "agent-b", decision: types.DecisionDeny, riskScore: 8, at: since.Add(20 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000003", agentID: "agent-a", decision: types.DecisionApprove, riskScore: 6, at: since.Add(40 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000004", agentID: "agent-b", decision: types.DecisionAllow, riskScore: 2, at: since.Add(70 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000005", agentID: "agent-a", decision: types.DecisionDeny, riskScore: 8, at: since.Add(85 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000006", agentID: "agent-b", decision: types.DecisionApprove, riskScore: 6, at: since.Add(125 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000007", agentID: "agent-a", decision: types.DecisionAllow, riskScore: 2, at: since.Add(155 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000008", agentID: "agent-b", decision: types.DecisionDeny, riskScore: 8, at: since.Add(170 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000009", agentID: "agent-a", decision: types.DecisionApprove, riskScore: 6, at: since.Add(195 * time.Minute)},
+		{eventID: "00000000-0000-0000-0000-000000000010", agentID: "agent-b", decision: types.DecisionAllow, riskScore: 2, at: since.Add(225 * time.Minute)},
+	}
+
+	for i, event := range events {
+		req := types.ToolCallRequest{
+			TenantID:       tenant.ID,
+			AgentID:        event.agentID,
+			Tool:           "slack",
+			Action:         "msg.post",
+			Resource:       "channels/general",
+			RiskScore:      event.riskScore,
+			UserID:         "user-analytics",
+			SessionID:      "analytics-session",
+			TraceID:        "analytics-trace",
+			IdempotencyKey: fmt.Sprintf("analytics-%02d", i+1),
+			RequestedAt:    event.at,
+			Labels: map[string]string{
+				"user_name":  "Analytics User",
+				"user_email": "analytics@example.com",
+			},
+		}
+		payloadJSON, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal analytics payload %s: %v", event.eventID, err)
+		}
+		env := &types.ToolCallEnvelope{
+			EventID:      event.eventID,
+			Request:      req,
+			PayloadJSON:  payloadJSON,
+			ReceivedAt:   event.at,
+			Decision:     event.decision,
+			PolicyResult: &types.PolicyResult{Decision: event.decision, Reason: "analytics fixture"},
+		}
+		if err := evStore.RecordEvent(ctx, env); err != nil {
+			t.Fatalf("RecordEvent(%s): %v", event.eventID, err)
+		}
+	}
+
+	return &analyticsFixture{
+		store:    store,
+		evidence: evStore,
+		ctx:      ctx,
+		tenantID: tenant.ID,
+		since:    since,
+	}
+}
+
+func TestStoreGetDecisionTimeseriesUsesDeterministicBuckets(t *testing.T) {
+	fx := newAnalyticsFixture(t)
+
+	series, err := fx.store.GetDecisionTimeseries(fx.ctx, fx.tenantID, fx.since, 60)
+	if err != nil {
+		t.Fatalf("GetDecisionTimeseries: %v", err)
+	}
+
+	if len(series) != 4 {
+		t.Fatalf("expected 4 hourly buckets, got %+v", series)
+	}
+
+	expected := []struct {
+		bucket       time.Time
+		total        int64
+		allowCount   int64
+		denyCount    int64
+		approveCount int64
+	}{
+		{bucket: fx.since, total: 3, allowCount: 1, denyCount: 1, approveCount: 1},
+		{bucket: fx.since.Add(time.Hour), total: 2, allowCount: 1, denyCount: 1, approveCount: 0},
+		{bucket: fx.since.Add(2 * time.Hour), total: 3, allowCount: 1, denyCount: 1, approveCount: 1},
+		{bucket: fx.since.Add(3 * time.Hour), total: 2, allowCount: 1, denyCount: 0, approveCount: 1},
+	}
+
+	for i, want := range expected {
+		got := series[i]
+		bucket, ok := got["bucket"].(time.Time)
+		if !ok {
+			t.Fatalf("bucket %d was not a time.Time: %#v", i, got["bucket"])
+		}
+		if !bucket.Equal(want.bucket) {
+			t.Fatalf("bucket %d: expected %s, got %s", i, want.bucket, bucket)
+		}
+		if got["total"] != want.total || got["allow_count"] != want.allowCount || got["deny_count"] != want.denyCount || got["approve_count"] != want.approveCount {
+			t.Fatalf("bucket %d: expected totals %+v, got %+v", i, want, got)
+		}
+	}
+}
+
+func TestStoreGetTenantAnalyticsSummarySeededDataIsDeterministic(t *testing.T) {
+	fx := newAnalyticsFixture(t)
+	before := time.Now().UTC()
+
+	summary, err := fx.store.GetTenantAnalyticsSummary(fx.ctx, fx.tenantID, fx.since, 60, 5)
+	if err != nil {
+		t.Fatalf("GetTenantAnalyticsSummary: %v", err)
+	}
+	after := time.Now().UTC()
+
+	if summary == nil {
+		t.Fatalf("expected non-nil summary")
+	}
+	if !summary.RangeStart.Equal(fx.since) {
+		t.Fatalf("expected range_start %s, got %s", fx.since, summary.RangeStart)
+	}
+	if summary.RangeEnd.Before(before) || summary.RangeEnd.After(after) {
+		t.Fatalf("expected range_end between %s and %s, got %s", before, after, summary.RangeEnd)
+	}
+	if summary.Trend == nil || summary.RiskHeatmap == nil || summary.PerAgent == nil {
+		t.Fatalf("expected stable non-nil slices, got summary=%+v", summary)
+	}
+
+	if summary.Totals.TotalEvents != 10 || summary.Totals.AllowCount != 4 || summary.Totals.DenyCount != 3 || summary.Totals.ApproveCount != 3 {
+		t.Fatalf("unexpected totals: %+v", summary.Totals)
+	}
+
+	expectedTrend := []DecisionTrendBucket{
+		{Bucket: fx.since, Total: 3, AllowCount: 1, DenyCount: 1, ApproveCount: 1},
+		{Bucket: fx.since.Add(time.Hour), Total: 2, AllowCount: 1, DenyCount: 1, ApproveCount: 0},
+		{Bucket: fx.since.Add(2 * time.Hour), Total: 3, AllowCount: 1, DenyCount: 1, ApproveCount: 1},
+		{Bucket: fx.since.Add(3 * time.Hour), Total: 2, AllowCount: 1, DenyCount: 0, ApproveCount: 1},
+	}
+	if len(summary.Trend) != len(expectedTrend) {
+		t.Fatalf("expected %d trend buckets, got %+v", len(expectedTrend), summary.Trend)
+	}
+	for i, want := range expectedTrend {
+		got := summary.Trend[i]
+		if !got.Bucket.Equal(want.Bucket) || got.Total != want.Total || got.AllowCount != want.AllowCount || got.DenyCount != want.DenyCount || got.ApproveCount != want.ApproveCount {
+			t.Fatalf("trend bucket %d mismatch: want %+v got %+v", i, want, got)
+		}
+	}
+
+	if len(summary.PerAgent) != 2 {
+		t.Fatalf("expected two per-agent rows, got %+v", summary.PerAgent)
+	}
+	expectedPerAgent := []AgentBreakdownRow{
+		{AgentID: "agent-a", AllowCount: 2, DenyCount: 1, ApproveCount: 2, Total: 5},
+		{AgentID: "agent-b", AllowCount: 2, DenyCount: 2, ApproveCount: 1, Total: 5},
+	}
+	for i, want := range expectedPerAgent {
+		if summary.PerAgent[i] != want {
+			t.Fatalf("per_agent row %d mismatch: want %+v got %+v", i, want, summary.PerAgent[i])
+		}
+	}
+
+	if len(summary.RiskHeatmap) != 11 {
+		t.Fatalf("expected 11 risk heatmap rows, got %d", len(summary.RiskHeatmap))
+	}
+	expectedRiskRows := map[int]RiskHeatmapRow{
+		2: {RiskScore: 2, AllowCount: 4, DenyCount: 0, ApproveCount: 0, Total: 4},
+		6: {RiskScore: 6, AllowCount: 0, DenyCount: 0, ApproveCount: 3, Total: 3},
+		8: {RiskScore: 8, AllowCount: 0, DenyCount: 3, ApproveCount: 0, Total: 3},
+	}
+	for risk, want := range expectedRiskRows {
+		if summary.RiskHeatmap[risk] != want {
+			t.Fatalf("risk row %d mismatch: want %+v got %+v", risk, want, summary.RiskHeatmap[risk])
+		}
+	}
+	if summary.RiskHeatmap[1].Total != 0 || summary.RiskHeatmap[10].Total != 0 {
+		t.Fatalf("expected untouched risk rows to remain zeroed, got row1=%+v row10=%+v", summary.RiskHeatmap[1], summary.RiskHeatmap[10])
+	}
+
+	if !summary.OnboardingChecklist.HasToolcall {
+		t.Fatalf("expected toolcall onboarding flag to be true, got %+v", summary.OnboardingChecklist)
+	}
+	if summary.OnboardingChecklist.HasAPIKey || summary.OnboardingChecklist.HasApprover || summary.OnboardingChecklist.HasApproval || summary.OnboardingChecklist.HasExecution {
+		t.Fatalf("expected only toolcall onboarding flag to be set, got %+v", summary.OnboardingChecklist)
+	}
+}

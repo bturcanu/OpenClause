@@ -1908,7 +1908,7 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 		FROM tool_events
 		WHERE tenant_id = $1 AND received_at >= $2
 		GROUP BY agent_id
-		ORDER BY total DESC
+		ORDER BY total DESC, agent_id ASC
 		LIMIT $3`, tenantID, since, topAgents,
 	)
 	if err != nil {
