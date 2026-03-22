@@ -42,7 +42,7 @@ This file started as the verified backlog for the `product/next-steps` branch. L
 | Java SDK `gradle test` (Docker) | ✅ 3 tasks, BUILD SUCCESSFUL |
 | Python SDK `pip install -e .` | ⚠️ Requires Python ≥3.10 (system has 3.9.6) |
 
-### Happy Path Demo (scripts/demo.sh — all 12 steps pass)
+### Happy Path Demo (scripts/demo.sh — all 14 steps pass)
 
 | Step | Result | Evidence |
 |------|--------|----------|
@@ -56,8 +56,10 @@ This file started as the verified backlog for the `product/next-steps` branch. L
 | 8. Execute approved call | ✅ | `result.status=success` (mock Slack connector) |
 | 9. Audit trail | ✅ | Event detail returned with tool/action/decision |
 | 10. Exports (CSV + bundle) | ✅ | CSV 200, bundle event_count=4 |
-| 11. Connectors list (gateway) | ✅ | 8 connectors with actions (2 remote + 6 builtin) |
-| 12. Tenant analytics | ✅ | Totals, trend, risk heatmap, per-agent breakdown |
+| 11. Sessions list + detail export | ✅ | Session visible plus approval/execution chain in JSON export |
+| 12. Exports (CSV + bundle) | ✅ | CSV 200, bundle event_count=4 |
+| 13. Connectors list (gateway) | ✅ | 8 connectors with actions (2 remote + 6 builtin) |
+| 14. Tenant analytics | ✅ | Totals, trend, risk heatmap, per-agent breakdown |
 
 ### Additional Verifications
 
@@ -93,7 +95,7 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 | F-001 | Java SDK test uses `riskScore(8.5)` — compile error after BUG-003 Integer change | Changed test to `riskScore(8)` (type safety makes the non-integer test obsolete) |
 | F-002 | Connectors.tsx used `tool` field but gateway returns `name` — field mismatch | Normalized UI to handle both `name` and `tool` fields |
 | F-003 | Overview page calls `/admin/analytics/overview` + `/admin/analytics/timeseries` but routes were not registered | Routes already existed as handlers; added route registration |
-| F-004 | Demo script missing | Created `scripts/demo.sh` — 12-step automated happy-path |
+| F-004 | Demo script missing | Created `scripts/demo.sh` — now a 14-step automated happy-path |
 
 ### Known gaps at the time of original verification (historical snapshot)
 
@@ -178,7 +180,7 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 
 #### NS-04: Windows demo script (demo.ps1)
 - **Impact:** Windows developers can run the demo
-- **Acceptance:** `.\scripts\demo.ps1` runs same 12 steps on PowerShell
+- **Acceptance:** `.\scripts\demo.ps1` runs same 14 steps on PowerShell
 - **Sketch:** Port demo.sh to PowerShell (Invoke-RestMethod instead of curl)
 - **Effort:** S
 - **Test:** Manual on Windows or PowerShell on macOS
@@ -245,7 +247,7 @@ Before merging `product/next-steps` to main:
 - [x] `web/console npm run build` passes
 - [x] `sdk/typescript npm run build` passes
 - [x] Java SDK `gradle test` passes (via Docker)
-- [x] `scripts/demo.sh` passes all 12 steps on fresh DB
+- [x] `scripts/demo.sh` passes all 14 steps on fresh DB
 - [x] No stray binaries committed
 - [x] `.ai/bug-sweep.md` has per-bug evidence for all 43 bugs
 - [ ] Python SDK tested on Python 3.10+ (blocked by system Python version)

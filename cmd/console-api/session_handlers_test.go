@@ -253,7 +253,10 @@ func TestHandleExportSessionJSONReturnsSessionBundle(t *testing.T) {
 }
 
 func TestHandleExportSessionCSVMapsStructuredError(t *testing.T) {
-	store := &fakeSessionsStore{exportErr: errors.New("boom")}
+	store := &fakeSessionsStore{
+		getSession: &console.Session{ID: "sess-1", TenantID: "tenant-1"},
+		exportErr:  errors.New("boom"),
+	}
 	api := newTestSessionsAPI(store)
 	claims := &console.JWTClaims{Sub: "admin-1", Roles: []string{"tenant_admin"}, Tenant: "tenant-1"}
 	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
@@ -270,5 +273,29 @@ func TestHandleExportSessionCSVMapsStructuredError(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "failed to export session") {
 		t.Fatalf("unexpected body: %s", rr.Body.String())
+	}
+}
+
+func TestHandleExportSessionCSVReturns404WhenSessionMissing(t *testing.T) {
+	store := &fakeSessionsStore{}
+	api := newTestSessionsAPI(store)
+	claims := &console.JWTClaims{Sub: "admin-1", Roles: []string{"tenant_admin"}, Tenant: "tenant-1"}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(http.MethodGet, "/admin/sessions/sess-missing/export/csv", nil).WithContext(ctx)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("session_id", "sess-missing")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	rr := httptest.NewRecorder()
+
+	api.handleExportSessionCSV(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "session not found") {
+		t.Fatalf("unexpected body: %s", rr.Body.String())
+	}
+	if store.exportID != "" {
+		t.Fatalf("expected export not to run when session is missing, got exportID=%q", store.exportID)
 	}
 }

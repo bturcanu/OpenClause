@@ -2,6 +2,8 @@
 
 End-to-end walkthrough: boot the stack, seed data, and exercise every major flow.
 
+Use [readme.md](/Users/bogdan/dev/personal/OpenClause/readme.md) as the canonical quick-start and product overview. This guide is the deeper local/operator reference for curl recipes, smoke checks, and environment-specific notes.
+
 ## Prerequisites
 
 - Docker Desktop running
@@ -377,7 +379,7 @@ curl -s "http://localhost:8090/admin/sessions/$SESSION_ID?tenant_id=$TENANT_ID" 
 curl -s "http://localhost:8090/admin/sessions/$SESSION_ID/timeline?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
-# Export the session as CSV or JSON
+# Export the session as CSV or JSON (`404` if the session id or tenant scope is wrong)
 curl -s "http://localhost:8090/admin/sessions/$SESSION_ID/export/csv?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
 

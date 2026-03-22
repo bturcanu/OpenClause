@@ -18,10 +18,16 @@ env:
   CONSOLE_API_ADDR: ":8090"
   GATEWAY_URL: http://gateway:8080
   PUBLIC_BASE_URL: http://localhost:3000
+  CONSOLE_DEV_LOG_RAW_TOKENS: "false"
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
   POSTGRES_SSLMODE: disable
   OPA_URL: http://opa:8181
+  SMTP_HOST: ""
+  SMTP_PORT: "587"
+  SMTP_USER: ""
+  SMTP_PASS: ""
+  SMTP_FROM: ""
   # Required — must be ≥32 bytes. Provide via secretRef or set explicitly.
   CONSOLE_JWT_SECRET: ""
   CONSOLE_CORS_ORIGINS: ""

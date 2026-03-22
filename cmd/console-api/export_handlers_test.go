@@ -21,6 +21,10 @@ type fakeExportStore struct {
 	bundleErr     error
 	csvWriteBytes string
 	events        []console.EventListItem
+	count         int
+	countErr      error
+	since         time.Time
+	until         time.Time
 }
 
 func (f *fakeExportStore) ExportEventsCSV(_ context.Context, _ string, _ time.Time, _ time.Time, w io.Writer) error {
@@ -30,7 +34,18 @@ func (f *fakeExportStore) ExportEventsCSV(_ context.Context, _ string, _ time.Ti
 	return f.csvErr
 }
 
-func (f *fakeExportStore) ListEventsInRange(_ context.Context, _ string, _ time.Time, _ time.Time, _ int) ([]console.EventListItem, error) {
+func (f *fakeExportStore) CountEventsInRange(_ context.Context, _ string, since, until time.Time) (int, error) {
+	f.since = since
+	f.until = until
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	return f.count, nil
+}
+
+func (f *fakeExportStore) ListEventsInRange(_ context.Context, _ string, since, until time.Time, _ int) ([]console.EventListItem, error) {
+	f.since = since
+	f.until = until
 	if f.bundleErr != nil {
 		return nil, f.bundleErr
 	}
@@ -88,6 +103,7 @@ func TestHandleExportBundle_ListEventsErrorReturnsAPIError(t *testing.T) {
 	until := "2020-01-02T00:00:00Z"
 
 	api := newTestConsoleAPI(&fakeExportStore{
+		count:     1,
 		bundleErr: errors.New("boom"),
 	})
 
@@ -234,5 +250,68 @@ func TestHandleExportBundle_MissingTenantIDReturnsStructuredAPIError(t *testing.
 	}
 	if apiErr.Retryable {
 		t.Fatalf("expected retryable=false")
+	}
+}
+
+func TestHandleExportBundle_UsesUntilQueryParameter(t *testing.T) {
+	const tenantID = "tenant-1"
+	const since = "2020-01-01T00:00:00Z"
+	const until = "2020-01-02T03:04:05Z"
+
+	store := &fakeExportStore{
+		count:  1,
+		events: []console.EventListItem{{EventID: "evt-1"}},
+	}
+	api := newTestConsoleAPI(store)
+
+	claims := &console.JWTClaims{Roles: []string{"platform_admin"}}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/reports/export/bundle?tenant_id="+tenantID+"&since="+since+"&until="+until,
+		nil,
+	).WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	api.handleExportBundle(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := store.until.Format(time.RFC3339); got != until {
+		t.Fatalf("expected until %q, got %q", until, got)
+	}
+	if got := store.since.Format(time.RFC3339); got != since {
+		t.Fatalf("expected since %q, got %q", since, got)
+	}
+}
+
+func TestHandleExportBundle_RejectsOversizedRanges(t *testing.T) {
+	api := newTestConsoleAPI(&fakeExportStore{count: 10001})
+
+	claims := &console.JWTClaims{Roles: []string{"platform_admin"}}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/reports/export/bundle?tenant_id=tenant-1&since=2020-01-01T00:00:00Z&until=2020-01-02T00:00:00Z",
+		nil,
+	).WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	api.handleExportBundle(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var apiErr types.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &apiErr); err != nil {
+		t.Fatalf("expected JSON APIError, got decode error=%v body=%s", err, rr.Body.String())
+	}
+	if apiErr.Code != "BAD_REQUEST" {
+		t.Fatalf("expected BAD_REQUEST, got %s", apiErr.Code)
+	}
+	if !strings.Contains(apiErr.Message, "bundle export range too large") {
+		t.Fatalf("unexpected message: %q", apiErr.Message)
 	}
 }

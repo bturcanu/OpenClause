@@ -146,6 +146,14 @@ SESSION_MATCHES=$(echo "$SESSION_LIST" | jq 'length')
 SESSION_FOUND_ID=$(echo "$SESSION_LIST" | jq -r '.[0].id // empty')
 [ "$SESSION_MATCHES" -ge 1 ] && [ "$SESSION_FOUND_ID" = "$SESSION_ID" ] && ok "Session visible in console API: $SESSION_ID" || fail "Session not found in sessions API"
 
+SESSION_EXPORT=$(curl -sS "$API/admin/sessions/$SESSION_ID/export/json?tenant_id=$TENANT_ID" -H "Authorization: Bearer $TOKEN")
+SESSION_EXPORT_EVENTS=$(echo "$SESSION_EXPORT" | jq '(.events // []) | length')
+SESSION_EXPORT_APPROVALS=$(echo "$SESSION_EXPORT" | jq '[.events[]? | select(.approval)] | length')
+SESSION_EXPORT_EXECUTIONS=$(echo "$SESSION_EXPORT" | jq '[.events[]? | select(.execution)] | length')
+[ "$SESSION_EXPORT_EVENTS" -ge 3 ] && [ "$SESSION_EXPORT_APPROVALS" -ge 1 ] && [ "$SESSION_EXPORT_EXECUTIONS" -ge 1 ] \
+  && ok "Session detail export includes approval + execution chain" \
+  || fail "Session detail export missing approval/execution linkage"
+
 # ─── 12. Exports ────────────────────────────────────────────────────────────
 info "Step 12: Export data"
 CSV_CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$API/admin/events/export/csv?tenant_id=$TENANT_ID" -H "Authorization: Bearer $TOKEN")

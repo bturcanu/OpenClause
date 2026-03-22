@@ -247,3 +247,70 @@ func TestHandleListInvitesOmitsRawTokenAndReturnsEmailStatus(t *testing.T) {
 		t.Fatalf("expected email_status logged, got %+v", payload.Invites[0]["email_status"])
 	}
 }
+
+func TestHandleInviteAcceptRejectsInvalidToken(t *testing.T) {
+	store := &fakeInviteStore{consumeErr: console.ErrInviteTokenInvalid}
+	api := newTestInviteAPI(store, &fakeInviteEmailSender{})
+
+	body := []byte(`{"token":"bad-token","password":"Admin123!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/auth/invite/accept", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	api.handleInviteAccept(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleInviteAcceptReturnsServerErrorOnStoreFailure(t *testing.T) {
+	store := &fakeInviteStore{consumeErr: errors.New("db unavailable")}
+	api := newTestInviteAPI(store, &fakeInviteEmailSender{})
+
+	body := []byte(`{"token":"tok-123","password":"Admin123!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/auth/invite/accept", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	api.handleInviteAccept(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestResetConfirmErrorStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantMsg    string
+	}{
+		{
+			name:       "invalid token",
+			err:        console.ErrResetTokenInvalid,
+			wantStatus: http.StatusBadRequest,
+			wantMsg:    "invalid or expired token",
+		},
+		{
+			name:       "missing user",
+			err:        console.ErrResetUserNotFound,
+			wantStatus: http.StatusBadRequest,
+			wantMsg:    "invalid or expired token",
+		},
+		{
+			name:       "internal failure",
+			err:        errors.New("db down"),
+			wantStatus: http.StatusInternalServerError,
+			wantMsg:    "failed to confirm reset",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotStatus, gotMsg := resetConfirmErrorStatus(tt.err)
+			if gotStatus != tt.wantStatus || gotMsg != tt.wantMsg {
+				t.Fatalf("expected (%d, %q), got (%d, %q)", tt.wantStatus, tt.wantMsg, gotStatus, gotMsg)
+			}
+		})
+	}
+}

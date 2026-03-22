@@ -309,6 +309,7 @@ type ConsoleAPI struct {
 
 type exportEventsStore interface {
 	ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error
+	CountEventsInRange(ctx context.Context, tenantID string, since, until time.Time) (int, error)
 	ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventListItem, error)
 }
 
@@ -1028,7 +1029,11 @@ func (api *ConsoleAPI) handleInviteAccept(w http.ResponseWriter, r *http.Request
 	res, err := api.inviteStore.ConsumeInviteAccept(r.Context(), in.Token, in.Password, in.Name)
 	if err != nil {
 		api.log.Error("invite accept failed", "error", err)
-		writeError(w, http.StatusBadRequest, "invalid or expired token")
+		if errors.Is(err, console.ErrInviteTokenInvalid) {
+			writeError(w, http.StatusBadRequest, "invalid or expired token")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to accept invite")
 		return
 	}
 	if res == nil || res.User == nil {
@@ -1041,6 +1046,16 @@ func (api *ConsoleAPI) handleInviteAccept(w http.ResponseWriter, r *http.Request
 		"tenant_id": res.TenantID,
 		"role":      res.Role,
 	})
+}
+
+func resetConfirmErrorStatus(err error) (int, string) {
+	if err == nil {
+		return http.StatusOK, ""
+	}
+	if errors.Is(err, console.ErrResetTokenInvalid) || errors.Is(err, console.ErrResetUserNotFound) {
+		return http.StatusBadRequest, "invalid or expired token"
+	}
+	return http.StatusInternalServerError, "failed to confirm reset"
 }
 
 func (api *ConsoleAPI) handleResetRequest(w http.ResponseWriter, r *http.Request) {
@@ -1102,7 +1117,11 @@ func (api *ConsoleAPI) handleResetConfirm(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := api.store.ConsumePasswordReset(r.Context(), in.Token, in.Password); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid or expired token")
+		status, message := resetConfirmErrorStatus(err)
+		if status >= http.StatusInternalServerError {
+			api.log.Error("reset confirm failed", "error", err)
+		}
+		writeError(w, status, message)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reset"})
@@ -2106,8 +2125,24 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 	}
 	since := parseSince(r, 7*24*time.Hour)
 	until := time.Now().UTC()
+	if v := r.URL.Query().Get("until"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			until = t
+		}
+	}
+	const maxBundleEvents = 10000
+	eventCount, err := api.exportStore.CountEventsInRange(r.Context(), tenant, since, until)
+	if err != nil {
+		api.log.Error("count bundle events failed", "error", err)
+		types.ErrInternal("failed to export bundle").WriteJSON(w)
+		return
+	}
+	if eventCount > maxBundleEvents {
+		types.ErrBadRequest(fmt.Sprintf("bundle export range too large; narrow the time window below %d events", maxBundleEvents)).WriteJSON(w)
+		return
+	}
 
-	events, err := api.exportStore.ListEventsInRange(r.Context(), tenant, since, until, 10000)
+	events, err := api.exportStore.ListEventsInRange(r.Context(), tenant, since, until, maxBundleEvents)
 	if err != nil {
 		api.log.Error("export bundle events failed", "error", err)
 		types.ErrInternal("failed to export bundle").WriteJSON(w)
@@ -2318,6 +2353,21 @@ func (api *ConsoleAPI) handleExportSessionCSV(w http.ResponseWriter, r *http.Req
 		return
 	}
 	tenantHint := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	session, err := api.sessionsStore.GetSession(r.Context(), sessionID, scope, tenantHint)
+	if err != nil {
+		if errors.Is(err, console.ErrSessionTenantRequired) {
+			writeSessionTenantRequiredError(w, err)
+			return
+		}
+		api.log.Error("get session for csv export failed", "error", err, "session_id", sessionID, "tenant_hint", tenantHint)
+		types.ErrInternal("failed to export session").WriteJSON(w)
+		return
+	}
+	if session == nil {
+		types.ErrNotFound("session not found").WriteJSON(w)
+		return
+	}
+
 	buf := bytes.NewBuffer(nil)
 	if err := api.sessionsStore.ExportSessionCSV(r.Context(), sessionID, scope, tenantHint, buf); err != nil {
 		if errors.Is(err, console.ErrSessionTenantRequired) {

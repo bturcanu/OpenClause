@@ -32,6 +32,9 @@ var (
 	ErrAPIKeyAlreadyRevoked  = errors.New("api key already revoked")
 	ErrAlertRuleNotFound     = errors.New("alert rule not found")
 	ErrSessionTenantRequired = errors.New("tenant_id required for ambiguous session_id")
+	ErrInviteTokenInvalid    = errors.New("invalid or expired invite token")
+	ErrResetTokenInvalid     = errors.New("invalid or expired password reset token")
+	ErrResetUserNotFound     = errors.New("password reset token email does not map to a user")
 )
 
 type SessionTenantAmbiguityError struct {
@@ -1451,7 +1454,7 @@ func (s *Store) ConsumeInviteAccept(ctx context.Context, token, password, name s
 		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
 	).Scan(&inv.Token, &inv.Email, &inv.TenantID, &inv.Role, &inv.Name, &inv.ExpiresAt)
 	if err == pgx.ErrNoRows {
-		return nil, nil
+		return nil, ErrInviteTokenInvalid
 	}
 	if err != nil {
 		return nil, fmt.Errorf("console.ConsumeInviteAccept select invite: %w", err)
@@ -1617,7 +1620,7 @@ func (s *Store) ConsumePasswordReset(ctx context.Context, token, password string
 		WHERE token = $1 AND expires_at > NOW()`, tokenHash,
 	).Scan(&email)
 	if err == pgx.ErrNoRows {
-		return fmt.Errorf("invalid or expired password reset token")
+		return ErrResetTokenInvalid
 	}
 	if err != nil {
 		return fmt.Errorf("console.ConsumePasswordReset select reset token: %w", err)
@@ -1636,7 +1639,7 @@ func (s *Store) ConsumePasswordReset(ctx context.Context, token, password string
 		return fmt.Errorf("console.ConsumePasswordReset update user: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("password reset token email does not map to a user")
+		return ErrResetUserNotFound
 	}
 
 	_, err = tx.Exec(ctx, `DELETE FROM password_resets WHERE token = $1`, tokenHash)
@@ -2044,6 +2047,19 @@ func (s *Store) ListEvents(ctx context.Context, filters EventListFilters) ([]Eve
 		return nil, fmt.Errorf("console.ListEvents iteration: %w", err)
 	}
 	return out, nil
+}
+
+// ListEventsInRange returns events for a tenant within a time range (for exports/bundles).
+func (s *Store) CountEventsInRange(ctx context.Context, tenantID string, since, until time.Time) (int, error) {
+	var count int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)::int
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2 AND received_at <= $3`, tenantID, since, until,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("console.CountEventsInRange: %w", err)
+	}
+	return count, nil
 }
 
 // ListEventsInRange returns events for a tenant within a time range (for exports/bundles).

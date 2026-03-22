@@ -4,6 +4,63 @@ Date: 2026-03-20
 Branch: `fix/logic-flow-sweep`
 Status: Complete
 
+## Assumptions / Contracts (2026-03-21)
+
+- `web/console/src/api.ts`
+  - `apiFetch(...)` returns a raw `Response`
+  - `api.get/post/put/delete` parse JSON through `readJSONResponse(...)`
+  - `api.delete(...)` returns `{}` for `204 No Content`
+- Invite/reset URLs
+  - `PUBLIC_BASE_URL` is the canonical base for absolute invite/reset links
+  - invalid or blank `PUBLIC_BASE_URL` falls back to `http://localhost:3000`
+- Invite/reset tokens
+  - invite and password-reset tokens are stored as keyed HMAC hashes at rest
+  - only `POST /admin/invites` returns the raw invite token once
+  - `GET /admin/invites` omits the raw token and shows delivery status only
+- Login tenant scoping
+  - non-platform users without a single tenant assignment are rejected
+  - multi-tenant non-platform users are rejected
+  - `platform_admin` ignores tenant-scoped roles and gets an empty tenant claim
+- Workspace note
+  - this sweep started with pre-existing local edits in `pkg/auth/middleware.go` and `pkg/auth/middleware_test.go`; they were treated as in-progress changes and left untouched
+
+## Follow-up: 2026-03-21 Contracts + Auth / Invite Sweep
+
+Date: 2026-03-21
+Branch: `main`
+Status: In Progress
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-037 | High | Auth / invite accept / password reset confirm | Public token flows could return `400 invalid or expired token` even when the real problem was an internal store/DB failure, which masked server issues as user mistakes | `handleInviteAccept` and `handleResetConfirm` flattened unexpected errors into the same bad-token response used for genuine invalid/expired tokens | Added explicit invalid-token sentinels in `pkg/console/store.go`, returned `500` for unexpected internal failures, kept `400` for real invalid-token cases, and added handler/unit regressions plus invite-sender misconfig tests | `pkg/console/store.go`, `cmd/console-api/main.go`, `cmd/console-api/invite_handlers_test.go`, `cmd/console-api/invite_email_test.go` | Fixed |
+
+### Verification
+
+- Targeted tests
+  - `go test ./cmd/console-api ./pkg/console -count=1`
+    - Pass
+    - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`, `ok github.com/bturcanu/OpenClause/pkg/console`
+  - `go test ./cmd/console-api -run 'TestHandleInviteAccept|TestResetConfirmErrorStatus|TestNewInviteEmailSenderFromEnv' -count=1`
+    - Pass
+    - Key output: `ok github.com/bturcanu/OpenClause/cmd/console-api`
+- Live auth/invite checks
+  - Invite create + list
+    - `POST /admin/invites` returned `email_status=logged`, raw `token`, and non-empty `accept_url`
+    - `GET /admin/invites` returned the invite metadata with `email_status=logged` and omitted `token`
+  - Invite accept + login
+    - `POST /auth/invite/accept` returned `status=accepted`, tenant scope, and role for `accept-1774145581@example.com`
+    - follow-up `POST /auth/login` for that user returned a JWT and `session_id`
+  - Password reset from emailed URL
+    - `POST /auth/reset/request` returned `status=ok`
+    - dev log emitted `confirm_url=http://localhost:3000/reset?token=...`
+    - `POST /auth/reset/confirm` with that token returned `status=reset`
+    - follow-up `POST /auth/login` with the new password succeeded
+- Contract checks
+  - `PUBLIC_BASE_URL` fallback remains covered by `Test_buildConsolePageURL_FallsBackToDefaultBaseURL`
+  - SMTP misconfig safe-failure behavior is now covered by `TestNewInviteEmailSenderFromEnv_MisconfiguredSenderReturnsSafeFailure`
+
 ## Follow-up: Invite Delivery Hardening
 
 Date: 2026-03-20
@@ -693,3 +750,40 @@ Status: Complete
 ### Notes
 
 - No new runtime regressions were reproduced in this final pass. The actionable issues were documentation drift and release-summary gaps rather than code-path failures.
+
+## Follow-up: 2026-03-21 Approval / Export / Docs Hardening
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-038 | Medium | Evidence / exports | `GET /admin/reports/export/bundle` ignored the caller-supplied `until` timestamp, so bundle exports could include newer events than requested | `handleExportBundle` parsed `since` but always used `time.Now()` for `until` | Parse `until` exactly like the CSV export path and cover it with a handler test | `cmd/console-api/main.go`, `cmd/console-api/export_handlers_test.go` | Fixed |
+| LF-039 | Medium | Sessions / exports | `GET /admin/sessions/{session_id}/export/csv` could return `200` with a header-only CSV even when the session did not exist or the tenant hint was wrong | CSV export skipped the existence check that JSON export already performed | Validate the session first, return `404 session not found` when appropriate, and keep the existing ambiguity contract intact | `cmd/console-api/main.go`, `cmd/console-api/session_handlers_test.go` | Fixed |
+| LF-040 | Medium | Evidence / exports | Large evidence-bundle requests could silently truncate at the store’s 10,000-row cap | Bundle export relied on `ListEventsInRange(..., 10000)` without detecting overflow | Added an explicit count pre-check and fail-closed `400` when the requested window exceeds 10,000 events; updated docs to describe the current limit | `cmd/console-api/main.go`, `pkg/console/store.go`, `cmd/console-api/export_handlers_test.go`, `readme.md`, `docs/LOCAL_TESTING.md` | Fixed |
+| LF-041 | Low | Docs / config | The Helm console-api values and current-state notes did not fully reflect invite-email/env support and the expanded 14-step demo | Docs/config drift after invite email delivery and session proof were added | Added SMTP + `CONSOLE_DEV_LOG_RAW_TOKENS` placeholders to Helm values, refreshed the README/local testing notes, and updated `next-steps.md` to describe the current 14-step demo | `deploy/helm/console-api/values.yaml`, `readme.md`, `docs/LOCAL_TESTING.md`, `.ai/next-steps.md` | Fixed |
+
+### Verification
+
+- `go test ./cmd/console-api -run 'TestHandleExportBundle_|TestHandleExportSessionCSV' -count=1`
+  - Pass
+- `go test ./... -count=1`
+  - Pass
+- `go test -race ./... -count=1`
+  - Pass
+- `npm --prefix web/console run build`
+  - Pass
+- `npm --prefix sdk/typescript run build`
+  - Pass
+- `docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:0.62.0 test /policy/bundles/v0 /policy/tests -v`
+  - Pass
+- `PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v`
+  - Pass
+- `cd sdk/java && ./gradlew test`
+  - Pass
+- `./scripts/demo.sh`
+  - Pass
+  - Key output:
+    - invite creation returned `email_status=logged`
+    - session step confirmed both list visibility and session detail export approval/execution linkage
+    - bundle export returned `4 events`
+    - connectors returned `8 registered` in both gateway and console

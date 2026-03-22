@@ -372,7 +372,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/events` | JWT | List events (filterable by tenant, user, agent, trace, tool, action, decision, session, and risk range) |
 | `GET` | `/admin/events/{event_id}` | JWT | Event detail with policy result + hash chain |
 | `GET` | `/admin/events/export/csv` | JWT | Export events as CSV |
-| `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON |
+| `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON (`tenant_id` required for platform admins; honors `since` / `until`; rejects ranges over 10,000 events) |
 | `GET` | `/admin/reports/activity` | JWT | Legacy alias for `/admin/events` |
 | `GET` | `/admin/reports/export/csv` | JWT | Legacy alias for `/admin/events/export/csv` |
 | `GET` | `/admin/sessions` | JWT | List observed runs derived from `tool_events.session_id` with user/agent attribution, decision counts, and last action summary |
@@ -380,8 +380,8 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/connectors` | JWT | List the full connector registry for the console (works before any toolcalls) |
 | `GET` | `/v1/connectors` | JWT | Legacy console-api alias for `/admin/connectors` |
 | `GET` | `/admin/sessions/{session_id}/timeline` | JWT | Session timeline grouped by request plus related approval/execution context; ambiguous platform-admin lookups return tenant `candidates` |
-| `GET` | `/admin/sessions/{session_id}/export/csv` | JWT | Export a session timeline as CSV |
-| `GET` | `/admin/sessions/{session_id}/export/json` | JWT | Export a session summary + timeline as JSON |
+| `GET` | `/admin/sessions/{session_id}/export/csv` | JWT | Export a session timeline as CSV (`404` if the session is missing or outside scope) |
+| `GET` | `/admin/sessions/{session_id}/export/json` | JWT | Export a session summary + timeline as JSON (`404` if the session is missing or outside scope) |
 | `GET` | `/admin/policy/versions` | JWT | List policy versions |
 | `POST` | `/admin/policy/versions` | `tenant_admin` or `platform_admin` | Create policy version |
 | `POST` | `/admin/policy/simulate` | JWT | Simulate policy against OPA |
@@ -655,6 +655,8 @@ evidence.VerifyChain(events) // returns error if chain is broken
 
 - **CSV export**: `GET /admin/events/export/csv`
 - **Evidence bundle**: `GET /admin/reports/export/bundle?tenant_id=...`
+  - Honors optional `since` / `until` query parameters.
+  - Fails closed with `400` if the requested range exceeds 10,000 events, instead of silently truncating the bundle.
 - **Verify bundle**: `go run ./cmd/verify --bundle <file>`
 
 ### Database tables
