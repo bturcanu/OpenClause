@@ -103,3 +103,29 @@ func Test_normalizeTenantNotificationConfig_UnsupportedKind(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func Test_normalizeTenantNotificationConfig_AcceptsEmptyAndMixedNotifyTargets(t *testing.T) {
+	emptyOut, err := normalizeTenantNotificationConfig(console.TenantNotificationConfig{})
+	if err != nil {
+		t.Fatalf("expected empty config to normalize, got %v", err)
+	}
+	if emptyOut.Notify == nil || len(emptyOut.Notify) != 0 {
+		t.Fatalf("expected empty notify slice, got %+v", emptyOut.Notify)
+	}
+
+	mixedOut, err := normalizeTenantNotificationConfig(console.TenantNotificationConfig{
+		Notify: []types.PolicyNotify{
+			{Kind: "slack", Channel: "#alerts"},
+			{Kind: "webhook", URL: "https://example.com/hook", SecretRef: "tenant-secret"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected mixed config to normalize, got %v", err)
+	}
+	if len(mixedOut.Notify) != 2 {
+		t.Fatalf("expected both notify entries to survive normalization, got %+v", mixedOut.Notify)
+	}
+	if mixedOut.Notify[0].Kind != "slack" || mixedOut.Notify[1].Kind != "webhook" {
+		t.Fatalf("unexpected normalized notify order/content: %+v", mixedOut.Notify)
+	}
+}

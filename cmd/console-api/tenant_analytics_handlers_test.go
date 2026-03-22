@@ -92,3 +92,27 @@ func Test_handleTenantAnalyticsSummary_parsesParamsAndCallsStore(t *testing.T) {
 	}
 }
 
+func Test_handleTenantAnalyticsSummary_nilSummaryReturnsStableEmptyJSON(t *testing.T) {
+	fs := &fakeAnalyticsStore{returnSummary: nil}
+	api := &ConsoleAPI{
+		log:            slog.Default(),
+		analyticsStore: fs,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/tenants/tenant1/analytics/summary", nil)
+	req = setRouteParamsAnalytics(req, map[string]string{"tenant_id": "tenant1"})
+	rr := httptest.NewRecorder()
+
+	api.handleTenantAnalyticsSummary(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+	}
+	if got["totals"] == nil || got["trend"] == nil || got["risk_heatmap"] == nil || got["per_agent"] == nil || got["onboarding_checklist"] == nil {
+		t.Fatalf("expected stable empty summary shape, got %+v", got)
+	}
+}

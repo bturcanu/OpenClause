@@ -87,7 +87,15 @@ func (api *ConsoleAPI) handleTenantAnalyticsSummary(w http.ResponseWriter, r *ht
 	if summary == nil {
 		summary = &console.TenantAnalyticsSummary{}
 	}
+	if summary.Trend == nil {
+		summary.Trend = []console.DecisionTrendBucket{}
+	}
+	if summary.RiskHeatmap == nil {
+		summary.RiskHeatmap = []console.RiskHeatmapRow{}
+	}
+	if summary.PerAgent == nil {
+		summary.PerAgent = []console.AgentBreakdownRow{}
+	}
 
 	writeJSON(w, http.StatusOK, summary)
 }
-

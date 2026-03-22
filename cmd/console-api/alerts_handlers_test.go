@@ -442,6 +442,50 @@ func Test_handleListTenantAlertEvents_usesSinceAndLimit(t *testing.T) {
 	}
 }
 
+func Test_handleListAlertEvents_GlobalEndpointMatchesTenantScopedMetadata(t *testing.T) {
+	nextAttempt := time.Now().UTC().Add(10 * time.Minute).Truncate(time.Second)
+	fs := &fakeAlertsStore{
+		listEvents: []console.AlertEvent{
+			{
+				ID:            "ae-global-1",
+				RuleID:        "rule-1",
+				TenantID:      "tenant1",
+				Severity:      "warning",
+				Message:       "global event",
+				Status:        "pending",
+				AttemptCount:  3,
+				LastError:     "slack failed",
+				NextAttemptAt: nextAttempt,
+				CreatedAt:     time.Now().UTC(),
+			},
+		},
+	}
+	api := &ConsoleAPI{log: slog.Default(), alertsStore: fs}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/alerts/events?tenant_id=tenant1&limit=5", nil)
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey{}, &console.JWTClaims{Roles: []string{"platform_admin"}}))
+	rr := httptest.NewRecorder()
+
+	api.handleListAlertEvents(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("expected one event, got %+v", payload)
+	}
+	if payload[0]["tenant_id"] != "tenant1" || payload[0]["attempt_count"] != float64(3) || payload[0]["last_error"] != "slack failed" {
+		t.Fatalf("expected retry metadata to match tenant-scoped endpoint, got %+v", payload[0])
+	}
+	if payload[0]["next_attempt_at"] != nextAttempt.Format(time.RFC3339) {
+		t.Fatalf("expected next_attempt_at %q, got %+v", nextAttempt.Format(time.RFC3339), payload[0]["next_attempt_at"])
+	}
+}
+
 func TestAlertRuleNotFoundSentinelMatchesWrappedErrors(t *testing.T) {
 	err := errors.Join(errors.New("wrapped"), console.ErrAlertRuleNotFound)
 

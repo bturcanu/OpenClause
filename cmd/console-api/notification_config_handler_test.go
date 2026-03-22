@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -135,5 +136,36 @@ func Test_handleUpdateTenantNotificationConfig_NormalizesAndPersists(t *testing.
 	}
 	if stub.lastSetCfg.Notify[0].Kind != "slack" || stub.lastSetCfg.Notify[0].Channel != "#alerts" {
 		t.Fatalf("unexpected normalized notify payload: %#v", stub.lastSetCfg.Notify[0])
+	}
+}
+
+func Test_handleUpdateTenantNotificationConfig_StoreFailureReturns500(t *testing.T) {
+	stub := &stubNotificationConfigStore{
+		getFn: func(ctx context.Context, tenantID string) (*console.TenantNotificationConfig, bool, error) {
+			return nil, false, nil
+		},
+		setFn: func(ctx context.Context, tenantID string, cfg console.TenantNotificationConfig) error {
+			return errors.New("write failed")
+		},
+	}
+
+	api := &ConsoleAPI{
+		log:                     slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{})),
+		notificationConfigStore: stub,
+	}
+
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("tenant_id", "tenant1")
+	body := []byte(`{"notify":[{"kind":"slack","channel":"#alerts"}]}`)
+
+	req := httptest.NewRequest(http.MethodPut, "/admin/tenants/tenant1/notification-config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	rr := httptest.NewRecorder()
+
+	api.handleUpdateTenantNotificationConfig(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }

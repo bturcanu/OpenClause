@@ -220,6 +220,36 @@ func Test_EmailPasswordAuthProvider_Login_rejectsMultipleTenantAssignments(t *te
 	}
 }
 
+func Test_EmailPasswordAuthProvider_Login_singleTenantScopesSessionAndToken(t *testing.T) {
+	u := &console.User{ID: "u1", Email: "a@b.c", Name: "A", Status: "active"}
+	tenantID := "tenant-1"
+	roles := []console.UserRole{{Role: "tenant_admin", TenantID: &tenantID}}
+	sessions := &fakeAuthSessionIssuer{session: &console.AuthSession{ID: "sess-tenant"}}
+
+	p := &EmailPasswordAuthProvider{
+		log:      slog.Default(),
+		store:    &fakeUserAuthenticator{u: u, roles: roles},
+		sessions: sessions,
+		jwtCfg:   testJWTConfig(),
+	}
+
+	res, err := p.Login(context.Background(), AuthLoginInput{Email: "x", Password: "y"})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if sessions.gotIn.TenantID != tenantID {
+		t.Fatalf("expected auth session tenant scope %q, got %q", tenantID, sessions.gotIn.TenantID)
+	}
+
+	claims, err := console.ValidateToken(testJWTConfig(), res.Token)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.Tenant != tenantID || claims.SID != "sess-tenant" {
+		t.Fatalf("expected tenant-scoped token, got %+v", claims)
+	}
+}
+
 func Test_handleLogin_dispatchesToAuthProvider(t *testing.T) {
 	rec := &recordingProvider{
 		res: &AuthLoginResponse{

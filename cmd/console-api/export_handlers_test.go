@@ -23,11 +23,15 @@ type fakeExportStore struct {
 	events        []console.EventListItem
 	count         int
 	countErr      error
+	tenantID      string
 	since         time.Time
 	until         time.Time
 }
 
-func (f *fakeExportStore) ExportEventsCSV(_ context.Context, _ string, _ time.Time, _ time.Time, w io.Writer) error {
+func (f *fakeExportStore) ExportEventsCSV(_ context.Context, tenantID string, since, until time.Time, w io.Writer) error {
+	f.tenantID = tenantID
+	f.since = since
+	f.until = until
 	if f.csvWriteBytes != "" {
 		_, _ = w.Write([]byte(f.csvWriteBytes))
 	}
@@ -94,6 +98,41 @@ func TestHandleExportEventsCSV_ExportErrorReturnsAPIErrorWithoutPartialCSV(t *te
 	}
 	if strings.Contains(rr.Body.String(), "event_id") {
 		t.Fatalf("expected no partial CSV output; got body=%s", rr.Body.String())
+	}
+}
+
+func TestHandleExportEventsCSV_UsesSinceUntilAndTenantScope(t *testing.T) {
+	store := &fakeExportStore{csvWriteBytes: "event_id,tenant_id\nevt-1,tenant-tenant\n"}
+	api := newTestConsoleAPI(store)
+
+	claims := &console.JWTClaims{
+		Roles:  []string{"tenant_admin"},
+		Tenant: "tenant-tenant",
+	}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/events/export/csv?tenant_id=ignored&since=2020-01-01T00:00:00Z&until=2020-01-02T00:00:00Z",
+		nil,
+	).WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	api.handleExportEventsCSV(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if store.tenantID != "tenant-tenant" {
+		t.Fatalf("expected tenant-scoped export to use claim tenant, got %q", store.tenantID)
+	}
+	if got := store.since.Format(time.RFC3339); got != "2020-01-01T00:00:00Z" {
+		t.Fatalf("expected since to propagate, got %q", got)
+	}
+	if got := store.until.Format(time.RFC3339); got != "2020-01-02T00:00:00Z" {
+		t.Fatalf("expected until to propagate, got %q", got)
+	}
+	if !strings.Contains(rr.Body.String(), "evt-1,tenant-tenant") {
+		t.Fatalf("expected CSV body from export store, got %s", rr.Body.String())
 	}
 }
 
