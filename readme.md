@@ -371,7 +371,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `POST` | `/admin/approvals/{id}/deny` | `approver` or `platform_admin` | Deny request |
 | `GET` | `/admin/events` | JWT | List events (filterable by tenant, user, agent, trace, tool, action, decision, session, and risk range) |
 | `GET` | `/admin/events/{event_id}` | JWT | Event detail with policy result + hash chain |
-| `GET` | `/admin/events/export/csv` | JWT | Export events as CSV |
+| `GET` | `/admin/events/export/csv` | JWT | Export events as CSV (honors `since` / `until`; `tenant_id` required for platform admins) |
 | `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON (`tenant_id` required for platform admins; honors `since` / `until`; rejects ranges over 10,000 events) |
 | `GET` | `/admin/reports/activity` | JWT | Legacy alias for `/admin/events` |
 | `GET` | `/admin/reports/export/csv` | JWT | Legacy alias for `/admin/events/export/csv` |
@@ -449,6 +449,11 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 ## SDKs
 
 Multi-language SDKs are available in the `sdk/` directory.
+
+These SDKs wrap the gateway tool-call APIs. Console-admin flows such as invite delivery, session exports, and evidence bundle exports are documented in the Console API section above and in [`docs/LOCAL_TESTING.md`](docs/LOCAL_TESTING.md). Current console contracts to keep in mind:
+- Session exports return `404` when the session id is missing or outside the caller's tenant scope.
+- Evidence bundle export honors `since` / `until` and returns `400` when the requested window exceeds 10,000 events.
+- `POST /admin/invites` returns the raw invite token once plus `accept_url` and `email_status`; later `GET /admin/invites` responses omit the raw token.
 
 Note: the SDK examples below are written for the local dev seed data (`tenant_id="tenant1"`, `agent_id="agent-1"`, `api_key="sk-test-key-1"`). If you initialized via the Setup Wizard, replace these with your real `tenant_id`, `agent_id`, and raw API key.
 

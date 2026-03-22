@@ -8,6 +8,15 @@ Python client for the [OpenClause](https://openclause.dev) agentic access govern
 pip install openclause
 ```
 
+## Scope
+
+This SDK wraps the gateway tool-call APIs only. Console-admin flows such as invite delivery, session exports, and evidence bundle exports live on `console-api` and are documented in the repo [README](../../readme.md) and [Local Testing Guide](../../docs/LOCAL_TESTING.md).
+
+Current console contracts worth knowing:
+- Session exports return `404` when the session is missing or outside the caller's tenant scope.
+- Evidence bundle export honors `since` / `until` and returns `400` when the requested window exceeds 10,000 events.
+- `POST /admin/invites` returns the raw invite token once plus `accept_url` and `email_status`; later invite-list responses omit the raw token.
+
 ## Quick Start (5 minutes)
 
 ```python

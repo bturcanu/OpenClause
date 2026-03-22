@@ -85,6 +85,7 @@ export default function SessionTimeline() {
   const [selectedExplain, setSelectedExplain] = useState<SessionTimelineEvent | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [timelineLoadFailed, setTimelineLoadFailed] = useState(false)
   const [ambiguityMessage, setAmbiguityMessage] = useState('')
   const [tenantCandidates, setTenantCandidates] = useState<string[]>([])
   const [selectedTenantCandidate, setSelectedTenantCandidate] = useState('')
@@ -110,6 +111,7 @@ export default function SessionTimeline() {
     const seq = ++fetchSeq.current
     setLoading(true)
     setError('')
+    setTimelineLoadFailed(false)
     if (tenantID) {
       setTenantCandidates([])
       setSelectedTenantCandidate('')
@@ -117,13 +119,31 @@ export default function SessionTimeline() {
     }
     try {
       const query = buildQuery({ tenant_id: tenantID })
-      const [summary, timeline] = await Promise.all([
+      const [summaryResult, timelineResult] = await Promise.allSettled([
         api.get(`/admin/sessions/${encodeURIComponent(id)}${query}`),
         api.get(`/admin/sessions/${encodeURIComponent(id)}/timeline${query}`),
       ])
       if (seq !== fetchSeq.current) return
-      setSession(summary)
-      setEvents(Array.isArray(timeline) ? timeline : timeline?.events || [])
+
+      if (summaryResult.status === 'rejected') {
+        setSession(null)
+        setEvents([])
+        handleSessionError(summaryResult.reason)
+        return
+      }
+
+      setSession(summaryResult.value as SessionSummary)
+
+      if (timelineResult.status === 'fulfilled') {
+        const timeline = timelineResult.value
+        setEvents(Array.isArray(timeline) ? timeline : timeline?.events || [])
+        setError('')
+      } else {
+        setEvents([])
+        setTimelineLoadFailed(true)
+        setError(timelineResult.reason instanceof Error ? timelineResult.reason.message : 'The session summary loaded, but the timeline could not be loaded.')
+      }
+
       setTenantCandidates([])
       setSelectedTenantCandidate('')
       setAmbiguityMessage('')
@@ -131,6 +151,7 @@ export default function SessionTimeline() {
       if (seq === fetchSeq.current) {
         setSession(null)
         setEvents([])
+        setTimelineLoadFailed(false)
         handleSessionError(err)
       }
     } finally {
@@ -256,7 +277,7 @@ export default function SessionTimeline() {
       />
 
       {copyStatus ? <div className="success-msg mb-16">{copyStatus}</div> : null}
-      {error && tenantCandidates.length === 0 ? <InlineErrorState message={error} onRetry={() => void fetchSession()} /> : null}
+      {error && tenantCandidates.length === 0 && !timelineLoadFailed ? <InlineErrorState message={error} onRetry={() => void fetchSession()} /> : null}
 
       {tenantCandidates.length > 0 ? (
         <div className="detail-panel">
@@ -409,6 +430,13 @@ export default function SessionTimeline() {
             </Link>
           }
         />
+      ) : timelineLoadFailed ? (
+        <div className="detail-panel">
+          <InlineErrorState
+            message={error || 'The session summary loaded, but the timeline could not be loaded.'}
+            onRetry={() => void fetchSession()}
+          />
+        </div>
       ) : filteredEvents.length === 0 ? (
         <EmptyState
           icon="↻"

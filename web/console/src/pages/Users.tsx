@@ -1,7 +1,7 @@
 import { useEffect, useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, clearStoredAuth, formatDate, getStoredAuthClaims, getStoredSessionID } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock } from '../ui'
+import { EmptyState, InlineErrorState, PageHeaderBlock, copyText } from '../ui'
 
 type UserRole = {
   id: string
@@ -342,6 +342,9 @@ export default function Users() {
                     {inviteCreated.email_status === 'logged' ? 'Invite link logged for dev; copy it below or check console-api logs.' : null}
                     {!inviteCreated.email_status ? 'Invite link ready to copy.' : null}
                   </div>
+                  <div className="table-subtext">
+                    The raw invite token is only shown for this create response. Later invite lists keep delivery status but never return the token again.
+                  </div>
                   <div className="detail-row detail-row-block">
                     <div className="meta-label">Accept link</div>
                     {(() => {
@@ -356,7 +359,7 @@ export default function Users() {
                             type="button"
                             onClick={async () => {
                               try {
-                                await navigator.clipboard.writeText(acceptUrl)
+                                await copyText(acceptUrl)
                                 setCopyStatus('Link copied')
                                 setTimeout(() => setCopyStatus(''), 1500)
                               } catch {
@@ -376,9 +379,29 @@ export default function Users() {
                       {copyStatus}
                     </div>
                   )}
-                  <div className="meta-label">Token</div>
-                  <div className="invite-token-block">
-                    {inviteCreated.token}
+                  <div className="detail-row detail-row-block">
+                    <div className="meta-label">Raw token (shown only once)</div>
+                    <div className="invite-token-block">
+                      {inviteCreated.token}
+                    </div>
+                    <div className="invite-link-actions">
+                      <button
+                        className="btn btn-outline btn-sm"
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await copyText(inviteCreated.token)
+                            setCopyStatus('Token copied')
+                            setTimeout(() => setCopyStatus(''), 1500)
+                          } catch {
+                            setCopyStatus('Copy failed')
+                            setTimeout(() => setCopyStatus(''), 1500)
+                          }
+                        }}
+                      >
+                        Copy token
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

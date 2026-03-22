@@ -23,6 +23,9 @@ This file started as the verified backlog for the `product/next-steps` branch. L
   - NS-07 docs golden path consolidation
   - NS-08 broader mock connector coverage
   - NS-09 alerts folded into the main demo flow
+- Watch items from the latest hardening sweeps:
+  - Large-tenant evidence bundle export performance after the new count-before-export guard
+  - Keeping future auth entry points on the shared tolerant bearer-parsing pattern
 - Historical note:
   - the “Known gaps”, “Top 10 Next Steps”, and “PR-Sized Chunks” sections below preserve the branch-time planning context and are superseded wherever they conflict with the current repo state.
 

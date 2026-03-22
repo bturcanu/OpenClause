@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, formatDate, toQueryTimestamp } from '../api'
+import { APIClientError, api, formatDate, toQueryTimestamp } from '../api'
 import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, buildQuery, decisionTone, downloadBlob, formatRequester, shortID } from '../ui'
 
 type Event = {
@@ -114,16 +114,34 @@ export default function Events() {
     setPage(0)
   }
 
+  function exportQuery() {
+    return buildQuery({
+      ...(selectedTenant ? { tenant_id: selectedTenant } : {}),
+      since: toQueryTimestamp(filters.since),
+      until: toQueryTimestamp(filters.until),
+    })
+  }
+
+  function exportErrorMessage(err: unknown, kind: 'csv' | 'bundle') {
+    if (err instanceof APIClientError) {
+      if (kind === 'bundle' && err.status === 400 && /range too large/i.test(err.message)) {
+        return 'Evidence bundle exports are limited to 10,000 events. Narrow the time window and try again.'
+      }
+      return err.message
+    }
+    return err instanceof Error ? err.message : `Failed to export ${kind === 'csv' ? 'CSV' : 'evidence bundle'}`
+  }
+
   async function exportCSV() {
     try {
       if (isPlatformAdmin && !selectedTenant) {
         setError('Select a tenant before exporting CSV')
         return
       }
-      const blob = await api.getBlob(selectedTenant ? `/admin/events/export/csv${buildQuery({ tenant_id: selectedTenant })}` : '/admin/events/export/csv')
+      const blob = await api.getBlob(`/admin/events/export/csv${exportQuery()}`)
       downloadBlob(blob, 'events.csv')
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(exportErrorMessage(err, 'csv'))
     }
   }
 
@@ -133,10 +151,10 @@ export default function Events() {
         setError('Select a tenant before exporting the evidence bundle')
         return
       }
-      const blob = await api.getBlob(selectedTenant ? `/admin/reports/export/bundle${buildQuery({ tenant_id: selectedTenant })}` : '/admin/reports/export/bundle')
+      const blob = await api.getBlob(`/admin/reports/export/bundle${exportQuery()}`)
       downloadBlob(blob, 'audit-bundle.json')
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(exportErrorMessage(err, 'bundle'))
     }
   }
 
@@ -165,7 +183,7 @@ export default function Events() {
       {error ? <InlineErrorState message={error} onRetry={() => void fetchEvents()} /> : null}
 
       <div className="filters-panel">
-        <div className="filters-panel-note">Audit filters use your local browser time. Export actions use the selected tenant scope.</div>
+        <div className="filters-panel-note">Audit filters use your local browser time. Export actions follow the selected tenant and current time window; blank time fields fall back to the server default window.</div>
         <div className="filters-bar filters-bar-dense">
           <div className="form-group">
             <label>Tenant</label>

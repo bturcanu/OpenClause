@@ -809,3 +809,45 @@ Status: Complete
   - Pass
 - `go test -race ./pkg/auth ./pkg/console ./pkg/config ./cmd/console-api ./cmd/gateway -count=1`
   - Pass
+
+## Follow-up: 2026-03-21 Export UX + Contract Alignment Sweep
+
+### New Findings
+
+| ID | Sev | Flow | Symptom | Root cause | Fix | Files | Status |
+|---|---|---|---|---|---|---|---|
+| LF-046 | Medium | Audit Trail UI / exports | Audit Trail export actions still ignored the page's `since` / `until` filters, so operators could set a time window in the table but export a different server-default window instead; the new 10,000-event bundle cap also surfaced as a generic error | `Events.tsx` only passed `tenant_id` to export routes and forwarded raw API error text | Export actions now send the current `since` / `until` window, the filter note explains the export scope, and bundle-cap failures show an operator-friendly “narrow the time window” message | `web/console/src/pages/Events.tsx` | Fixed |
+| LF-047 | Low | Sessions UI | Session detail still loaded summary + timeline as all-or-nothing, so a timeline-only failure could collapse into a misleading empty state instead of showing the summary plus an actionable retry | `SessionTimeline.tsx` still used `Promise.all(...)` for two independently useful requests | Switched the load to `Promise.allSettled(...)`, kept the summary visible when possible, and routed timeline-only failures into an explicit retryable error state | `web/console/src/pages/SessionTimeline.tsx` | Fixed |
+| LF-048 | Low | Invite token contract clarity | The backend/documented invite contract was correct, but the Users screen still treated the raw token as generic output instead of explicitly telling operators it is shown once and never returned by later invite lists | UI copy around the create-invite result did not reinforce the hashed-at-rest / one-time-token contract | Added explicit one-time token copy to the Users surface, plus a copy action, and aligned README / LOCAL_TESTING / SDK README language with the actual contract | `web/console/src/pages/Users.tsx`, `readme.md`, `docs/LOCAL_TESTING.md`, `sdk/python/README.md`, `sdk/typescript/README.md`, `sdk/java/README.md` | Fixed |
+
+### Silent-Failure Sweep Result
+
+- Repo-wide grep of `web/console/src` found no remaining `.catch(() => [])`, `.catch(() => null)`, or `resp.json().catch(...)` fetch fallbacks after this pass.
+- The remaining meaningful partial-load risk was Session detail's `Promise.all(...)`, which is now explicit `Promise.allSettled(...)`.
+
+### Files Changed
+
+- `web/console/src/pages/Events.tsx`
+- `web/console/src/pages/SessionTimeline.tsx`
+- `web/console/src/pages/Users.tsx`
+- `readme.md`
+- `docs/LOCAL_TESTING.md`
+- `sdk/python/README.md`
+- `sdk/typescript/README.md`
+- `sdk/java/README.md`
+- `.ai/next-steps.md`
+
+### Verification
+
+- `rg -n "\\.catch\\(|Promise\\.all\\(|readJSONResponse\\(|json\\(\\)" web/console/src`
+  - No matches for the old silent-failure patterns (expected)
+- `npm --prefix web/console run build`
+  - Pass
+  - Key output: `✓ built`
+
+### Notes
+
+- SDK README changes are documentation-only. The SDKs still target gateway tool-call flows; console-admin/auth/export flows remain documented in the root README and local testing guide.
+- Watch items carried forward:
+  - large-tenant evidence bundle count-before-export performance
+  - reusing the tolerant bearer helper pattern for any future auth entry point

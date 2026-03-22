@@ -358,6 +358,15 @@ curl -s "http://localhost:8090/admin/events?tenant_id=$TENANT_ID" \
 curl -s "http://localhost:8090/admin/events/$EVENT_ID" \
   -H "Authorization: Bearer $TOKEN"
 
+# Export audit events for an explicit UTC window
+curl -s "http://localhost:8090/admin/events/export/csv?tenant_id=$TENANT_ID&since=2026-01-01T00:00:00Z&until=2026-01-02T00:00:00Z" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Export an evidence bundle for the same UTC window.
+# If the requested range exceeds 10,000 events, the API returns 400 and you should narrow the time window.
+curl -s "http://localhost:8090/admin/reports/export/bundle?tenant_id=$TENANT_ID&since=2026-01-01T00:00:00Z&until=2026-01-02T00:00:00Z" \
+  -H "Authorization: Bearer $TOKEN"
+
 # List observed sessions (derived from tool_events.session_id)
 curl -s "http://localhost:8090/admin/sessions?tenant_id=$TENANT_ID" \
   -H "Authorization: Bearer $TOKEN"
