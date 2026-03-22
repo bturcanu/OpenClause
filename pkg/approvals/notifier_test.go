@@ -192,3 +192,56 @@ func TestDispatcherDeliversSlackNotification(t *testing.T) {
 		t.Fatalf("expected one connector delivery, got %d", hits.Load())
 	}
 }
+
+func TestDispatcherWebhookSignsBodyWhenSecretRefPresent(t *testing.T) {
+	var signature string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		signature = r.Header.Get("X-OC-Signature-256")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := &fakeNotificationStore{
+		items: []NotificationOutbox{
+			{
+				ID:                "d-webhook-1",
+				ApprovalRequestID: "r1",
+				TenantID:          "tenant1",
+				EventID:           "e1",
+				Tool:              "slack",
+				Action:            "msg.post",
+				Resource:          "channel/general",
+				ApprovalURL:       "http://localhost/x",
+				NotifyKind:        "webhook",
+				NotifyURL:         srv.URL,
+				SecretRef:         "tenant-secret",
+				CreatedAt:         time.Now().UTC(),
+			},
+		},
+		sent:    map[string]bool{},
+		failed:  map[string]bool{},
+		retries: map[string]int{},
+		lastErr: map[string]string{},
+	}
+	d := NewDispatcher(store, "oc://approvals", map[string]string{"tenant-secret": "super-secret"}, "http://localhost:8082", "token")
+	d.SkipWebhookValidation = true
+
+	if err := d.DispatchOnce(context.Background()); err != nil {
+		t.Fatalf("DispatchOnce: %v", err)
+	}
+	if signature == "" || signature[:7] != "sha256=" {
+		t.Fatalf("expected signed webhook delivery, got %q", signature)
+	}
+}
+
+func TestBackoffForAttemptStopsGrowingAfterExponentCap(t *testing.T) {
+	if got := backoffForAttempt(1); got != 2*time.Second {
+		t.Fatalf("expected first retry backoff 2s, got %s", got)
+	}
+	if got := backoffForAttempt(8); got != 256*time.Second {
+		t.Fatalf("expected attempt 8 backoff 256s, got %s", got)
+	}
+	if got := backoffForAttempt(12); got != 256*time.Second {
+		t.Fatalf("expected attempts after exponent cap to stay at 256s, got %s", got)
+	}
+}
