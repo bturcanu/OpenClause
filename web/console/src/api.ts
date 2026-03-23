@@ -5,14 +5,16 @@ export class APIClientError extends Error {
   code?: string
   details?: unknown
   candidates?: string[]
+  requestId?: string
 
-  constructor(message: string, options: { status: number; code?: string; details?: unknown; candidates?: string[] }) {
+  constructor(message: string, options: { status: number; code?: string; details?: unknown; candidates?: string[]; requestId?: string }) {
     super(message)
     this.name = 'APIClientError'
     this.status = options.status
     this.code = options.code
     this.details = options.details
     this.candidates = options.candidates
+    this.requestId = options.requestId
   }
 }
 
@@ -66,13 +68,22 @@ function extractCandidates(payload: any): string[] | undefined {
   return undefined
 }
 
-function toAPIClientError(status: number, fallback: string, payload: any) {
-  const message = payload?.message || payload?.error || fallback
+function extractRequestId(headers?: Headers): string | undefined {
+  const requestId = headers?.get('x-request-id') || headers?.get('x-correlation-id') || ''
+  const trimmed = requestId.trim()
+  return trimmed || undefined
+}
+
+function toAPIClientError(status: number, fallback: string, payload: any, headers?: Headers) {
+  const requestId = extractRequestId(headers)
+  const baseMessage = payload?.message || payload?.error || fallback
+  const message = requestId ? `${baseMessage} (request id: ${requestId})` : baseMessage
   return new APIClientError(message, {
     status,
     code: payload?.code,
     details: payload?.details,
     candidates: extractCandidates(payload),
+    requestId,
   })
 }
 
@@ -104,7 +115,7 @@ async function apiFetch(path: string, options?: RequestInit) {
   }
   if (!res.ok) {
     const err = await readJSONResponse(res);
-    throw toAPIClientError(res.status, res.statusText, err);
+    throw toAPIClientError(res.status, res.statusText, err, res.headers);
   }
   return res;
 }
@@ -117,7 +128,7 @@ async function unauthFetch(path: string, body: unknown) {
   });
   if (!res.ok) {
     const err = await readJSONResponse(res);
-    throw toAPIClientError(res.status, res.statusText, err);
+    throw toAPIClientError(res.status, res.statusText, err, res.headers);
   }
   return readJSONResponse(res);
 }

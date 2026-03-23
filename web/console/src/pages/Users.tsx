@@ -131,7 +131,7 @@ export default function Users() {
     setError('')
     try {
       const data = await api.get('/admin/users')
-      setUsers(Array.isArray(data?.users) ? data.users : [])
+      setUsers(Array.isArray(data) ? data : Array.isArray(data?.users) ? data.users : [])
     } catch (err: any) {
       setError(err.message || 'Failed to load users')
     } finally {
@@ -224,7 +224,7 @@ export default function Users() {
       const data = await api.get(`/admin/auth-sessions?user_id=${encodeURIComponent(userID)}`)
       setAuthSessionsByUser(prev => ({
         ...prev,
-        [userID]: Array.isArray(data?.sessions) ? data.sessions : [],
+        [userID]: Array.isArray(data) ? data : Array.isArray(data?.sessions) ? data.sessions : [],
       }))
     } catch (err: any) {
       setError(err.message || 'Failed to load active sessions')

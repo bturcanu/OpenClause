@@ -19,6 +19,50 @@ function getFieldIn(container: HTMLElement, labelText: RegExp | string) {
 }
 
 describe('Users page', () => {
+  it('accepts array-form user and auth-session payloads at the API boundary', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('oc_token', makeToken({ roles: ['platform_admin'], sid: 'current-session' }))
+
+    mockApiGet([
+      ['/admin/users', [
+        {
+          id: 'user-1',
+          email: 'ada@example.com',
+          name: 'Ada Lovelace',
+          status: 'active',
+          created_at: '2026-03-20T12:00:00Z',
+          active_session_count: 1,
+          roles: [{ id: 'role-1', user_id: 'user-1', role: 'platform_admin' }],
+        },
+      ]],
+      ['/admin/auth-sessions?user_id=user-1', [
+        {
+          id: 'current-session',
+          user_id: 'user-1',
+          tenant_id: 'tenant-demo',
+          user_agent: 'Firefox',
+          client_ip: '127.0.0.1',
+          created_at: '2026-03-23T10:00:00Z',
+          last_seen_at: '2026-03-23T12:00:00Z',
+          expires_at: '2026-03-24T10:00:00Z',
+        },
+      ]],
+    ])
+
+    render(
+      <MemoryRouter initialEntries={['/users']}>
+        <Routes>
+          <Route path="/users" element={<Users />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /review/i }))
+    expect(await screen.findByRole('heading', { name: /active login sessions/i })).toBeInTheDocument()
+    expect(screen.getByText(/firefox/i)).toBeInTheDocument()
+  })
+
   it('creates invites, refreshes the list, and shows one-time token/link messaging', async () => {
     const user = userEvent.setup()
     localStorage.setItem('oc_token', makeToken({ roles: ['platform_admin'], sid: 'session-1' }))

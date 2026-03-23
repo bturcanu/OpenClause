@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { api } from '../api'
+import { APIClientError, api } from '../api'
 import Events from './Events'
 import { renderRoute } from '../test/render'
 import { getFieldByLabelText } from '../test/form'
@@ -140,5 +140,30 @@ describe('Audit Trail page', () => {
       const rows = screen.getAllByRole('row')
       expect(within(rows[1]).getByRole('link', { name: /slack\.msg\.post/i })).toBeInTheDocument()
     })
+  })
+
+  it('surfaces the structured range-too-large export contract for evidence bundles', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('oc_token', makeToken({ roles: ['platform_admin'] }))
+
+    mockApiGet([
+      [/^\/admin\/events/, { events: [eventFixture] }],
+    ])
+    vi.spyOn(api, 'getBlob').mockRejectedValue(new APIClientError('Range too large', {
+      status: 400,
+      details: { reason: 'range_too_large', max_events: 10000 },
+    }))
+
+    renderRoute(<Events />, {
+      path: '/events',
+      route: '/events?tenant_id=tenant-1',
+    })
+
+    expect(await screen.findByRole('heading', { name: /audit trail/i })).toBeInTheDocument()
+
+    await user.click(screen.getByText(/export ▾/i))
+    await user.click(screen.getByRole('button', { name: /export evidence bundle/i }))
+
+    expect(await screen.findByText(/evidence bundle exports are limited to 10,000 events/i)).toBeInTheDocument()
   })
 })

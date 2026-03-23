@@ -102,4 +102,30 @@ describe('Sessions page', () => {
       expect(screen.queryByRole('button', { name: /tenant id: tenant-1/i })).not.toBeInTheDocument()
     })
   })
+
+  it('accepts wrapped payloads and keeps fallback text stable when optional fields are missing', async () => {
+    mockApiGet([
+      [/^\/admin\/sessions/, {
+        sessions: [
+          {
+            id: 'session-minimal',
+            tenant_id: 'tenant-3',
+            agent_id: '',
+            started_at: '2026-03-23T08:00:00Z',
+            last_event_at: '2026-03-23T08:05:00Z',
+            event_count: 1,
+            allow_count: 0,
+            deny_count: 1,
+            approve_count: 0,
+          },
+        ],
+      }],
+    ])
+
+    renderRoute(<Sessions />, { path: '/sessions', route: '/sessions' })
+
+    expect(await screen.findByRole('link', { name: shortID('session-minimal', 14) })).toBeInTheDocument()
+    expect(screen.getByText(/requested without user or agent attribution/i)).toBeInTheDocument()
+    expect(screen.getByText(/trace \(none\)/i)).toBeInTheDocument()
+  })
 })

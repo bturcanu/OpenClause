@@ -322,9 +322,10 @@ export default function TenantDetail() {
       }
 
       if (approversResp.status === 'fulfilled') {
-        const approverData = approversResp.value as { approvers?: Approver[]; allowlist_source?: string }
-        setApprovers(Array.isArray(approverData?.approvers) ? approverData.approvers : [])
-        if (approverData?.allowlist_source) setAllowlistSource(approverData.allowlist_source)
+        const approverData = approversResp.value as Approver[] | { approvers?: Approver[]; allowlist_source?: string }
+        const approverPayload = Array.isArray(approverData) ? null : approverData
+        setApprovers(Array.isArray(approverData) ? approverData : Array.isArray(approverPayload?.approvers) ? approverPayload.approvers : [])
+        if (approverPayload?.allowlist_source) setAllowlistSource(approverPayload.allowlist_source)
       } else {
         partialFailures.push('approvers')
       }
@@ -367,13 +368,15 @@ export default function TenantDetail() {
       ])
       const failures: string[] = []
       if (rulesResp.status === 'fulfilled') {
-        setAlertRules(Array.isArray(rulesResp.value) ? rulesResp.value as AlertRule[] : [])
+        const rulesData = rulesResp.value as AlertRule[] | { rules?: AlertRule[] }
+        setAlertRules(Array.isArray(rulesData) ? rulesData : rulesData?.rules || [])
       } else {
         setAlertRules([])
         failures.push('rules')
       }
       if (eventsResp.status === 'fulfilled') {
-        setAlertEvents(Array.isArray(eventsResp.value) ? eventsResp.value as AlertEvent[] : [])
+        const eventsData = eventsResp.value as AlertEvent[] | { events?: AlertEvent[] }
+        setAlertEvents(Array.isArray(eventsData) ? eventsData : eventsData?.events || [])
       } else {
         setAlertEvents([])
         failures.push('events')

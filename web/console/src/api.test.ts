@@ -66,15 +66,22 @@ describe('api helpers', () => {
         message: 'Need tenant',
         code: 'tenant_required',
         details: { reason: 'ambiguous', candidates: ['tenant-a', 'tenant-b'] },
-      }), { status: 409, headers: { 'Content-Type': 'application/json' } }),
+      }), {
+        status: 409,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': 'req-123',
+        },
+      }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(api.get('/admin/sessions/demo')).rejects.toMatchObject({
-      message: 'Need tenant',
+      message: 'Need tenant (request id: req-123)',
       status: 409,
       code: 'tenant_required',
       candidates: ['tenant-a', 'tenant-b'],
+      requestId: 'req-123',
     })
   })
 
@@ -93,6 +100,14 @@ describe('api helpers', () => {
     expect(iso).toMatch(/^2026-03-23T/)
     expect(toLocalDateTimeInput(iso)).toMatch(/^2026-03-23T\d{2}:\d{2}$/)
     expect(toLocalDateTimeInput('2026-03-23T12:34')).toBe('2026-03-23T12:34')
+  })
+
+  it('handles blank, seconds-based, and passthrough timestamp edge cases', () => {
+    expect(toQueryTimestamp('')).toBe('')
+    expect(toQueryTimestamp('2026-03-23T12:34:56')).toMatch(/^2026-03-23T/)
+    expect(toQueryTimestamp('2026-03-23T12:34:56Z')).toBe('2026-03-23T12:34:56Z')
+    expect(toLocalDateTimeInput('')).toBe('')
+    expect(toLocalDateTimeInput('not-a-date')).toBe('not-a-date')
   })
 
   it('formats dates defensively', () => {

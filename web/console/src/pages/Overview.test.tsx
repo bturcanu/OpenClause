@@ -94,4 +94,38 @@ describe('Overview', () => {
     expect(screen.getByText('slack.msg.post')).toBeInTheDocument()
     expect(screen.queryByText(/not enough activity yet/i)).not.toBeInTheDocument()
   })
+
+  it('accepts direct-array analytics payloads for timeseries and recent events', async () => {
+    mockApiGet([
+      ['/admin/analytics/overview', {
+        total_events: 3,
+        allow_count: 2,
+        deny_count: 1,
+        approve_count: 0,
+        pending_approvals: 0,
+        active_tenants: 1,
+      }],
+      ['/admin/analytics/timeseries', [
+        { bucket: '2026-03-23T10:00:00Z', total: 1 },
+        { bucket: '2026-03-23T11:00:00Z', total: 2 },
+      ]],
+      ['/admin/events?limit=10', [
+        {
+          event_id: 'event-array-1',
+          tool: 'jira',
+          action: 'issue.create',
+          decision: 'deny',
+          risk_score: 7,
+          received_at: '2026-03-23T11:15:00Z',
+          tenant_id: 'tenant-array',
+        },
+      ]],
+    ])
+
+    renderRoute(<Overview />, { path: '/', route: '/' })
+
+    expect(await screen.findByRole('heading', { name: /event volume/i })).toBeInTheDocument()
+    expect(screen.getByText('jira.issue.create')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+  })
 })

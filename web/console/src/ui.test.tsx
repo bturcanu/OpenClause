@@ -26,6 +26,12 @@ describe('ui helpers', () => {
     expect(buildQuery({ tenant_id: 'tenant-1', decision: '', page: 2 })).toBe('?tenant_id=tenant-1&page=2')
   })
 
+  it('encodes query parameters and requester fallbacks for edge values', () => {
+    expect(buildQuery({ tool: 'slack bot', action: 'msg/post', empty: '   ' })).toBe('?tool=slack+bot&action=msg%2Fpost')
+    expect(formatRequester('', '', '', '')).toBe('Requested without user or agent attribution')
+    expect(formatRequester('', '', '', 'agent-9')).toBe('Requested via agent-9')
+  })
+
   it('compares text, numbers, dates, and applies sort direction', () => {
     expect(compareText('beta', 'Alpha')).toBeGreaterThan(0)
     expect(compareNumber(9, 3)).toBe(6)
@@ -124,5 +130,22 @@ describe('ui helpers', () => {
     render(<CopyIconButton text="session-123" label="Session ID" />)
     await user.click(screen.getByRole('button', { name: /copy session id/i }))
     expect(writeText).toHaveBeenCalledWith('session-123')
+  })
+
+  it('falls back to document.execCommand when the async clipboard API is unavailable', async () => {
+    const originalClipboard = navigator.clipboard
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    })
+    const execCommandSpy = vi.spyOn(document, 'execCommand').mockReturnValue(true)
+
+    await copyText('fallback-copy')
+
+    expect(execCommandSpy).toHaveBeenCalledWith('copy')
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: originalClipboard,
+    })
   })
 })

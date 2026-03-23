@@ -26,6 +26,34 @@ const approvalFixture = {
 }
 
 describe('Approvals page', () => {
+  it('accepts array-form approvals and handles missing optional detail fields', async () => {
+    const user = userEvent.setup()
+    mockApiGet([
+      ['/admin/approvals/pending', [
+        {
+          id: 'approval-2',
+          event_id: 'event-2',
+          tool: 'jira',
+          action: 'issue.create',
+          risk_score: 5,
+          agent_id: 'agent-2',
+          tenant_id: 'tenant-2',
+          status: 'pending',
+          created_at: '2026-03-23T09:00:00Z',
+          expires_at: '2026-03-23T12:00:00Z',
+        },
+      ]],
+    ])
+
+    renderRoute(<Approvals />, { path: '/approvals', route: '/approvals' })
+
+    await user.click(await screen.findByRole('button', { name: /review/i }))
+    expect(await screen.findByRole('heading', { name: /approval detail/i })).toBeInTheDocument()
+    expect(screen.getByText(/session \(none\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/trace \(none\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/waiting for human review/i)).toBeInTheDocument()
+  })
+
   it('opens the URL-selected approval and refreshes the queue on the polling interval', async () => {
     const intervalSpy = vi.spyOn(window, 'setInterval')
     const getSpy = mockApiGet([
