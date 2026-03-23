@@ -1273,6 +1273,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 10. **policy-test** — `opa test` on policy bundles
 11. **lint** — `golangci-lint`
 12. **build** — Docker images pushed to `ghcr.io` (main branch only)
+13. **deploy** — Cluster deployment (main branch only)
 
 ---
 

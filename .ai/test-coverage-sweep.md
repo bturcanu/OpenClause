@@ -63,7 +63,7 @@ Legend:
 
 | Item | Status | Tests | Notes |
 | --- | --- | --- | --- |
-| 18. Overview + tenant analytics | `COVERED` | `cmd/console-api/tenant_analytics_handlers_test.go`; `pkg/console/store_integration_test.go`; `pkg/console/analytics_integration_test.go` | Covers range/bucket/top-agent parsing, nil-summary stable JSON shape, seeded multi-event totals, deterministic trend buckets, per-agent ordering with `agent_id` tie-break, risk-heatmap totals, and non-null JSON arrays for handler responses. |
+| 18. Overview + tenant analytics | `COVERED` | `cmd/console-api/tenant_analytics_handlers_test.go`; `pkg/console/store_integration_test.go`; `pkg/console/analytics_integration_test.go` | Covers range/bucket/top-agent parsing, nil-summary stable JSON shape, seeded multi-event totals, deterministic trend buckets across 15/30/60/120-minute intervals, per-agent ordering with `agent_id` tie-break, risk-heatmap totals, and non-null JSON arrays for handler responses. |
 
 ## I. Connectors Catalog
 
@@ -89,5 +89,5 @@ Legend:
 ## True Backlog
 
 - Keep watching future Linux `browser-smoke` CI artifacts and only harden selectors if a later real stack/runtime difference appears; the first uploaded Linux run was already green.
-- Deepen the remaining thin session-detail and tenant-detail UI branches beyond the now-covered malformed contract, stale-state, malformed alert/notification payloads, export, and repeated-failure-triage paths.
+- Deepen the remaining thin session-detail and tenant-detail UI branches beyond the now-covered malformed contract, stale-state, malformed alert/notification payloads, export, diagnostics-clearing, and repeated-failure-triage paths.
 - Expand the current auth/date/analytics fuzz smokes and deterministic query/bucketing edge matrices into broader property/fuzz coverage where it buys real signal.

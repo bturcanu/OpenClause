@@ -26,7 +26,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 - Strong backend coverage exists across console/auth/store/evidence/approvals/alerts/gateway/SDKs.
 - Console UI now has a `Vitest + React Testing Library` harness with focused integration coverage.
-- `web/console` currently passes `17` test files / `102` tests locally on this branch.
+- `web/console` currently passes `17` test files / `104` tests locally on this branch.
 - A tiny Playwright smoke pack now covers the 4 highest-value browser flows in CI (`login -> overview`, `tenant create/agent/key`, `audit trail -> event detail`, `sessions -> execution linkage`).
 - The browser smoke pack now also passes locally on this macOS host when Playwright uses the installed Google Chrome channel outside the sandbox, which removes the old bundled-Chromium blocker for manual repro work.
 - GitHub Actions now runs the full repo verification matrix plus a short Go fuzz-smoke layer for analytics, auth-header, and timestamp parsers.
@@ -65,6 +65,8 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Added deterministic and fuzz-backed analytics parser coverage for `range`, `bucket_minutes`, and `top_agents`.
 - Expanded deterministic edge coverage into query/date helpers and analytics bucketing, including half-hour bucket integration coverage in `pkg/console`.
 - Extended the deterministic edge layer again with non-finite query-value filtering in the shared query builder plus two-hour analytics bucket invariants.
+- Deepened the session-detail and tenant-detail diagnostics branches so first-failure helper text, repeated-failure banners, and successful-retry clearing are now all covered by focused page tests instead of manual spot checks.
+- Expanded analytics bucketing coverage again with a deterministic 15/30/60/120-minute bucket matrix that proves totals stay stable and buckets stay interval-aligned.
 - Bound the remaining high-traffic console form labels to their controls and added label-driven tests so those accessibility regressions now break CI.
 - Fixed stale notification-config state in tenant detail so failed refetches no longer leave misleading routing values on screen.
 - Fixed session-detail and tenant-detail race/contract edges:
@@ -90,6 +92,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Fixed: [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) trusted fulfilled notification-config and tenant-alert payloads too much; malformed notification config now fails closed, malformed alert rows are dropped with an honest contract warning, and operators get copyable “Latest diagnostics” on the first visible failure instead of only after repeats.
 - Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) now distinguishes between “all timeline rows were malformed” vs “some rows were ignored,” preserving valid rows when possible and failing closed when none are usable.
 - Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) and [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) only pushed repeated-failure details into the browser console; the UI now exposes copyable diagnostics so operators can paste the latest stage/request ID into bug reports without digging through DevTools.
+- Fixed: [`readme.md`](../readme.md) had a stale CI/CD numbering slip after an editor-side compare/paste; the workflow list is back to the intended `1..13` sequence and the file has no conflict markers.
 - Fixed: [`cmd/console-api/tenant_analytics_handlers.go`](../cmd/console-api/tenant_analytics_handlers.go) let huge raw `range` hour values overflow `time.Duration` negative before the handler clamp, which fuzzing reproduced with `range=2700000`.
 - Fixed: [`web/console/vite.config.ts`](../web/console/vite.config.ts) needed an explicit `src/**/*.test.{ts,tsx}` include so Vitest would not try to execute the Playwright smoke spec as a unit suite.
 - Local environment note, not product bug: bundled Chromium is still blocked by the sandboxed macOS MachPort restriction, but local browser smokes are now unblocked by using Playwright’s system-Chrome channel outside the sandbox on this host.
@@ -207,12 +210,12 @@ Definition of done:
 ### P0
 
 - Keep watching future Linux `browser-smoke` artifacts and only harden selectors if a later CI/runtime difference appears; the first uploaded Linux run was already green (`4/4`).
-- Finish the last thin session-detail and tenant-detail branches that still rely on smoke-plus-one-action coverage after the newer malformed-timeline, malformed-alert/notification, export, partial-failure, and repeated-failure-triage tests.
+- Finish the last thin session-detail and tenant-detail branches that still rely on smoke-plus-one-action coverage after the newer malformed-timeline, malformed-alert/notification, stale-state, export, diagnostics-clearing, partial-failure, and repeated-failure-triage tests.
 - Add regression tests whenever local/manual console verification finds a mismatch.
 
 ### P1
 
-- Expand the current deterministic edge matrices and auth/date/analytics fuzz smokes into broader property/fuzz coverage for date filters, query builders, and analytics buckets.
+- Expand the current deterministic edge matrices and auth/date/analytics fuzz smokes into broader property/fuzz coverage for date filters, query builders, and analytics buckets beyond the current 15/30/60/120-minute matrix and parser-smoke set.
 - Add CI reporting that highlights which critical workstreams failed.
 
 ### P2
