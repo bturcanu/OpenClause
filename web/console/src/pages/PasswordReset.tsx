@@ -4,6 +4,9 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { InlineErrorState } from '../ui'
 
 export default function PasswordReset() {
+  const requestEmailFieldID = 'reset-request-email'
+  const confirmTokenFieldID = 'reset-confirm-token'
+  const confirmPasswordFieldID = 'reset-confirm-password'
   const [searchParams] = useSearchParams()
   const presetToken = searchParams.get('token') || ''
 
@@ -62,8 +65,8 @@ export default function PasswordReset() {
           <h3>Request Reset</h3>
           <form onSubmit={handleResetRequest}>
             <div className="form-group">
-              <label>Email</label>
-              <input value={requestEmail} onChange={e => setRequestEmail(e.target.value)} required />
+              <label htmlFor={requestEmailFieldID}>Email</label>
+              <input id={requestEmailFieldID} value={requestEmail} onChange={e => setRequestEmail(e.target.value)} required />
               <div className="form-helper-text">In local development, reset links may also be logged by console-api if SMTP is not configured.</div>
             </div>
             <button className="btn btn-primary mt-8" type="submit" disabled={requestLoading}>
@@ -77,13 +80,13 @@ export default function PasswordReset() {
           <h3>Confirm Reset</h3>
           <form onSubmit={handleResetConfirm}>
             <div className="form-group">
-              <label>Token</label>
-              <input className="mono" value={confirmToken} onChange={e => setConfirmToken(e.target.value)} required />
+              <label htmlFor={confirmTokenFieldID}>Token</label>
+              <input id={confirmTokenFieldID} className="mono" value={confirmToken} onChange={e => setConfirmToken(e.target.value)} required />
               <div className="form-helper-text">If you came from a reset email, the token should already be populated from the link.</div>
             </div>
             <div className="form-group">
-              <label>New Password</label>
-              <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
+              <label htmlFor={confirmPasswordFieldID}>New Password</label>
+              <input id={confirmPasswordFieldID} type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
             </div>
             <button className="btn btn-primary mt-8" type="submit" disabled={confirmLoading}>
               {confirmLoading ? 'Updating…' : 'Update password'}

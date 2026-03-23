@@ -53,12 +53,14 @@ export default function Overview() {
   const [events, setEvents] = useState<Event[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [timeseriesLoadFailed, setTimeseriesLoadFailed] = useState(false)
   const [hoveredBucketIndex, setHoveredBucketIndex] = useState<number | null>(null)
   const [pinnedBucketIndex, setPinnedBucketIndex] = useState<number | null>(null)
 
   async function fetchOverview() {
     setLoading(true)
     setError('')
+    setTimeseriesLoadFailed(false)
 
     const [overviewResult, timeseriesResult, eventsResult] = await Promise.allSettled([
       api.get('/admin/analytics/overview'),
@@ -80,10 +82,12 @@ export default function Overview() {
         ? (timeseriesResult.value as TimeseriesBucket[])
         : ((timeseriesResult.value as { buckets?: TimeseriesBucket[] })?.buckets || [])
       setTimeseries(nextTimeseries)
+      setTimeseriesLoadFailed(false)
       setHoveredBucketIndex(null)
       setPinnedBucketIndex(null)
     } else {
       setTimeseries([])
+      setTimeseriesLoadFailed(true)
       setHoveredBucketIndex(null)
       setPinnedBucketIndex(null)
       failures.push('event volume chart')
@@ -261,7 +265,7 @@ export default function Overview() {
             </div>
           ) : null}
         </div>
-      ) : !loading ? (
+      ) : !loading && !timeseriesLoadFailed ? (
         <div className="detail-panel">
           <EmptyState
             icon="◔"

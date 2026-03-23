@@ -39,13 +39,48 @@ describe('auth pages', () => {
       </MemoryRouter>,
     )
 
-    await user.type(screen.getByPlaceholderText('admin@example.com'), 'admin@example.com')
-    await user.type(screen.getByPlaceholderText('••••••••'), 'Admin123!')
+    await user.type(screen.getByLabelText(/^email$/i), 'admin@example.com')
+    await user.type(screen.getByLabelText(/^password$/i), 'Admin123!')
     await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     expect(await screen.findByText('Signed in')).toBeInTheDocument()
     expect(localStorage.getItem('oc_token')).toBeTruthy()
     expect(localStorage.getItem('oc_session_id')).toBe('session-42')
+  })
+
+  it('shows login errors and disables submit while waiting for the response', async () => {
+    const user = userEvent.setup()
+    let resolveLogin!: (value: Response) => void
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === '/api/auth/login') {
+        return new Promise<Response>((resolve) => {
+          resolveLogin = resolve
+        })
+      }
+      throw new Error(`Unhandled fetch call for ${String(input)}`)
+    }))
+
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await user.type(screen.getByLabelText(/^email$/i), 'admin@example.com')
+    await user.type(screen.getByLabelText(/^password$/i), 'wrong-password')
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
+
+    expect(screen.getByRole('button', { name: /signing in/i })).toBeDisabled()
+    resolveLogin(new Response(JSON.stringify({ message: 'Invalid credentials' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    expect(await screen.findByText(/invalid credentials/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^sign in$/i })).not.toBeDisabled()
   })
 
   it('submits setup and navigates to login after success', async () => {
@@ -77,6 +112,35 @@ describe('auth pages', () => {
     expect(onInitialized).toHaveBeenCalled()
   })
 
+  it('renders setup initialization errors from the backend', async () => {
+    const user = userEvent.setup()
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/setup/initialize') {
+        return new Response(JSON.stringify({ message: 'Instance already initialized' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      throw new Error(`Unhandled fetch call for ${String(input)}`)
+    }))
+
+    render(
+      <MemoryRouter initialEntries={['/setup']}>
+        <Routes>
+          <Route path="/setup" element={<SetupWizard />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await user.clear(screen.getByLabelText(/platform admin email/i))
+    await user.type(screen.getByLabelText(/platform admin email/i), 'admin@example.com')
+    await user.type(screen.getByLabelText(/platform admin password/i), 'Admin123!')
+    await user.click(screen.getByRole('button', { name: /initialize/i }))
+
+    expect(await screen.findByText(/instance already initialized/i)).toBeInTheDocument()
+  })
+
   it('accepts invites from the tokenized route and shows tenant-admin guidance', async () => {
     const user = userEvent.setup()
     vi.spyOn(api, 'unauthPost').mockResolvedValue({
@@ -98,6 +162,25 @@ describe('auth pages', () => {
 
     expect(await screen.findByText(/you are now tenant_admin/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /tenant api keys/i })).toHaveAttribute('href', '/tenants/tenant-1?tab=api_keys')
+  })
+
+  it('shows backend invite-accept errors to the operator', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'unauthPost').mockRejectedValue(new Error('Invite expired'))
+
+    render(
+      <MemoryRouter initialEntries={['/invite/accept?token=invite-token']}>
+        <Routes>
+          <Route path="/invite/accept" element={<InviteAccept />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByDisplayValue('invite-token')).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^password$/i), 'Admin123!')
+    await user.click(screen.getByRole('button', { name: /accept invite/i }))
+
+    expect(await screen.findByText(/invite expired/i)).toBeInTheDocument()
   })
 
   it('requests and confirms a password reset', async () => {
@@ -124,5 +207,24 @@ describe('auth pages', () => {
     await user.click(screen.getByRole('button', { name: /update password/i }))
     expect(await screen.findByText(/password updated/i)).toBeInTheDocument()
     await waitFor(() => expect(unauthPost).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows confirm-reset backend errors', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'unauthPost').mockRejectedValue(new Error('Reset token expired'))
+
+    render(
+      <MemoryRouter initialEntries={['/reset?token=expired-token']}>
+        <Routes>
+          <Route path="/reset" element={<PasswordReset />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByDisplayValue('expired-token')).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/new password/i), 'NewPassword123!')
+    await user.click(screen.getByRole('button', { name: /update password/i }))
+
+    expect(await screen.findByText(/reset token expired/i)).toBeInTheDocument()
   })
 })

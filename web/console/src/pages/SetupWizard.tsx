@@ -9,6 +9,10 @@ type InitResp = {
 }
 
 export default function SetupWizard(props: { onInitialized?: () => void }) {
+  const orgNameFieldID = 'setup-org-name'
+  const emailFieldID = 'setup-email'
+  const passwordFieldID = 'setup-password'
+  const firstTenantFieldID = 'setup-first-tenant'
   const navigate = useNavigate()
 
   const [orgName, setOrgName] = useState('')
@@ -64,24 +68,24 @@ export default function SetupWizard(props: { onInitialized?: () => void }) {
 
       <form onSubmit={submit} className="form-card" style={{ maxWidth: 720 }}>
         <div className="form-group">
-          <label>Organization name (optional)</label>
-          <input value={orgName} onChange={e => setOrgName(e.target.value)} placeholder="Acme Co" />
+          <label htmlFor={orgNameFieldID}>Organization name (optional)</label>
+          <input id={orgNameFieldID} value={orgName} onChange={e => setOrgName(e.target.value)} placeholder="Acme Co" />
         </div>
 
         <div className="grid-2">
           <div className="form-group">
-            <label>Platform admin email</label>
-            <input value={email} onChange={e => setEmail(e.target.value)} required />
+            <label htmlFor={emailFieldID}>Platform admin email</label>
+            <input id={emailFieldID} value={email} onChange={e => setEmail(e.target.value)} required />
           </div>
           <div className="form-group">
-            <label>Platform admin password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} required />
+            <label htmlFor={passwordFieldID}>Platform admin password</label>
+            <input id={passwordFieldID} type="password" value={password} onChange={e => setPassword(e.target.value)} required />
           </div>
         </div>
 
         <div className="form-group mt-8">
-          <label>First tenant name</label>
-          <input value={firstTenantName} onChange={e => setFirstTenantName(e.target.value)} required />
+          <label htmlFor={firstTenantFieldID}>First tenant name</label>
+          <input id={firstTenantFieldID} value={firstTenantName} onChange={e => setFirstTenantName(e.target.value)} required />
         </div>
 
         <div className="form-helper-text" style={{ marginTop: 16 }}>

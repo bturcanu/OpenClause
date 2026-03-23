@@ -4,6 +4,8 @@ import { readJSONResponse, storeAuthSession } from '../api'
 import { InlineErrorState } from '../ui'
 
 export default function Login() {
+  const emailFieldID = 'login-email'
+  const passwordFieldID = 'login-password'
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -41,8 +43,9 @@ export default function Login() {
         {error ? <InlineErrorState message={error} /> : null}
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label>Email</label>
+            <label htmlFor={emailFieldID}>Email</label>
             <input
+              id={emailFieldID}
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
@@ -52,8 +55,9 @@ export default function Login() {
             />
           </div>
           <div className="form-group">
-            <label>Password</label>
+            <label htmlFor={passwordFieldID}>Password</label>
             <input
+              id={passwordFieldID}
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}

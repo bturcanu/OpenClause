@@ -59,4 +59,39 @@ describe('Overview', () => {
     await user.keyboard('[Space]')
     expect(await screen.findByText(/selected/i)).toBeInTheDocument()
   })
+
+  it('keeps partial-success data visible without showing the no-activity empty state when chart loading fails', async () => {
+    mockApiGet([
+      ['/admin/analytics/overview', {
+        total_events: 12,
+        allow_count: 8,
+        deny_count: 2,
+        approve_count: 2,
+        pending_approvals: 1,
+        active_tenants: 3,
+      }],
+      ['/admin/analytics/timeseries', () => {
+        throw new Error('Timeseries unavailable')
+      }],
+      ['/admin/events?limit=10', {
+        events: [
+          {
+            event_id: 'event-1',
+            tool: 'slack',
+            action: 'msg.post',
+            decision: 'allow',
+            risk_score: 2,
+            received_at: '2026-03-23T11:15:00Z',
+            tenant_id: 'tenant-1',
+          },
+        ],
+      }],
+    ])
+
+    renderRoute(<Overview />, { path: '/', route: '/' })
+
+    expect(await screen.findByText(/some dashboard data could not be loaded: event volume chart/i)).toBeInTheDocument()
+    expect(screen.getByText('slack.msg.post')).toBeInTheDocument()
+    expect(screen.queryByText(/not enough activity yet/i)).not.toBeInTheDocument()
+  })
 })

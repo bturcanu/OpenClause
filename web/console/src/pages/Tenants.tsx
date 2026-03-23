@@ -25,6 +25,8 @@ interface Tenant {
 }
 
 export default function Tenants() {
+  const searchFieldID = 'tenants-search'
+  const createNameFieldID = 'tenant-create-name'
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -98,8 +100,8 @@ export default function Tenants() {
         actions={
           <div className="btn-group">
             <div className="form-group connectors-search">
-              <label>Search</label>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Find by tenant name or ID" />
+              <label htmlFor={searchFieldID}>Search</label>
+              <input id={searchFieldID} value={search} onChange={e => setSearch(e.target.value)} placeholder="Find by tenant name or ID" />
             </div>
             <button className="btn btn-outline" type="button" onClick={() => void fetchTenants()} disabled={loading}>
               Refresh
@@ -119,8 +121,8 @@ export default function Tenants() {
           <form onSubmit={handleCreate}>
             <div className="form-inline">
               <div className="form-group">
-                <label>Name</label>
-                <input value={form.name} onChange={e => setForm({ name: e.target.value })} required />
+                <label htmlFor={createNameFieldID}>Name</label>
+                <input id={createNameFieldID} value={form.name} onChange={e => setForm({ name: e.target.value })} required />
               </div>
               <button className="btn btn-primary" disabled={creating}>
                 {creating ? 'Creating…' : 'Create'}
