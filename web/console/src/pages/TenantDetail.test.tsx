@@ -975,4 +975,115 @@ describe('Tenant detail page', () => {
       }),
     )
   })
+
+  it('shows a repeated-failure triage banner when alert retries keep failing', async () => {
+    const user = userEvent.setup()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    let eventsCalls = 0
+    mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', { approver_group: '', notify: [] }],
+      ['/admin/tenants/tenant-1/alerts/rules', {
+        rules: [
+          {
+            id: 'rule-1',
+            tenant_id: 'tenant-1',
+            name: 'Retry burst',
+            kind: 'deny_spike',
+            enabled: true,
+            config_json: { n: 4, m_minutes: 10 },
+            created_at: '2026-03-23T10:00:00Z',
+            updated_at: '2026-03-23T10:00:00Z',
+          },
+        ],
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), () => {
+        eventsCalls += 1
+        throw new Error(`Alert events unavailable ${eventsCalls}`)
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=alerts' })
+
+    expect(await screen.findByText(/some alert data could not be loaded: events/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+    expect(await screen.findByText(/some alert data could not be loaded: events/i)).toBeInTheDocument()
+    expect(screen.getByText(/repeated failures detected/i)).toBeInTheDocument()
+    expect(screen.getByText(/repeated alerts partial failures detected for this tenant/i)).toBeInTheDocument()
+    expect(screen.getByText(/latest stage:/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('tenant_id=tenant-1'))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=alerts-partial'))
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] tenant detail issue',
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        stage: 'alerts-partial',
+        sections: ['events'],
+      }),
+    )
+  })
+
+  it('fails closed when analytics payloads are malformed and logs the contract issue', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', { approver_group: '', notify: [] }],
+      ['/admin/tenants/tenant-1/alerts/rules', []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        totals: null,
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=analytics' })
+
+    expect(await screen.findByText(/analytics summary payload was malformed/i)).toBeInTheDocument()
+    expect(screen.queryByText(/total events/i)).not.toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] tenant detail issue',
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        stage: 'analytics-contract',
+        message: 'Analytics summary payload was malformed.',
+      }),
+    )
+  })
 })

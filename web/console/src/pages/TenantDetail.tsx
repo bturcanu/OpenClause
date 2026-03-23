@@ -127,6 +127,12 @@ interface TenantAnalyticsSummary {
   onboarding_checklist: TenantOnboardingChecklist
 }
 
+type TenantIssueSummary = {
+  stage: string
+  message: string
+  requestId?: string
+}
+
 function formatUTCDateTime(value?: string | null) {
   if (!value) return '—'
   const parsed = new Date(value)
@@ -159,6 +165,79 @@ function approverLinkStatus(approver: Approver) {
   if (hasEmail && hasSlack) return { label: 'Both', tone: 'green' }
   if (hasSlack) return { label: 'Slack linked', tone: 'blue' }
   return { label: 'Email only', tone: 'gray' }
+}
+
+function normalizeTenantAnalyticsSummary(payload: unknown): TenantAnalyticsSummary | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const candidate = payload as Partial<TenantAnalyticsSummary>
+  const totals = candidate.totals as Partial<TenantAnalyticsTotals> | undefined
+  if (
+    !totals ||
+    typeof totals.total_events !== 'number' ||
+    typeof totals.allow_count !== 'number' ||
+    typeof totals.deny_count !== 'number' ||
+    typeof totals.approve_count !== 'number'
+  ) {
+    return null
+  }
+
+  const normalizeTrend = Array.isArray(candidate.trend)
+    ? candidate.trend.filter((row): row is TenantAnalyticsTrendBucket => (
+      !!row &&
+      typeof row.bucket === 'string' &&
+      typeof row.total === 'number' &&
+      typeof row.allow_count === 'number' &&
+      typeof row.deny_count === 'number' &&
+      typeof row.approve_count === 'number'
+    ))
+    : []
+
+  const normalizeRiskHeatmap = Array.isArray(candidate.risk_heatmap)
+    ? candidate.risk_heatmap.filter((row): row is TenantRiskHeatmapRow => (
+      !!row &&
+      typeof row.risk_score === 'number' &&
+      typeof row.allow_count === 'number' &&
+      typeof row.deny_count === 'number' &&
+      typeof row.approve_count === 'number' &&
+      typeof row.total === 'number'
+    ))
+    : []
+
+  const normalizePerAgent = Array.isArray(candidate.per_agent)
+    ? candidate.per_agent.filter((row): row is TenantAgentBreakdownRow => (
+      !!row &&
+      typeof row.agent_id === 'string' &&
+      typeof row.allow_count === 'number' &&
+      typeof row.deny_count === 'number' &&
+      typeof row.approve_count === 'number' &&
+      typeof row.total === 'number'
+    ))
+    : []
+
+  const onboarding = candidate.onboarding_checklist && typeof candidate.onboarding_checklist === 'object'
+    ? candidate.onboarding_checklist
+    : {}
+
+  return {
+    range_start: typeof candidate.range_start === 'string' ? candidate.range_start : '',
+    range_end: typeof candidate.range_end === 'string' ? candidate.range_end : '',
+    totals: {
+      total_events: totals.total_events,
+      allow_count: totals.allow_count,
+      deny_count: totals.deny_count,
+      approve_count: totals.approve_count,
+    },
+    trend: normalizeTrend,
+    risk_heatmap: normalizeRiskHeatmap,
+    per_agent: normalizePerAgent,
+    onboarding_checklist: {
+      has_api_key: !!(onboarding as Partial<TenantOnboardingChecklist>).has_api_key,
+      has_approver: !!(onboarding as Partial<TenantOnboardingChecklist>).has_approver,
+      has_toolcall: !!(onboarding as Partial<TenantOnboardingChecklist>).has_toolcall,
+      has_approval: !!(onboarding as Partial<TenantOnboardingChecklist>).has_approval,
+      has_execution: !!(onboarding as Partial<TenantOnboardingChecklist>).has_execution,
+    },
+  }
 }
 
 export default function TenantDetail() {
@@ -216,10 +295,40 @@ export default function TenantDetail() {
   const [analyticsRangeHours, setAnalyticsRangeHours] = useState(24)
   const [analyticsBucketMinutes] = useState(60)
   const [analyticsTopAgents] = useState(5)
+  const [triageNotice, setTriageNotice] = useState('')
+  const [latestIssue, setLatestIssue] = useState<TenantIssueSummary | null>(null)
+  const issueCounts = useRef<Record<string, number>>({})
+
+  function clearTenantIssues(...stages: string[]) {
+    let changed = false
+    stages.forEach(stage => {
+      if (issueCounts.current[stage]) {
+        delete issueCounts.current[stage]
+        changed = true
+      }
+    })
+    if (changed && Object.keys(issueCounts.current).length === 0) {
+      setTriageNotice('')
+      setLatestIssue(null)
+    }
+  }
+
+  function markTenantIssue(stage: string, requestId?: string) {
+    const nextCount = (issueCounts.current[stage] || 0) + 1
+    issueCounts.current[stage] = nextCount
+    if (nextCount < 2) return
+
+    const stageLabel = stage.replace(/-/g, ' ')
+    setTriageNotice(
+      `Repeated ${stageLabel} failures detected for this tenant. Check the latest request id${requestId ? ` (${requestId})` : ''} and browser console details before retrying.`,
+    )
+  }
 
   function logTenantDetailIssue(stage: string, err: unknown, extra: Record<string, unknown> = {}) {
     const message = err instanceof Error ? err.message : String(err || 'Unknown tenant detail failure')
     const requestId = err instanceof Error && 'requestId' in err ? (err as { requestId?: string }).requestId : undefined
+    markTenantIssue(stage, requestId)
+    setLatestIssue({ stage, message, requestId })
     console.warn('[openclause-console] tenant detail issue', {
       tenantId: id,
       stage,
@@ -228,6 +337,18 @@ export default function TenantDetail() {
       ...extra,
     })
   }
+
+  const tenantDiagnostics = useMemo(() => {
+    if (!latestIssue) return ''
+    return [
+      'OpenClause tenant detail diagnostics',
+      `tenant_id=${id || ''}`,
+      `active_tab=${activeTab}`,
+      `stage=${latestIssue.stage}`,
+      `request_id=${latestIssue.requestId || ''}`,
+      `message=${latestIssue.message}`,
+    ].join('\n')
+  }, [activeTab, id, latestIssue])
 
   const visibleAgents = useMemo(
     () =>
@@ -356,6 +477,7 @@ export default function TenantDetail() {
           webhook_url: webhook?.url || '',
           webhook_secret_ref: webhook?.secret_ref || '',
         })
+        clearTenantIssues('notification-config')
       } else {
         setNotificationConfig(null)
         setNotifError(notifCfgResp.reason?.message || 'Failed to load notification config')
@@ -365,6 +487,8 @@ export default function TenantDetail() {
       if (partialFailures.length > 0) {
         logTenantDetailIssue('overview-partial', new Error(`Some tenant sections could not be loaded: ${partialFailures.join(', ')}.`), { sections: partialFailures })
         setError(`Some tenant sections could not be loaded: ${partialFailures.join(', ')}.`)
+      } else {
+        clearTenantIssues('overview', 'overview-partial')
       }
     } catch (err: any) {
       if (seq === fetchSeq.current) logTenantDetailIssue('overview', err)
@@ -405,6 +529,8 @@ export default function TenantDetail() {
       if (failures.length > 0) {
         logTenantDetailIssue('alerts-partial', new Error(`Some alert data could not be loaded: ${failures.join(', ')}.`), { sections: failures })
         setAlertsError(`Some alert data could not be loaded: ${failures.join(', ')}.`)
+      } else {
+        clearTenantIssues('alerts', 'alerts-partial')
       }
     } catch (err: any) {
       if (seq !== alertsFetchSeq.current) return
@@ -430,7 +556,16 @@ export default function TenantDetail() {
         `/admin/tenants/${id}/analytics/summary?range=${rangeHours}h&bucket_minutes=${analyticsBucketMinutes}&top_agents=${analyticsTopAgents}`,
       )
       if (seq !== analyticsFetchSeq.current) return
-      setTenantAnalytics(summary as TenantAnalyticsSummary)
+      const normalizedSummary = normalizeTenantAnalyticsSummary(summary)
+      if (!normalizedSummary) {
+        const malformedSummaryError = new Error('Analytics summary payload was malformed.')
+        logTenantDetailIssue('analytics-contract', malformedSummaryError, { rangeHours })
+        setTenantAnalytics(null)
+        setAnalyticsError(malformedSummaryError.message)
+        return
+      }
+      setTenantAnalytics(normalizedSummary)
+      clearTenantIssues('analytics', 'analytics-contract')
     } catch (err) {
       if (seq !== analyticsFetchSeq.current) return
       logTenantDetailIssue('analytics', err, { rangeHours: analyticsRangeHours })
@@ -728,6 +863,21 @@ export default function TenantDetail() {
       </div>
 
       {error && <div className="error-msg">{error}</div>}
+      {triageNotice ? (
+        <div className="warn-banner mb-16">
+          <div className="warn-banner-header">
+            <div className="warn-banner-title">Repeated failures detected</div>
+            <CopyIconButton text={tenantDiagnostics} label="Tenant diagnostics" disabled={!tenantDiagnostics} />
+          </div>
+          <div className="form-helper-text helper-text-warn">{triageNotice}</div>
+          {latestIssue ? (
+            <div className="warn-banner-meta">
+              <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
+              {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="detail-panel">
         <h3>Tenant Info</h3>

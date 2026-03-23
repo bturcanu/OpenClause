@@ -2453,9 +2453,25 @@ pre {
   background: #fffbeb;
 }
 
+.warn-banner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .warn-banner-title {
   font-weight: 700;
   margin-bottom: 4px;
+}
+
+.warn-banner-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .tenant-alert-actions-cell {

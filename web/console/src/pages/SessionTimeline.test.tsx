@@ -469,4 +469,62 @@ describe('Session detail page', () => {
       }),
     )
   })
+
+  it('surfaces timeline request ids and shows a repeated-failure triage banner after a second retry miss', async () => {
+    const user = userEvent.setup()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    stubMutableApi()
+    let timelineCalls = 0
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
+        id: 'demo',
+        tenant_id: 'tenant-a',
+        agent_id: 'agent-1',
+        user_id: 'user-1',
+        user_name: 'Ada Lovelace',
+        user_email: 'ada@example.com',
+        trace_id: 'trace-1',
+        started_at: '2026-03-23T10:00:00Z',
+        last_event_at: '2026-03-23T10:15:00Z',
+        event_count: 1,
+        allow_count: 1,
+        deny_count: 0,
+        approve_count: 0,
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', () => {
+        timelineCalls += 1
+        throw new APIClientError(`Timeline blocked (request id: req-timeline-${timelineCalls})`, {
+          status: 502,
+          code: 'timeline_unavailable',
+          requestId: `req-timeline-${timelineCalls}`,
+        })
+      }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText(/req-timeline-1/i)).toBeInTheDocument()
+    expect(screen.getByText(/requested by ada/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+    expect(await screen.findByText(/^Timeline blocked \(request id: req-timeline-2\)$/i)).toBeInTheDocument()
+    expect(screen.getByText(/repeated failures detected/i)).toBeInTheDocument()
+    expect(screen.getByText(/repeated timeline failures detected for this run/i)).toBeInTheDocument()
+    expect(screen.getByText(/latest stage:/i)).toBeInTheDocument()
+    expect(screen.getByText('req-timeline-2')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /copy session diagnostics/i }))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('session_id=demo'))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('request_id=req-timeline-2'))
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] session detail issue',
+      expect.objectContaining({
+        stage: 'timeline',
+        sessionId: 'demo',
+        tenantId: 'tenant-a',
+        requestId: 'req-timeline-2',
+      }),
+    )
+  })
 })

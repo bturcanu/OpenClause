@@ -65,6 +65,12 @@ type TimelineFilters = {
   until: string
 }
 
+type SessionIssueSummary = {
+  stage: string
+  message: string
+  requestId?: string
+}
+
 const defaultFilters: TimelineFilters = {
   decision: '',
   tool: '',
@@ -111,11 +117,43 @@ export default function SessionTimeline() {
   const [tenantCandidates, setTenantCandidates] = useState<string[]>([])
   const [selectedTenantCandidate, setSelectedTenantCandidate] = useState('')
   const [copyStatus, setCopyStatus] = useState('')
+  const [triageNotice, setTriageNotice] = useState('')
+  const [latestIssue, setLatestIssue] = useState<SessionIssueSummary | null>(null)
   const fetchSeq = useRef(0)
+  const issueCounts = useRef<Record<string, number>>({})
+
+  const clearSessionIssues = useCallback((...stages: string[]) => {
+    let changed = false
+    stages.forEach(stage => {
+      if (issueCounts.current[stage]) {
+        delete issueCounts.current[stage]
+        changed = true
+      }
+    })
+    if (changed && Object.keys(issueCounts.current).length === 0) {
+      setTriageNotice('')
+      setLatestIssue(null)
+    }
+  }, [])
+
+  const markSessionIssue = useCallback((stage: string, requestId?: string) => {
+    const nextCount = (issueCounts.current[stage] || 0) + 1
+    issueCounts.current[stage] = nextCount
+    if (nextCount < 2) return
+
+    const stageLabel = stage.startsWith('export:')
+      ? `session ${stage.replace(':', ' ')}`
+      : stage.replace(/-/g, ' ')
+    setTriageNotice(
+      `Repeated ${stageLabel} failures detected for this run. Check the latest request id${requestId ? ` (${requestId})` : ''} and browser console details before retrying.`,
+    )
+  }, [])
 
   const logSessionDetailIssue = useCallback((stage: string, err: unknown, extra: Record<string, unknown> = {}) => {
     const message = err instanceof Error ? err.message : String(err || 'Unknown session detail failure')
     const requestId = err instanceof APIClientError ? err.requestId : undefined
+    markSessionIssue(stage, requestId)
+    setLatestIssue({ stage, message, requestId })
     console.warn('[openclause-console] session detail issue', {
       stage,
       sessionId: id,
@@ -124,7 +162,19 @@ export default function SessionTimeline() {
       message,
       ...extra,
     })
-  }, [id, tenantID])
+  }, [id, markSessionIssue, tenantID])
+
+  const sessionDiagnostics = useMemo(() => {
+    if (!latestIssue) return ''
+    return [
+      'OpenClause session detail diagnostics',
+      `session_id=${id || ''}`,
+      `tenant_id=${tenantID || ''}`,
+      `stage=${latestIssue.stage}`,
+      `request_id=${latestIssue.requestId || ''}`,
+      `message=${latestIssue.message}`,
+    ].join('\n')
+  }, [id, latestIssue, tenantID])
 
   const handleSessionError = useCallback((err: unknown) => {
     const message = err instanceof Error ? err.message : 'Failed to load session'
@@ -175,6 +225,7 @@ export default function SessionTimeline() {
         return
       }
       setSession(normalizedSummary)
+      clearSessionIssues('summary', 'summary-contract', 'fetch')
 
       if (timelineResult.status === 'fulfilled') {
         const normalizedTimeline = normalizeTimelineEvents(timelineResult.value)
@@ -187,6 +238,7 @@ export default function SessionTimeline() {
         } else {
           setEvents(normalizedTimeline)
           setError('')
+          clearSessionIssues('summary', 'summary-contract', 'timeline', 'timeline-contract', 'fetch')
         }
       } else {
         setEvents([])
@@ -271,6 +323,7 @@ export default function SessionTimeline() {
       const query = buildQuery({ tenant_id: tenantID })
       const blob = await api.getBlob(`/admin/sessions/${encodeURIComponent(id)}/export/${kind}${query}`)
       downloadBlob(blob, `session-${id}.${kind}`)
+      clearSessionIssues(`export:${kind}`)
     } catch (err: any) {
       logSessionDetailIssue(`export:${kind}`, err)
       handleSessionError(err)
@@ -319,6 +372,21 @@ export default function SessionTimeline() {
       />
 
       {copyStatus ? <div className="success-msg mb-16">{copyStatus}</div> : null}
+      {triageNotice ? (
+        <div className="warn-banner mb-16">
+          <div className="warn-banner-header">
+            <div className="warn-banner-title">Repeated failures detected</div>
+            <CopyIconButton text={sessionDiagnostics} label="Session diagnostics" disabled={!sessionDiagnostics} />
+          </div>
+          <div className="form-helper-text helper-text-warn">{triageNotice}</div>
+          {latestIssue ? (
+            <div className="warn-banner-meta">
+              <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
+              {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {error && tenantCandidates.length === 0 && !timelineLoadFailed ? <InlineErrorState message={error} onRetry={() => void fetchSession()} /> : null}
 
       {tenantCandidates.length > 0 ? (
