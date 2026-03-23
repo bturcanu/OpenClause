@@ -26,7 +26,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 - Strong backend coverage exists across console/auth/store/evidence/approvals/alerts/gateway/SDKs.
 - Console UI now has a `Vitest + React Testing Library` harness with focused integration coverage.
-- `web/console` currently passes `17` test files / `104` tests locally on this branch.
+- `web/console` currently passes `17` test files / `111` tests locally on this branch.
 - A tiny Playwright smoke pack now covers the 4 highest-value browser flows in CI (`login -> overview`, `tenant create/agent/key`, `audit trail -> event detail`, `sessions -> execution linkage`).
 - The browser smoke pack now also passes locally on this macOS host when Playwright uses the installed Google Chrome channel outside the sandbox, which removes the old bundled-Chromium blocker for manual repro work.
 - GitHub Actions now runs the full repo verification matrix plus a short Go fuzz-smoke layer for analytics, auth-header, and timestamp parsers.
@@ -67,6 +67,9 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Extended the deterministic edge layer again with non-finite query-value filtering in the shared query builder plus two-hour analytics bucket invariants.
 - Deepened the session-detail and tenant-detail diagnostics branches so first-failure helper text, repeated-failure banners, and successful-retry clearing are now all covered by focused page tests instead of manual spot checks.
 - Expanded analytics bucketing coverage again with a deterministic 15/30/60/120-minute bucket matrix that proves totals stay stable and buckets stay interval-aligned.
+- Deepened session detail again so malformed nested approval/execution payloads are now dropped fail-closed while valid timeline rows stay visible, and the UI exposes richer export/session triage with error codes plus occurrence counts.
+- Tightened tenant notification contract handling so only operationally valid `slack` and `webhook` routes survive normalization; malformed or incomplete rows are now dropped with explicit diagnostics instead of silently pre-filling misleading config.
+- Expanded the deterministic edge layer again with generated query/date helper matrices in `web/console` and a broader analytics bucket-alignment matrix covering `5/10/15/20/30/45/60/90/120/180` minute windows.
 - Bound the remaining high-traffic console form labels to their controls and added label-driven tests so those accessibility regressions now break CI.
 - Fixed stale notification-config state in tenant detail so failed refetches no longer leave misleading routing values on screen.
 - Fixed session-detail and tenant-detail race/contract edges:
@@ -92,6 +95,10 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Fixed: [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) trusted fulfilled notification-config and tenant-alert payloads too much; malformed notification config now fails closed, malformed alert rows are dropped with an honest contract warning, and operators get copyable “Latest diagnostics” on the first visible failure instead of only after repeats.
 - Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) now distinguishes between “all timeline rows were malformed” vs “some rows were ignored,” preserving valid rows when possible and failing closed when none are usable.
 - Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) and [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) only pushed repeated-failure details into the browser console; the UI now exposes copyable diagnostics so operators can paste the latest stage/request ID into bug reports without digging through DevTools.
+- Fixed: repeated-failure banners in [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) and [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) could stay stale after the repeated stage recovered if a different one-off issue was still active; triage state now recomputes from the remaining active issues instead of only clearing when *all* issues disappear.
+- Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) trusted nested `approval` / `execution` payloads too much, which could render misleading subpanels from malformed fulfilled timeline rows.
+- Fixed: [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) accepted notification rows that were structurally typed but operationally unusable, such as `slack` entries without a channel or `webhook` entries without a secret ref.
+- Clarified: fuzzing found an over-strict test assumption in [`cmd/console-api/parsing_fuzz_test.go`](../cmd/console-api/parsing_fuzz_test.go), not a product bug; `parseRangeDuration` is allowed to return large positive durations because the handler clamps them later.
 - Fixed: [`readme.md`](../readme.md) had a stale CI/CD numbering slip after an editor-side compare/paste; the workflow list is back to the intended `1..13` sequence and the file has no conflict markers.
 - Fixed: [`cmd/console-api/tenant_analytics_handlers.go`](../cmd/console-api/tenant_analytics_handlers.go) let huge raw `range` hour values overflow `time.Duration` negative before the handler clamp, which fuzzing reproduced with `range=2700000`.
 - Fixed: [`web/console/vite.config.ts`](../web/console/vite.config.ts) needed an explicit `src/**/*.test.{ts,tsx}` include so Vitest would not try to execute the Playwright smoke spec as a unit suite.
@@ -209,18 +216,17 @@ Definition of done:
 
 ### P0
 
-- Keep watching future Linux `browser-smoke` artifacts and only harden selectors if a later CI/runtime difference appears; the first uploaded Linux run was already green (`4/4`).
-- Finish the last thin session-detail and tenant-detail branches that still rely on smoke-plus-one-action coverage after the newer malformed-timeline, malformed-alert/notification, stale-state, export, diagnostics-clearing, partial-failure, and repeated-failure-triage tests.
-- Add regression tests whenever local/manual console verification finds a mismatch.
+- Keep converting any newly discovered manual/UI mismatch into a reproducer test plus the smallest localized fix.
 
 ### P1
 
-- Expand the current deterministic edge matrices and auth/date/analytics fuzz smokes into broader property/fuzz coverage for date filters, query builders, and analytics buckets beyond the current 15/30/60/120-minute matrix and parser-smoke set.
+- Keep watching future Linux `browser-smoke` artifacts and only harden selectors if a later CI/runtime difference appears; the first uploaded Linux run was already green (`4/4`).
 - Add CI reporting that highlights which critical workstreams failed.
 
 ### P2
 
-- Expand observability and local reproduction tooling beyond request IDs, repeated API-failure logging, and the new copyable session/tenant detail diagnostics, especially around repeated browser-side errors and failing export/session triage UX.
+- Continue expanding property/fuzz coverage where failures justify the cost, especially if new bugs cluster around date filters, query builders, or analytics bucketing again.
+- Continue expanding observability only when new triage pain appears beyond the current request-id/error-code/occurrence diagnostics and repeated API-failure logging.
 - Add richer failure-triage docs once the core coverage stabilizes.
 
 ## Source Of Truth

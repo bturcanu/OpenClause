@@ -71,7 +71,7 @@ Add a maintainable `Vitest + React Testing Library` harness for `web/console`, t
 
 - Prefer deterministic mocked API responses over browser/network-heavy tests.
 - Avoid broad snapshots; every new test should assert visible behavior or an invariant.
-- `npm --prefix web/console run test` currently covers 17 files / 104 tests.
+- `npm --prefix web/console run test` currently covers 17 files / 111 tests.
 - The expected jsdom warning `Not implemented: navigation to another Document` comes from the `apiFetch` 401 redirect test path and does not fail the suite.
 - `npm --prefix web/console run test:e2e` is intentionally separate from Vitest. [`web/console/vite.config.ts`](/Users/bogdan/dev/personal/OpenClause/web/console/vite.config.ts) now explicitly scopes unit/integration tests to `src/**/*.test.{ts,tsx}` so Playwright specs do not break the normal console test command.
 - One real UI bug was found and fixed while adding coverage: [`web/console/src/pages/Tenants.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Tenants.tsx) now correctly binds the Search and Create Tenant labels to their inputs for keyboard/accessibility-safe `getByLabelText` behavior.
@@ -104,3 +104,7 @@ Add a maintainable `Vitest + React Testing Library` harness for `web/console`, t
   - [`web/console/src/pages/SessionTimeline.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/SessionTimeline.test.tsx) now proves diagnostics clear after a successful retry, and the richer latest-diagnostics helper text stays testable without weakening the inline error assertions.
   - [`web/console/src/pages/TenantDetail.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/TenantDetail.test.tsx) now proves tenant alert contract diagnostics also clear after a successful retry and that stale notification-config failures are asserted through the real notification card instead of looser page-level text matches.
   - [`pkg/console/analytics_integration_test.go`](/Users/bogdan/dev/personal/OpenClause/pkg/console/analytics_integration_test.go) now adds a 15/30/60/120-minute bucket matrix so analytics trend totals and bucket alignment are locked down across more than one interval size.
+- The latest backlog close-out tightened the last thinner console branches:
+  - [`web/console/src/pages/SessionTimeline.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/SessionTimeline.test.tsx) now covers malformed nested `approval` / `execution` payloads, export error-code visibility, multi-issue history aggregation, and repeated-failure clearing after recovery.
+  - [`web/console/src/pages/TenantDetail.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/TenantDetail.test.tsx) now covers operationally invalid notification routes (`slack` without channel, `webhook` without secret, unknown kinds) and repeated-notification triage clearing after a good refetch.
+  - [`web/console/src/api.test.ts`](/Users/bogdan/dev/personal/OpenClause/web/console/src/api.test.ts) and [`web/console/src/ui.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/ui.test.tsx) now include broader generated date/query matrices rather than only hand-picked edge cases.
