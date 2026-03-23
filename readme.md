@@ -1182,6 +1182,7 @@ The detailed inventory lives in [`.ai/test-coverage-sweep.md`](.ai/test-coverage
 go test ./...             # All Go tests
 go test -race ./...       # With race detector
 opa test policy/bundles/v0/ policy/tests/ -v   # Policy tests
+npm --prefix web/console run test              # Console UI tests
 npm --prefix web/console run build             # Console UI build
 npm --prefix sdk/typescript run build          # TypeScript SDK build
 (cd sdk/java && ./gradlew test)                # Java SDK tests
@@ -1189,6 +1190,8 @@ PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v   # Py
 ```
 
 Core Python SDK import/tests should run on Python 3.9+. Run any LangChain-specific checks in an environment where the `openclause[langchain]` extra is installed.
+
+The frontend test inventory and remaining UI follow-ups live in [`.ai/console-ui-test-tracker.md`](.ai/console-ui-test-tracker.md).
 
 ### Console UI development
 

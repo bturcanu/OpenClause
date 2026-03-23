@@ -1,10 +1,11 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Sessions from './Sessions'
 import { shortID } from '../ui'
 import { renderRoute } from '../test/render'
-import { mockApiGet, stubMutableApi } from '../test/mockApi'
+import { getFieldByLabelText } from '../test/form'
+import { mockApiGet } from '../test/mockApi'
 
 const sessionsFixture = [
   {
@@ -50,7 +51,6 @@ const sessionsFixture = [
 describe('Sessions page', () => {
   it('sorts sessions within the current page by event count', async () => {
     const user = userEvent.setup()
-    stubMutableApi()
     mockApiGet([
       [/^\/admin\/sessions/, { sessions: sessionsFixture }],
     ])
@@ -66,5 +66,40 @@ describe('Sessions page', () => {
       expect(within(rows[1]).getByRole('link', { name: shortID('session-high-1234567890', 14) })).toBeInTheDocument()
     })
     expect(screen.getAllByRole('link', { name: /open run/i }).length).toBeGreaterThan(0)
+  })
+
+  it('updates filters, resets them, and keeps copy actions usable', async () => {
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+    const getSpy = mockApiGet([
+      [/^\/admin\/sessions/, { sessions: sessionsFixture }],
+    ])
+
+    renderRoute(<Sessions />, { path: '/sessions', route: '/sessions' })
+
+    expect(await screen.findByRole('heading', { name: /sessions/i })).toBeInTheDocument()
+
+    await user.type(getFieldByLabelText(/^tenant$/i), 'tenant-1')
+
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith(expect.stringContaining('tenant_id=tenant-1')))
+    expect(await screen.findByRole('button', { name: /tenant id: tenant-1/i })).toBeInTheDocument()
+
+    const firstSessionRow = screen.getByRole('link', { name: shortID('session-low-1234567890', 14) }).closest('tr')
+    expect(firstSessionRow).not.toBeNull()
+
+    await user.click(within(firstSessionRow as HTMLElement).getByRole('button', { name: /copy session id/i }))
+    await user.click(within(firstSessionRow as HTMLElement).getByRole('button', { name: /copy tenant id/i }))
+    await user.click(within(firstSessionRow as HTMLElement).getByRole('button', { name: /copy trace id/i }))
+
+    expect(writeTextSpy).toHaveBeenCalledWith('session-low-1234567890')
+    expect(writeTextSpy).toHaveBeenCalledWith('tenant-1')
+    expect(writeTextSpy).toHaveBeenCalledWith('trace-low-123')
+
+    await user.click(screen.getByRole('button', { name: /clear filters/i }))
+
+    await waitFor(() => {
+      expect(getFieldByLabelText(/^tenant$/i)).toHaveValue('')
+      expect(screen.queryByRole('button', { name: /tenant id: tenant-1/i })).not.toBeInTheDocument()
+    })
   })
 })

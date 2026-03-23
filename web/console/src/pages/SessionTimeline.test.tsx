@@ -1,8 +1,8 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import SessionTimeline from './SessionTimeline'
-import { APIClientError } from '../api'
+import { APIClientError, api } from '../api'
 import { renderRoute } from '../test/render'
 import { getFieldByLabelText } from '../test/form'
 import { mockApiGet, stubMutableApi } from '../test/mockApi'
@@ -65,5 +65,100 @@ describe('Session detail page', () => {
 
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/sessions/demo?tenant_id=tenant-b'))
     expect(await screen.findByText('slack.msg.post')).toBeInTheDocument()
+  })
+
+  it('keeps the session summary visible when the timeline load fails and retries the session fetch', async () => {
+    const user = userEvent.setup()
+    stubMutableApi()
+    const getSpy = mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
+        id: 'demo',
+        tenant_id: 'tenant-a',
+        agent_id: 'agent-1',
+        user_id: 'user-1',
+        user_name: 'Ada Lovelace',
+        user_email: 'ada@example.com',
+        trace_id: 'trace-1',
+        started_at: '2026-03-23T10:00:00Z',
+        last_event_at: '2026-03-23T10:15:00Z',
+        event_count: 1,
+        allow_count: 1,
+        deny_count: 0,
+        approve_count: 0,
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', () => {
+        throw new Error('Timeline unavailable')
+      }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText(/timeline unavailable/i)).toBeInTheDocument()
+    expect(screen.getByText(/requested by ada/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/sessions/demo/timeline?tenant_id=tenant-a'))
+  })
+
+  it('copies the shareable summary and exports the tenant-scoped session bundle', async () => {
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const getBlobSpy = vi.spyOn(api, 'getBlob').mockResolvedValue(new Blob(['csv'], { type: 'text/csv' }))
+    const createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:session-export')
+    const revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    stubMutableApi()
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
+        id: 'demo',
+        tenant_id: 'tenant-a',
+        agent_id: 'agent-1',
+        user_id: 'user-1',
+        user_name: 'Ada Lovelace',
+        user_email: 'ada@example.com',
+        trace_id: 'trace-1',
+        started_at: '2026-03-23T10:00:00Z',
+        last_event_at: '2026-03-23T10:15:00Z',
+        event_count: 1,
+        allow_count: 1,
+        deny_count: 0,
+        approve_count: 0,
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', {
+        events: [
+          {
+            event_id: 'event-1',
+            tenant_id: 'tenant-a',
+            agent_id: 'agent-1',
+            user_id: 'user-1',
+            user_name: 'Ada Lovelace',
+            user_email: 'ada@example.com',
+            tool: 'slack',
+            action: 'msg.post',
+            risk_score: 2,
+            decision: 'allow',
+            session_id: 'demo',
+            trace_id: 'trace-1',
+            received_at: '2026-03-23T10:15:00Z',
+            explain: 'Allowed',
+          },
+        ],
+      }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText('slack.msg.post')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /copy shareable summary/i }))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('Session demo'))
+    expect(await screen.findByText(/summary copied/i)).toBeInTheDocument()
+
+    await user.click(screen.getByText(/export/i, { selector: 'summary' }))
+    await user.click(screen.getByRole('button', { name: /export csv/i }))
+
+    await waitFor(() => expect(getBlobSpy).toHaveBeenCalledWith('/admin/sessions/demo/export/csv?tenant_id=tenant-a'))
+    expect(createObjectURLSpy).toHaveBeenCalled()
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:session-export')
   })
 })
