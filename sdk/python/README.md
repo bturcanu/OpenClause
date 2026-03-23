@@ -102,10 +102,16 @@ except TimeoutError:
 # Core SDK tests/imports should run on Python 3.9+.
 # Run any LangChain-specific checks in an environment with the extra installed.
 python3 -m pip install -U pip setuptools wheel
+python3 -m pip install -e .
+
+# Optional developer extras
 python3 -m pip install -e ".[dev]"
 python3 -m pip install -e ".[langchain]"
 
-# Run tests
+# Run the core SDK tests
+PYTHONPATH=. python3 -m unittest discover -s tests -v
+
+# If you installed the dev extra, pytest works too
 pytest
 ```
 

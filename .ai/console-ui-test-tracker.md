@@ -71,7 +71,7 @@ Add a maintainable `Vitest + React Testing Library` harness for `web/console`, t
 
 - Prefer deterministic mocked API responses over browser/network-heavy tests.
 - Avoid broad snapshots; every new test should assert visible behavior or an invariant.
-- `npm --prefix web/console run test` currently covers 17 files / 94 tests.
+- `npm --prefix web/console run test` currently covers 17 files / 97 tests.
 - The expected jsdom warning `Not implemented: navigation to another Document` comes from the `apiFetch` 401 redirect test path and does not fail the suite.
 - `npm --prefix web/console run test:e2e` is intentionally separate from Vitest. [`web/console/vite.config.ts`](/Users/bogdan/dev/personal/OpenClause/web/console/vite.config.ts) now explicitly scopes unit/integration tests to `src/**/*.test.{ts,tsx}` so Playwright specs do not break the normal console test command.
 - One real UI bug was found and fixed while adding coverage: [`web/console/src/pages/Tenants.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Tenants.tsx) now correctly binds the Search and Create Tenant labels to their inputs for keyboard/accessibility-safe `getByLabelText` behavior.
@@ -94,3 +94,4 @@ Add a maintainable `Vitest + React Testing Library` harness for `web/console`, t
   - [`web/console/src/pages/SessionTimeline.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/SessionTimeline.test.tsx) now covers malformed fulfilled timeline payloads, summary request-id failures, and export triage logging.
   - [`web/console/src/pages/TenantDetail.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/TenantDetail.test.tsx) now asserts contextual warning logs for alert partial failures and notification-config loss on refetch.
   - [`pkg/console/analytics_integration_test.go`](/Users/bogdan/dev/personal/OpenClause/pkg/console/analytics_integration_test.go) now covers deterministic half-hour bucketing so analytics bucket regressions are not only parser-tested.
+- The latest observability pass adds operator-facing repeated-failure diagnostics in [`web/console/src/pages/SessionTimeline.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/SessionTimeline.test.tsx) and [`web/console/src/pages/TenantDetail.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/TenantDetail.test.tsx): the UI now shows the latest failing stage/request ID and lets operators copy a diagnostics payload directly from the warning banner.

@@ -1,6 +1,6 @@
 # Test Coverage Sweep
 
-Updated: 2026-03-21
+Updated: 2026-03-23
 
 Legend:
 - `COVERED` = concrete invariants exercised by existing/new automated tests
@@ -76,7 +76,7 @@ Legend:
 | Item | Status | Tests | Notes |
 | --- | --- | --- | --- |
 | 20. TypeScript SDK | `COVERED` | `sdk/typescript/tests/client.test.ts`; `sdk/typescript/tests/mcp.test.ts` | Covers request construction, auth/timeout error mapping, wait-for-approval polling, execution-result mapping, and MCP output mapping. |
-| 21. Python SDK | `PARTIAL` | `sdk/python/tests/test_client.py` | Covers request serialization, risk validation, request building with trace header, timeout/auth/API error mapping, body-size guard, wait-for-approval polling, core imports without LangChain extras, and helpful `openclause[langchain]` import guidance. Remaining backlog: no automated Python 3.9 installability matrix despite current metadata declaring `requires-python >=3.9`. |
+| 21. Python SDK | `COVERED` | `sdk/python/tests/test_client.py` | Covers request serialization, risk validation, request building with trace header, timeout/auth/API error mapping, body-size guard, wait-for-approval polling, core imports without LangChain extras, helpful `openclause[langchain]` import guidance, and the CI matrix now runs an explicit Python 3.9 install/import contract alongside the Python SDK unit suite. |
 | 22. Java SDK | `COVERED` | `sdk/java/src/test/java/dev/openclause/sdk/OpenClauseClientTest.java` | Covers model serialization/deserialization, request construction against a local HTTP server, and `401`/`500` error mapping to `APIException`. |
 | 23. Go SDK | `COVERED` | `pkg/sdk/client/client_test.go` | Covers submit request construction + auto-generated identifiers, execute structured error mapping, and wait-for-approval retry vs permanent-conflict behavior. |
 
@@ -88,4 +88,6 @@ Legend:
 
 ## True Backlog
 
-- Python 3.9 installability matrix: `sdk/python/pyproject.toml` now declares `requires-python >=3.9`, but CI does not yet run an actual Python 3.9 install/import job.
+- Review the first Linux `browser-smoke` CI artifacts and harden selectors only if the real stack differs from local macOS repro.
+- Deepen the remaining thin session-detail and tenant-detail UI branches beyond the now-covered malformed contract, stale-state, export, and repeated-failure-triage paths.
+- Expand the current auth/date/analytics fuzz smokes into broader property/fuzz coverage where it buys real signal.

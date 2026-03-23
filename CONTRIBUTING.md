@@ -17,6 +17,7 @@ git clone https://github.com/bturcanu/OpenClause.git
 cd OpenClause
 go build ./...
 go test ./...
+npm --prefix web/console run test
 ```
 
 ## Project Layout
@@ -80,14 +81,24 @@ type BuiltinConnector interface {
 ## Testing
 
 ```bash
-# Unit tests
+# Go tests
 go test ./...
-
-# Run a specific package
-go test ./pkg/connectors/...
-
-# With race detector
 go test -race ./...
+go test ./cmd/console-api -run '^$' -fuzz=FuzzParseRangeDurationDoesNotReturnNonPositiveValues -fuzztime=2s
+
+# Console UI
+npm --prefix web/console run test
+npm --prefix web/console run build
+
+# Browser smoke (after ./scripts/dev.sh + ./scripts/demo.sh)
+npm --prefix web/console run test:e2e
+
+# SDKs + policy
+npm --prefix sdk/typescript run build
+npm --prefix sdk/typescript run test
+(cd sdk/java && ./gradlew test)
+PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v
+opa test policy/bundles/v0/ policy/tests/ -v
 ```
 
 All connectors should be testable in mock mode without external credentials.
@@ -98,7 +109,7 @@ All connectors should be testable in mock mode without external credentials.
 2. **Keep PRs focused** — one feature or fix per PR.
 3. **Write tests** for new functionality.
 4. **Update docs** if you add/change connectors or public APIs.
-5. **Run `go build ./...` and `go test ./...`** before submitting.
+5. **Run the relevant verification commands** for the areas you touched before submitting.
 6. **Describe** your changes clearly in the PR description.
 
 ## Commit Messages

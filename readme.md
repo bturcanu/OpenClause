@@ -1106,7 +1106,7 @@ OpenClause/
 │   ├── terraform/                  # AWS infrastructure (EKS, RDS, S3, ALB)
 │   └── dashboards/                 # Grafana dashboard JSON
 ├── CONTRIBUTING.md                 # Contribution guide
-├── .github/workflows/ci.yml        # CI: test, lint, policy-test, build, deploy
+├── .github/workflows/ci.yml        # CI: Go/unit/UI/SDK/policy/browser checks + build
 ├── Dockerfile                      # Multi-stage build (one binary per image, non-root)
 ├── LICENSE                         # License text (Apache-2.0 + Commons Clause)
 ├── Makefile                        # dev, test, build, deploy targets
@@ -1181,17 +1181,20 @@ The detailed inventory lives in [`.ai/test-coverage-sweep.md`](.ai/test-coverage
 ```bash
 go test ./...             # All Go tests
 go test -race ./...       # With race detector
+go test ./cmd/console-api -run '^$' -fuzz=FuzzParseRangeDurationDoesNotReturnNonPositiveValues -fuzztime=2s  # Example fuzz smoke
 opa test policy/bundles/v0/ policy/tests/ -v   # Policy tests
 npm --prefix web/console run test              # Console UI tests
 npm --prefix web/console run build             # Console UI build
 npm --prefix web/console run test:e2e          # Browser smoke pack (after ./scripts/dev.sh + ./scripts/demo.sh)
 npm --prefix sdk/typescript run build          # TypeScript SDK build
+(npm --prefix sdk/typescript run test)         # TypeScript SDK tests
 (cd sdk/java && ./gradlew test)                # Java SDK tests
 PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v   # Python SDK tests
+python3.9 -c "import openclause; import openclause.client; import openclause.models"  # Python 3.9 install/import contract
 ```
 
 Core Python SDK import/tests should run on Python 3.9+. Run any LangChain-specific checks in an environment where the `openclause[langchain]` extra is installed.
-The browser smoke pack is designed for CI/Linux and for local stacks that can launch Playwright Chromium. If a locked-down macOS host blocks the bundled browser process, rely on the `browser-smoke` CI job as the canonical verifier.
+For local browser smokes on macOS, `web/console/playwright.config.ts` prefers the installed Google Chrome channel outside CI so the suite can work around bundled-Chromium launch restrictions on locked-down hosts. The `browser-smoke` CI job remains the canonical Linux verifier and uploads Playwright artifacts for debugging.
 
 The frontend test inventory and remaining UI follow-ups live in [`.ai/console-ui-test-tracker.md`](.ai/console-ui-test-tracker.md).
 
@@ -1258,11 +1261,18 @@ Terraform modules in `deploy/terraform/` provision AWS infrastructure:
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 
-1. **test** — `go test ./...` + `go vet ./...`
-2. **policy-test** — `opa test` on policy bundles
-3. **lint** — `golangci-lint`
-4. **build** — Docker images pushed to `ghcr.io` (main branch only)
-5. **deploy** — Cluster deployment (main branch only)
+1. **go-test** — `go test ./...` + `go vet ./...`
+2. **go-race** — `go test -race ./...`
+3. **go-fuzz-smoke** — short Go fuzz runs for analytics, auth-header, and timestamp parsers
+4. **console-ui** — Vitest + production build for `web/console`
+5. **browser-smoke** — Playwright smoke pack against the local stack
+6. **typescript-sdk** — TypeScript SDK build + Jest suite
+7. **python-sdk-39** — Python 3.9 install/import contract
+8. **python-sdk-tests** — Python SDK unit tests
+9. **java-sdk** — Java SDK Gradle tests
+10. **policy-test** — `opa test` on policy bundles
+11. **lint** — `golangci-lint`
+12. **build** — Docker images pushed to `ghcr.io` (main branch only)
 
 ---
 
