@@ -1,7 +1,7 @@
-import { useState, useEffect, FormEvent, useRef } from 'react'
+import { useState, useEffect, FormEvent, useMemo, useRef } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { CopyIconButton, EmptyState, InlineErrorState } from '../ui'
+import { CopyIconButton, EmptyState, InlineErrorState, compareDate } from '../ui'
 
 interface Tenant {
   id: string
@@ -153,9 +153,17 @@ function analyticsRangeLabel(rangeHours: number) {
   }
 }
 
+function approverLinkStatus(approver: Approver) {
+  const hasEmail = !!approver.email?.trim()
+  const hasSlack = !!approver.slack_user_id?.trim()
+  if (hasEmail && hasSlack) return { label: 'Both', tone: 'green' }
+  if (hasSlack) return { label: 'Slack linked', tone: 'blue' }
+  return { label: 'Email only', tone: 'gray' }
+}
+
 export default function TenantDetail() {
   const { id } = useParams<{ id: string }>()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [tenant, setTenant] = useState<Tenant | null>(null)
   const [agents, setAgents] = useState<Agent[]>([])
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
@@ -207,6 +215,39 @@ export default function TenantDetail() {
   const [analyticsBucketMinutes] = useState(60)
   const [analyticsTopAgents] = useState(5)
 
+  const visibleAgents = useMemo(
+    () =>
+      [...agents].sort((left, right) => {
+        if (left.status !== right.status) return left.status === 'active' ? -1 : 1
+        return compareDate(right.created_at, left.created_at)
+      }),
+    [agents],
+  )
+
+  const visibleApiKeys = useMemo(
+    () =>
+      [...apiKeys].sort((left, right) => {
+        if (left.is_primary !== right.is_primary) return left.is_primary ? -1 : 1
+        if (left.status !== right.status) return left.status === 'active' ? -1 : 1
+        return compareDate(right.created_at, left.created_at)
+      }),
+    [apiKeys],
+  )
+
+  const visibleApprovers = useMemo(
+    () =>
+      [...approvers].sort((left, right) => {
+        const leftStatus = approverLinkStatus(left).label
+        const rightStatus = approverLinkStatus(right).label
+        if (leftStatus !== rightStatus) {
+          const order = ['Both', 'Slack linked', 'Email only']
+          return order.indexOf(leftStatus) - order.indexOf(rightStatus)
+        }
+        return (left.name || left.email || '').localeCompare(right.name || right.email || '')
+      }),
+    [approvers],
+  )
+
   useEffect(() => {
     const tab = searchParams.get('tab')
     if (tab === 'agents' || tab === 'api_keys' || tab === 'approvers' || tab === 'alerts' || tab === 'analytics') {
@@ -215,6 +256,13 @@ export default function TenantDetail() {
       setActiveTab('agents')
     }
   }, [searchParams, id])
+
+  function selectTab(tab: 'agents' | 'api_keys' | 'approvers' | 'alerts' | 'analytics') {
+    setActiveTab(tab)
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', tab)
+    setSearchParams(next)
+  }
 
   async function fetchAll() {
     const seq = ++fetchSeq.current
@@ -628,13 +676,13 @@ export default function TenantDetail() {
   if (error && !tenant) return (
     <div>
       <InlineErrorState message={error} onRetry={() => void fetchAll()} />
-      <Link to="/tenants" className="btn btn-outline" style={{ marginTop: 16 }}>← Back to Tenants</Link>
+      <Link to="/tenants" className="btn btn-outline back-link-spaced">← Back to Tenants</Link>
     </div>
   )
   if (!tenant) return (
     <div>
       <div className="error-msg">Tenant not found</div>
-      <Link to="/tenants" className="btn btn-outline" style={{ marginTop: 16 }}>← Back to Tenants</Link>
+      <Link to="/tenants" className="btn btn-outline back-link-spaced">← Back to Tenants</Link>
     </div>
   )
 
@@ -696,31 +744,31 @@ export default function TenantDetail() {
       <div className="tabs tenant-tabs mt-16">
         <button
           className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'agents' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('agents')}
+          onClick={() => selectTab('agents')}
         >
           Agents
         </button>
         <button
           className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'api_keys' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('api_keys')}
+          onClick={() => selectTab('api_keys')}
         >
           API Keys
         </button>
         <button
           className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'approvers' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('approvers')}
+          onClick={() => selectTab('approvers')}
         >
           Approvers
         </button>
         <button
           className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'alerts' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('alerts')}
+          onClick={() => selectTab('alerts')}
         >
           Alerts
         </button>
         <button
           className={`btn btn-outline btn-sm tenant-tab ${activeTab === 'analytics' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('analytics')}
+          onClick={() => selectTab('analytics')}
         >
           Analytics
         </button>
@@ -741,7 +789,7 @@ export default function TenantDetail() {
               </div>
             </form>
             <div className="toggle-stack mt-16">
-              <label className="toggle-field">
+              <label className="toggle-field toggle-field-boxed">
                 <input
                   type="checkbox"
                   checked={hideDisabledAgents}
@@ -764,12 +812,17 @@ export default function TenantDetail() {
                 </tr>
               </thead>
               <tbody>
-                {agents.length === 0 ? (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No agents</td></tr>
+                {visibleAgents.length === 0 ? (
+                  <tr><td colSpan={5} className="table-empty-copy-cell">No agents</td></tr>
                 ) : (
-                  agents.map(a => (
+                  visibleAgents.map(a => (
                     <tr key={a.id}>
-                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{a.id.slice(0, 12)}…</td>
+                      <td>
+                        <div className="inline-value-copy">
+                          <code className="mono" title={a.id}>{a.id.slice(0, 12)}…</code>
+                          <CopyIconButton text={a.id} label="Agent ID" />
+                        </div>
+                      </td>
                       <td>{a.name}</td>
                       <td>
                         <span className={`badge ${a.status === 'active' ? 'badge-green' : 'badge-red'}`}>{a.status}</span>
@@ -968,10 +1021,10 @@ export default function TenantDetail() {
                 </tr>
               </thead>
               <tbody>
-                {apiKeys.length === 0 ? (
+                {visibleApiKeys.length === 0 ? (
                   <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>No API keys</td></tr>
                 ) : (
-                  apiKeys.map(k => (
+                  visibleApiKeys.map(k => (
                     <tr key={k.id}>
                       <td style={{ fontFamily: 'monospace' }}>{k.key_prefix}…</td>
                       <td>{k.name}</td>
@@ -1005,7 +1058,16 @@ export default function TenantDetail() {
                           <span style={{ color: '#64748b' }}>Never</span>
                         )}
                       </td>
-                      <td>{k.last_used_at ? formatDate(k.last_used_at, 'date') : <span style={{ color: '#64748b' }}>—</span>}</td>
+                      <td>
+                        {k.last_used_at ? (
+                          formatDate(k.last_used_at, 'date')
+                        ) : (
+                          <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ color: '#64748b' }}>—</span>
+                            <span className="badge badge-gray">Never used</span>
+                          </span>
+                        )}
+                      </td>
                       <td>
                         {k.status !== 'revoked' && (
                           <button className="btn btn-danger btn-sm" onClick={() => revokeKey(k.id)}>Revoke</button>
@@ -1103,89 +1165,37 @@ export default function TenantDetail() {
                     </td>
                   </tr>
                 ) : alertRules.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding: 0 }}><EmptyState icon="⚠" title="No alert rules yet" description="Create a deny_spike rule to notify operators when a tenant starts hitting repeated policy denials." /></td></tr>
+                  <tr><td colSpan={6} className="table-empty-state-cell"><EmptyState icon="⚠" title="No alert rules yet" description="Create a deny_spike rule to notify operators when a tenant starts hitting repeated policy denials." /></td></tr>
                 ) : (
                   alertRules.map(r => (
                     <tr key={r.id}>
-                      <td style={{ fontWeight: 600 }}>
-                        {editingRuleId === r.id ? (
-                          <input
-                            value={editRuleForm.name}
-                            onChange={e => setEditRuleForm(f => ({ ...f, name: e.target.value }))}
-                            required
-                          />
-                        ) : (
-                          r.name
-                        )}
-                      </td>
+                      <td style={{ fontWeight: 600 }}>{r.name}</td>
+                      <td>{r.config_json.n}</td>
+                      <td>{r.config_json.m_minutes}</td>
                       <td>
-                        {editingRuleId === r.id ? (
-                          <input
-                            type="number"
-                            min={1}
-                            value={editRuleForm.n}
-                            onChange={e => setEditRuleForm(f => ({ ...f, n: parseInt(e.target.value || '0', 10) || 1 }))}
-                          />
-                        ) : (
-                          r.config_json.n
-                        )}
-                      </td>
-                      <td>
-                        {editingRuleId === r.id ? (
-                          <input
-                            type="number"
-                            min={1}
-                            value={editRuleForm.mMinutes}
-                            onChange={e => setEditRuleForm(f => ({ ...f, mMinutes: parseInt(e.target.value || '0', 10) || 1 }))}
-                          />
-                        ) : (
-                          r.config_json.m_minutes
-                        )}
-                      </td>
-                      <td>
-                        {editingRuleId === r.id ? (
-                          <label className="toggle-field">
-                            <input
-                              type="checkbox"
-                              checked={editRuleForm.enabled}
-                              onChange={e => setEditRuleForm(f => ({ ...f, enabled: e.target.checked }))}
-                            />
-                            <span>{editRuleForm.enabled ? 'Enabled' : 'Disabled'}</span>
-                          </label>
-                        ) : r.enabled ? (
+                        {r.enabled ? (
                           <span className="badge badge-green">Active</span>
                         ) : (
                           <span className="badge badge-gray">Disabled</span>
                         )}
                       </td>
                       <td>{formatDate(r.updated_at, 'date')}</td>
-                      <td style={{ width: 280 }}>
-                        {editingRuleId === r.id ? (
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                            <button className="btn btn-primary btn-sm" onClick={saveEditRule}>
-                              Save
-                            </button>
-                            <button className="btn btn-outline btn-sm" onClick={() => setEditingRuleId(null)}>
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                            <button className="btn btn-outline btn-sm" onClick={() => startEditRule(r)}>
-                              Edit
-                            </button>
-                            <button
-                              className={`btn btn-sm ${r.enabled ? 'btn-outline-danger' : 'btn-outline-success'}`}
-                              onClick={() => setRuleEnabled(r, !r.enabled)}
-                              disabled={alertRuleSaving}
-                            >
-                              {r.enabled ? 'Disable' : 'Enable'}
-                            </button>
-                            <button className="btn btn-danger btn-sm" onClick={() => deleteAlertRule(r.id)} disabled={alertRuleSaving}>
-                              Delete
-                            </button>
-                          </div>
-                        )}
+                      <td className="tenant-alert-actions-cell">
+                        <div className="row-actions row-actions-end">
+                          <button className="btn btn-outline btn-sm" onClick={() => startEditRule(r)}>
+                            Edit
+                          </button>
+                          <button
+                            className={`btn btn-sm ${r.enabled ? 'btn-outline-danger' : 'btn-outline-success'}`}
+                            onClick={() => setRuleEnabled(r, !r.enabled)}
+                            disabled={alertRuleSaving}
+                          >
+                            {r.enabled ? 'Disable' : 'Enable'}
+                          </button>
+                          <button className="btn btn-danger btn-sm" onClick={() => deleteAlertRule(r.id)} disabled={alertRuleSaving}>
+                            Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1193,6 +1203,69 @@ export default function TenantDetail() {
               </tbody>
             </table>
           </div>
+
+          {editingRuleId ? (
+            <div className="modal-backdrop" onClick={() => setEditingRuleId(null)}>
+              <div className="modal" onClick={event => event.stopPropagation()}>
+                <div className="flex-between mb-16">
+                  <div>
+                    <h3>Edit alert rule</h3>
+                    <p className="table-subtext">Update the rule name, threshold window, and activation state without changing the list layout.</p>
+                  </div>
+                  <button className="btn btn-outline btn-sm" type="button" onClick={() => setEditingRuleId(null)}>
+                    Close
+                  </button>
+                </div>
+                <div className="form-grid alert-rule-form-grid">
+                  <div className="form-group">
+                    <label>Rule name</label>
+                    <input
+                      value={editRuleForm.name}
+                      onChange={e => setEditRuleForm(f => ({ ...f, name: e.target.value }))}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>N (denies)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={editRuleForm.n}
+                      onChange={e => setEditRuleForm(f => ({ ...f, n: parseInt(e.target.value || '0', 10) || 1 }))}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>M (window minutes)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={editRuleForm.mMinutes}
+                      onChange={e => setEditRuleForm(f => ({ ...f, mMinutes: parseInt(e.target.value || '0', 10) || 1 }))}
+                    />
+                  </div>
+                  <div className="form-group alert-activation-field">
+                    <label>Activation</label>
+                    <label className="toggle-field toggle-field-boxed toggle-field-compact">
+                      <input
+                        type="checkbox"
+                        checked={editRuleForm.enabled}
+                        onChange={e => setEditRuleForm(f => ({ ...f, enabled: e.target.checked }))}
+                      />
+                      <span>{editRuleForm.enabled ? 'Enabled' : 'Disabled'}</span>
+                    </label>
+                  </div>
+                </div>
+                <div className="row-actions row-actions-end mt-16">
+                  <button className="btn btn-outline" type="button" onClick={() => setEditingRuleId(null)}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-primary" type="button" onClick={saveEditRule} disabled={alertRuleSaving}>
+                    {alertRuleSaving ? 'Saving…' : 'Save rule'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="section-title section-title-spacious">Alert Events</div>
           <div className="table-container">
@@ -1216,11 +1289,16 @@ export default function TenantDetail() {
                     </td>
                   </tr>
                 ) : alertEvents.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding: 0 }}><EmptyState icon="⌁" title="No alert events yet" description="Triggered alert deliveries will appear here with retry state and delivery outcomes." /></td></tr>
+                  <tr><td colSpan={7} className="table-empty-state-cell"><EmptyState icon="⌁" title="No alert events yet" description="Triggered alert deliveries will appear here with retry state and delivery outcomes." /></td></tr>
                 ) : (
                   alertEvents.map(ev => (
                     <tr key={ev.id}>
-                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{ev.rule_id.slice(0, 8)}…</td>
+                      <td>
+                        <div className="inline-value-copy">
+                          <code className="mono" title={ev.rule_id}>{ev.rule_id.slice(0, 8)}…</code>
+                          <CopyIconButton text={ev.rule_id} label="Alert rule ID" />
+                        </div>
+                      </td>
                       <td>
                         {ev.status === 'sent' ? (
                           <span className="badge badge-green">Sent</span>
@@ -1382,20 +1460,23 @@ export default function TenantDetail() {
                   </div>
                 )}
 
-                <div className="detail-panel mt-16">
-                  <h3>Risk Heatmap</h3>
-                  <div className="table-container risk-heatmap-table" style={{ marginBottom: 0 }}>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Risk</th>
-                          <th>Allow</th>
-                          <th>Deny</th>
-                          <th>Approve</th>
-                          <th>Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
+                        <div className="detail-panel mt-16">
+                          <h3>Risk Heatmap</h3>
+                          <div className="table-subtext" style={{ marginBottom: 12 }}>
+                            Darker cells mean more events landed at that decision/risk combination in the selected range.
+                          </div>
+                          <div className="table-container risk-heatmap-table" style={{ marginBottom: 0 }}>
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Risk</th>
+                                  <th className="col-num">Allow</th>
+                                  <th className="col-num">Deny</th>
+                                  <th className="col-num">Approve</th>
+                                  <th className="col-num">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody>
                         {riskHeatmap.map(r => (
                           <tr key={r.risk_score}>
                             <td style={{ fontFamily: 'monospace' }}>{r.risk_score}</td>
@@ -1416,29 +1497,45 @@ export default function TenantDetail() {
                     <thead>
                       <tr>
                         <th>Agent</th>
-                        <th>Allow</th>
-                        <th>Deny</th>
-                        <th>Approve</th>
-                        <th>Total</th>
+                        <th className="col-num">Allow</th>
+                        <th className="col-num">Deny</th>
+                        <th className="col-num">Approve</th>
+                        <th className="col-num">% of total</th>
+                        <th className="col-num">Total</th>
                       </tr>
                     </thead>
                     <tbody>
                       {perAgent.length === 0 ? (
                         <tr>
-                          <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
+                          <td colSpan={6} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
                             No tool events in this range
                           </td>
                         </tr>
                       ) : (
-                        perAgent.map(a => (
+                        perAgent.map(a => {
+                          const share = totals.total_events > 0 ? (a.total / totals.total_events) * 100 : 0
+                          return (
                           <tr key={a.agent_id}>
-                            <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{a.agent_id.slice(0, 12)}…</td>
-                            <td>{a.allow_count}</td>
-                            <td>{a.deny_count}</td>
-                            <td>{a.approve_count}</td>
-                            <td>{a.total}</td>
+                            <td>
+                              <div className="inline-value-copy">
+                                <code className="mono" title={a.agent_id}>{a.agent_id.slice(0, 12)}…</code>
+                                <CopyIconButton text={a.agent_id} label="Analytics agent ID" />
+                              </div>
+                            </td>
+                            <td className="col-num">{a.allow_count}</td>
+                            <td className="col-num">{a.deny_count}</td>
+                            <td className="col-num">{a.approve_count}</td>
+                            <td className="col-num">
+                              <div className="analytics-share-cell">
+                                <div className="analytics-share-bar">
+                                  <span style={{ width: `${Math.max(share, 4)}%` }} />
+                                </div>
+                                <span>{share.toFixed(0)}%</span>
+                              </div>
+                            </td>
+                            <td className="col-num">{a.total}</td>
                           </tr>
-                        ))
+                        )})
                       )}
                     </tbody>
                   </table>
@@ -1482,8 +1579,8 @@ export default function TenantDetail() {
       {activeTab === 'approvers' && (
         <>
           { (allowlistSource === 'env' || allowlistSource === 'both') && (
-            <div className="warn-banner" style={{ marginTop: 16 }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>Dev bootstrap allowlists enabled</div>
+            <div className="warn-banner mt-16">
+              <div className="warn-banner-title">Dev bootstrap allowlists enabled</div>
               <div className="form-helper-text helper-text-warn">Approver authorization may allow env allowlists in addition to DB roles.</div>
             </div>
           )}
@@ -1516,32 +1613,36 @@ export default function TenantDetail() {
             </form>
           </div>
 
-          <div className="table-container" style={{ marginTop: 16 }}>
+          <div className="table-container mt-16">
             <table>
               <thead>
                 <tr>
                   <th>Email</th>
                   <th>Name</th>
                   <th>Slack user id</th>
+                  <th>Link status</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {approvers.length === 0 ? (
-                  <tr><td colSpan={4} style={{ padding: 0 }}><EmptyState icon="✓" title="No approvers yet" description="Add at least one approver so high-risk actions can be reviewed in the console or via notifications." /></td></tr>
+                {visibleApprovers.length === 0 ? (
+                  <tr><td colSpan={5} className="table-empty-state-cell"><EmptyState icon="✓" title="No approvers yet" description="Add at least one approver so high-risk actions can be reviewed in the console or via notifications." /></td></tr>
                 ) : (
-                  approvers.map(a => (
+                  visibleApprovers.map(a => {
+                    const linkStatus = approverLinkStatus(a)
+                    return (
                     <tr key={a.id}>
                       <td>{a.email}</td>
                       <td>{a.name || '—'}</td>
-                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{a.slack_user_id ? a.slack_user_id : '—'}</td>
+                      <td className="mono" title={a.slack_user_id || '—'}>{a.slack_user_id ? a.slack_user_id : '—'}</td>
+                      <td><span className={`badge badge-${linkStatus.tone}`}>{linkStatus.label}</span></td>
                       <td>
                         <button className="btn btn-danger btn-sm" onClick={() => removeApprover(a.id)} disabled={creating}>
                           Remove
                         </button>
                       </td>
                     </tr>
-                  ))
+                  )})
                 )}
               </tbody>
             </table>
