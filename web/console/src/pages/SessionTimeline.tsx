@@ -89,6 +89,13 @@ function normalizeSessionSummary(payload: unknown): SessionSummary | null {
   return isSessionSummary(payload) ? payload : null
 }
 
+function normalizeTimelineEvents(payload: unknown): SessionTimelineEvent[] | null {
+  if (Array.isArray(payload)) return payload as SessionTimelineEvent[]
+  if (!payload || typeof payload !== 'object') return null
+  const wrapped = (payload as { events?: unknown }).events
+  return Array.isArray(wrapped) ? (wrapped as SessionTimelineEvent[]) : null
+}
+
 export default function SessionTimeline() {
   const { id = '' } = useParams<{ id: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -105,6 +112,19 @@ export default function SessionTimeline() {
   const [selectedTenantCandidate, setSelectedTenantCandidate] = useState('')
   const [copyStatus, setCopyStatus] = useState('')
   const fetchSeq = useRef(0)
+
+  const logSessionDetailIssue = useCallback((stage: string, err: unknown, extra: Record<string, unknown> = {}) => {
+    const message = err instanceof Error ? err.message : String(err || 'Unknown session detail failure')
+    const requestId = err instanceof APIClientError ? err.requestId : undefined
+    console.warn('[openclause-console] session detail issue', {
+      stage,
+      sessionId: id,
+      tenantId: tenantID || undefined,
+      requestId,
+      message,
+      ...extra,
+    })
+  }, [id, tenantID])
 
   const handleSessionError = useCallback((err: unknown) => {
     const message = err instanceof Error ? err.message : 'Failed to load session'
@@ -142,19 +162,36 @@ export default function SessionTimeline() {
       if (summaryResult.status === 'rejected') {
         setSession(null)
         setEvents([])
+        logSessionDetailIssue('summary', summaryResult.reason)
         handleSessionError(summaryResult.reason)
         return
       }
 
-      setSession(normalizeSessionSummary(summaryResult.value))
+      const normalizedSummary = normalizeSessionSummary(summaryResult.value)
+      if (!normalizedSummary) {
+        setSession(null)
+        setEvents([])
+        logSessionDetailIssue('summary-contract', new Error('Malformed session summary payload'))
+        return
+      }
+      setSession(normalizedSummary)
 
       if (timelineResult.status === 'fulfilled') {
-        const timeline = timelineResult.value
-        setEvents(Array.isArray(timeline) ? timeline : timeline?.events || [])
-        setError('')
+        const normalizedTimeline = normalizeTimelineEvents(timelineResult.value)
+        if (normalizedTimeline === null) {
+          const malformedTimelineError = new Error('The session summary loaded, but the timeline payload was malformed.')
+          setEvents([])
+          setTimelineLoadFailed(true)
+          logSessionDetailIssue('timeline-contract', malformedTimelineError)
+          setError(malformedTimelineError.message)
+        } else {
+          setEvents(normalizedTimeline)
+          setError('')
+        }
       } else {
         setEvents([])
         setTimelineLoadFailed(true)
+        logSessionDetailIssue('timeline', timelineResult.reason)
         setError(timelineResult.reason instanceof Error ? timelineResult.reason.message : 'The session summary loaded, but the timeline could not be loaded.')
       }
 
@@ -166,12 +203,13 @@ export default function SessionTimeline() {
         setSession(null)
         setEvents([])
         setTimelineLoadFailed(false)
+        logSessionDetailIssue('fetch', err)
         handleSessionError(err)
       }
     } finally {
       if (seq === fetchSeq.current) setLoading(false)
     }
-  }, [handleSessionError, id, tenantID])
+  }, [handleSessionError, id, logSessionDetailIssue, tenantID])
 
   useEffect(() => {
     if (!id) return
@@ -234,6 +272,7 @@ export default function SessionTimeline() {
       const blob = await api.getBlob(`/admin/sessions/${encodeURIComponent(id)}/export/${kind}${query}`)
       downloadBlob(blob, `session-${id}.${kind}`)
     } catch (err: any) {
+      logSessionDetailIssue(`export:${kind}`, err)
       handleSessionError(err)
     }
   }

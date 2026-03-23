@@ -549,6 +549,7 @@ describe('Tenant detail page', () => {
 
   it('keeps alert rules visible through partial alert-event failures and recovers on retry', async () => {
     const user = userEvent.setup()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let eventsCalls = 0
     const getSpy = mockApiGet([
       ['/admin/tenants/tenant-1', {
@@ -622,6 +623,14 @@ describe('Tenant detail page', () => {
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/alerts/rules'))
     expect(await screen.findByText('Recovered event')).toBeInTheDocument()
     expect(screen.queryByText(/some alert data could not be loaded: events/i)).not.toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] tenant detail issue',
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        stage: 'alerts-partial',
+        sections: ['events'],
+      }),
+    )
   })
 
   it('ignores stale alert responses when the alerts tab refetches quickly', async () => {
@@ -901,6 +910,7 @@ describe('Tenant detail page', () => {
 
   it('drops stale notification config state when a later refetch can no longer load it', async () => {
     const user = userEvent.setup()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let notifCalls = 0
     const getSpy = mockApiGet([
       ['/admin/tenants/tenant-1', {
@@ -956,5 +966,13 @@ describe('Tenant detail page', () => {
     await user.click(screen.getByRole('button', { name: /api keys/i }))
     expect(await screen.findByText(/notification configuration unavailable/i)).toBeInTheDocument()
     expect(screen.queryByLabelText(/^approver group$/i)).not.toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] tenant detail issue',
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        stage: 'notification-config',
+        message: 'Notification configuration unavailable',
+      }),
+    )
   })
 })

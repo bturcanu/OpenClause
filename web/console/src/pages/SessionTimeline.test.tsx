@@ -257,6 +257,7 @@ describe('Session detail page', () => {
 
   it('surfaces request ids when a session export fails', async () => {
     const user = userEvent.setup()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     stubMutableApi()
     vi.spyOn(api, 'getBlob').mockRejectedValue(new APIClientError('Export blocked (request id: req-session-9)', {
       status: 409,
@@ -291,9 +292,19 @@ describe('Session detail page', () => {
     await user.click(screen.getByRole('button', { name: /export csv/i }))
 
     expect(await screen.findByText(/req-session-9/i)).toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] session detail issue',
+      expect.objectContaining({
+        stage: 'export:csv',
+        sessionId: 'demo',
+        tenantId: 'tenant-a',
+        requestId: 'req-session-9',
+      }),
+    )
   })
 
   it('fails closed when the session summary payload is malformed even if the request succeeds', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     stubMutableApi()
     mockApiGet([
       [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', { session: null }],
@@ -320,6 +331,15 @@ describe('Session detail page', () => {
     expect(await screen.findByText(/session not found/i)).toBeInTheDocument()
     expect(screen.queryByText(/run context/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/should not render without a valid summary/i)).not.toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] session detail issue',
+      expect.objectContaining({
+        stage: 'summary-contract',
+        sessionId: 'demo',
+        tenantId: 'tenant-a',
+        message: 'Malformed session summary payload',
+      }),
+    )
   })
 
   it('accepts wrapped summary payloads and still renders approval and execution sections', async () => {
@@ -380,5 +400,73 @@ describe('Session detail page', () => {
     expect(screen.getByText(/execution/i, { selector: 'strong' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /open approval/i })).toHaveAttribute('href', expect.stringContaining('approval_id=approval-1'))
     expect(screen.getByRole('link', { name: /open execution event/i })).toHaveAttribute('href', '/events/event-execution-1')
+  })
+
+  it('keeps the summary visible when a fulfilled timeline payload is malformed and logs the contract issue', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stubMutableApi()
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
+        id: 'demo',
+        tenant_id: 'tenant-a',
+        agent_id: 'agent-1',
+        user_id: 'user-1',
+        user_name: 'Ada Lovelace',
+        user_email: 'ada@example.com',
+        trace_id: 'trace-1',
+        started_at: '2026-03-23T10:00:00Z',
+        last_event_at: '2026-03-23T10:15:00Z',
+        event_count: 1,
+        allow_count: 1,
+        deny_count: 0,
+        approve_count: 0,
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', { events: null }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText(/timeline payload was malformed/i)).toBeInTheDocument()
+    expect(screen.getByText(/requested by ada/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no timeline items match these filters/i)).not.toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] session detail issue',
+      expect.objectContaining({
+        stage: 'timeline-contract',
+        sessionId: 'demo',
+        tenantId: 'tenant-a',
+        message: 'The session summary loaded, but the timeline payload was malformed.',
+      }),
+    )
+  })
+
+  it('surfaces summary request ids and logs summary fetch failures', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stubMutableApi()
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', () => {
+        throw new APIClientError('Session blocked (request id: req-summary-5)', {
+          status: 403,
+          code: 'forbidden',
+          requestId: 'req-summary-5',
+          details: { reason: 'scope_denied' },
+        })
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', { events: [] }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText(/req-summary-5/i)).toBeInTheDocument()
+    expect(screen.queryByText(/run context/i)).not.toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] session detail issue',
+      expect.objectContaining({
+        stage: 'summary',
+        sessionId: 'demo',
+        tenantId: 'tenant-a',
+        requestId: 'req-summary-5',
+      }),
+    )
   })
 })

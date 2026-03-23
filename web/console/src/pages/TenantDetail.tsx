@@ -217,6 +217,18 @@ export default function TenantDetail() {
   const [analyticsBucketMinutes] = useState(60)
   const [analyticsTopAgents] = useState(5)
 
+  function logTenantDetailIssue(stage: string, err: unknown, extra: Record<string, unknown> = {}) {
+    const message = err instanceof Error ? err.message : String(err || 'Unknown tenant detail failure')
+    const requestId = err instanceof Error && 'requestId' in err ? (err as { requestId?: string }).requestId : undefined
+    console.warn('[openclause-console] tenant detail issue', {
+      tenantId: id,
+      stage,
+      requestId,
+      message,
+      ...extra,
+    })
+  }
+
   const visibleAgents = useMemo(
     () =>
       [...agents].sort((left, right) => {
@@ -347,12 +359,15 @@ export default function TenantDetail() {
       } else {
         setNotificationConfig(null)
         setNotifError(notifCfgResp.reason?.message || 'Failed to load notification config')
+        logTenantDetailIssue('notification-config', notifCfgResp.reason)
       }
 
       if (partialFailures.length > 0) {
+        logTenantDetailIssue('overview-partial', new Error(`Some tenant sections could not be loaded: ${partialFailures.join(', ')}.`), { sections: partialFailures })
         setError(`Some tenant sections could not be loaded: ${partialFailures.join(', ')}.`)
       }
     } catch (err: any) {
+      if (seq === fetchSeq.current) logTenantDetailIssue('overview', err)
       if (seq === fetchSeq.current) setError(err.message)
     } finally {
       if (seq === fetchSeq.current) setLoading(false)
@@ -388,10 +403,12 @@ export default function TenantDetail() {
         failures.push('events')
       }
       if (failures.length > 0) {
+        logTenantDetailIssue('alerts-partial', new Error(`Some alert data could not be loaded: ${failures.join(', ')}.`), { sections: failures })
         setAlertsError(`Some alert data could not be loaded: ${failures.join(', ')}.`)
       }
     } catch (err: any) {
       if (seq !== alertsFetchSeq.current) return
+      logTenantDetailIssue('alerts', err)
       setAlertsError(err?.message || 'Failed to load alerts')
     } finally {
       if (seq === alertsFetchSeq.current) setAlertsLoading(false)
@@ -416,6 +433,7 @@ export default function TenantDetail() {
       setTenantAnalytics(summary as TenantAnalyticsSummary)
     } catch (err) {
       if (seq !== analyticsFetchSeq.current) return
+      logTenantDetailIssue('analytics', err, { rangeHours: analyticsRangeHours })
       if (err instanceof Error) setAnalyticsError(err.message)
       else setAnalyticsError('Failed to load analytics')
       setTenantAnalytics(null)

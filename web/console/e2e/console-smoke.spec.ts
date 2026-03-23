@@ -68,6 +68,6 @@ test.describe('console browser smoke', () => {
 
     await expect(page.getByRole('heading', { name: /session detail/i })).toBeVisible()
     await expect(page.getByRole('heading', { name: /run context/i })).toBeVisible()
-    await expect(page.getByRole('link', { name: /open execution event/i })).toBeVisible()
+    await expect(page.getByRole('link', { name: /open execution event/i }).first()).toBeVisible()
   })
 })
