@@ -294,32 +294,32 @@ export default function Events() {
         </div>
         <div className="filters-bar filters-bar-dense">
           <div className="form-group">
-            <label>Tenant</label>
-            <input value={filters.tenant_id} onChange={e => updateFilter('tenant_id', e.target.value)} placeholder="tenant_id" />
+            <label htmlFor="events-filter-tenant">Tenant</label>
+            <input id="events-filter-tenant" value={filters.tenant_id} onChange={e => updateFilter('tenant_id', e.target.value)} placeholder="tenant_id" />
           </div>
           <div className="form-group">
-            <label>User ID</label>
-            <input value={filters.user_id} onChange={e => updateFilter('user_id', e.target.value)} placeholder="user_id" />
+            <label htmlFor="events-filter-user-id">User ID</label>
+            <input id="events-filter-user-id" value={filters.user_id} onChange={e => updateFilter('user_id', e.target.value)} placeholder="user_id" />
           </div>
           <div className="form-group">
-            <label>Agent ID</label>
-            <input value={filters.agent_id} onChange={e => updateFilter('agent_id', e.target.value)} placeholder="agent_id" />
+            <label htmlFor="events-filter-agent-id">Agent ID</label>
+            <input id="events-filter-agent-id" value={filters.agent_id} onChange={e => updateFilter('agent_id', e.target.value)} placeholder="agent_id" />
           </div>
           <div className="form-group">
-            <label>Trace ID</label>
-            <input value={filters.trace_id} onChange={e => updateFilter('trace_id', e.target.value)} placeholder="trace_id" />
+            <label htmlFor="events-filter-trace-id">Trace ID</label>
+            <input id="events-filter-trace-id" value={filters.trace_id} onChange={e => updateFilter('trace_id', e.target.value)} placeholder="trace_id" />
           </div>
           <div className="form-group">
-            <label>Tool</label>
-            <input value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
+            <label htmlFor="events-filter-tool">Tool</label>
+            <input id="events-filter-tool" value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
           </div>
           <div className="form-group">
-            <label>Action</label>
-            <input value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
+            <label htmlFor="events-filter-action">Action</label>
+            <input id="events-filter-action" value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
           </div>
           <div className="form-group">
-            <label>Decision</label>
-            <select value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
+            <label htmlFor="events-filter-decision">Decision</label>
+            <select id="events-filter-decision" value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
               <option value="">Any</option>
               <option value="allow">Allow</option>
               <option value="deny">Deny</option>
@@ -327,24 +327,24 @@ export default function Events() {
             </select>
           </div>
           <div className="form-group">
-            <label>Session ID</label>
-            <input value={filters.session_id} onChange={e => updateFilter('session_id', e.target.value)} placeholder="session_id" />
+            <label htmlFor="events-filter-session-id">Session ID</label>
+            <input id="events-filter-session-id" value={filters.session_id} onChange={e => updateFilter('session_id', e.target.value)} placeholder="session_id" />
           </div>
           <div className="form-group form-group-small">
-            <label>Risk min</label>
-            <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
+            <label htmlFor="events-filter-risk-min">Risk min</label>
+            <input id="events-filter-risk-min" type="number" min={0} max={10} inputMode="numeric" value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
           </div>
           <div className="form-group form-group-small">
-            <label>Risk max</label>
-            <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+            <label htmlFor="events-filter-risk-max">Risk max</label>
+            <input id="events-filter-risk-max" type="number" min={0} max={10} inputMode="numeric" value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
           </div>
           <div className="form-group">
-            <label>Since (local time)</label>
-            <input type="datetime-local" value={filters.since} onChange={e => updateFilter('since', e.target.value)} />
+            <label htmlFor="events-filter-since">Since (local time)</label>
+            <input id="events-filter-since" type="datetime-local" value={filters.since} onChange={e => updateFilter('since', e.target.value)} />
           </div>
           <div className="form-group">
-            <label>Until (local time)</label>
-            <input type="datetime-local" value={filters.until} onChange={e => updateFilter('until', e.target.value)} />
+            <label htmlFor="events-filter-until">Until (local time)</label>
+            <input id="events-filter-until" type="datetime-local" value={filters.until} onChange={e => updateFilter('until', e.target.value)} />
           </div>
           <div className="form-actions-row form-actions-row-end">
             <button className="btn btn-outline btn-sm" type="button" onClick={clearFilters} disabled={!hasActiveFilters || loading}>

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest'
 import Sessions from './Sessions'
 import { shortID } from '../ui'
 import { renderRoute } from '../test/render'
-import { getFieldByLabelText } from '../test/form'
 import { mockApiGet } from '../test/mockApi'
 
 const sessionsFixture = [
@@ -79,7 +78,7 @@ describe('Sessions page', () => {
 
     expect(await screen.findByRole('heading', { name: /sessions/i })).toBeInTheDocument()
 
-    await user.type(getFieldByLabelText(/^tenant$/i), 'tenant-1')
+    await user.type(screen.getByLabelText(/^tenant$/i), 'tenant-1')
 
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith(expect.stringContaining('tenant_id=tenant-1')))
     expect(await screen.findByRole('button', { name: /tenant id: tenant-1/i })).toBeInTheDocument()
@@ -98,7 +97,7 @@ describe('Sessions page', () => {
     await user.click(screen.getByRole('button', { name: /clear filters/i }))
 
     await waitFor(() => {
-      expect(getFieldByLabelText(/^tenant$/i)).toHaveValue('')
+      expect(screen.getByLabelText(/^tenant$/i)).toHaveValue('')
       expect(screen.queryByRole('button', { name: /tenant id: tenant-1/i })).not.toBeInTheDocument()
     })
   })

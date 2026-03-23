@@ -317,15 +317,16 @@ export default function Policies() {
               />
             </div>
             <div className="form-group policy-toggle-group">
-              <label>Destructive actions require approval</label>
-              <label className="toggle-field toggle-field-boxed">
+              <label htmlFor="policy-require-destructive-approval">Destructive actions require approval</label>
+              <div className="toggle-field toggle-field-boxed">
                 <input
+                  id="policy-require-destructive-approval"
                   type="checkbox"
                   checked={builder.require_destructive_approval}
                   onChange={e => setBuilder(prev => ({ ...prev, require_destructive_approval: e.target.checked }))}
                 />
                 <span>{builder.require_destructive_approval ? 'Enabled' : 'Disabled'}</span>
-              </label>
+              </div>
             </div>
           </div>
 

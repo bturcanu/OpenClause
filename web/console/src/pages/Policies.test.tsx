@@ -139,6 +139,7 @@ describe('Policies page', () => {
 
     const builderCard = screen.getByRole('heading', { name: /rule builder/i }).closest('.form-card') as HTMLElement | null
     expect(builderCard).not.toBeNull()
+    expect(within(builderCard!).getByLabelText(/^destructive actions require approval$/i)).toBeChecked()
     await user.clear(within(builderCard!).getByLabelText(/^read allowlist actions \(comma separated\)$/i))
     await user.type(
       within(builderCard!).getByLabelText(/^read allowlist actions \(comma separated\)$/i),

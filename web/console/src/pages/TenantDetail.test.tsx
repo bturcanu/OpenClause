@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { api } from '../api'
 import TenantDetail from './TenantDetail'
 import { renderRoute } from '../test/render'
-import { getFieldByLabelText } from '../test/form'
 import { mockApiGet } from '../test/mockApi'
 
 type TenantDetailState = {
@@ -80,15 +79,6 @@ type TenantDetailState = {
       has_execution: boolean
     }
   }
-}
-
-function getFieldIn(container: HTMLElement, labelText: RegExp | string) {
-  const label = within(container).getByText(labelText, { selector: 'label' })
-  const control = label.parentElement?.querySelector('input, select, textarea')
-  if (!control) {
-    throw new Error(`No form control found next to label ${String(labelText)}`)
-  }
-  return control as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
 }
 
 function getCardByHeading(headingText: RegExp | string) {
@@ -373,7 +363,7 @@ describe('Tenant detail page', () => {
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
 
-    await user.type(getFieldByLabelText(/^agent name$/i), 'Agent Fresh')
+    await user.type(screen.getByLabelText(/^agent name$/i), 'Agent Fresh')
     await user.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/agents', { name: 'Agent Fresh' }))
@@ -401,7 +391,7 @@ describe('Tenant detail page', () => {
     expect(await screen.findByRole('heading', { name: /create api key/i })).toBeInTheDocument()
 
     const createCard = getCardByHeading(/create api key/i)
-    await user.type(getFieldIn(createCard, /^name$/i), 'Read only key')
+    await user.type(within(createCard).getByLabelText(/^name$/i), 'Read only key')
     await user.click(within(createCard).getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/apikeys', { name: 'Read only key' }))
@@ -410,8 +400,8 @@ describe('Tenant detail page', () => {
     expect(screen.getByText('Read only key')).toBeInTheDocument()
 
     const rotateCard = getCardByHeading(/rotate primary key/i)
-    await user.type(getFieldIn(rotateCard, /^new key name$/i), 'Rotated primary key')
-    await user.type(getFieldIn(rotateCard, /^expires on/i), '2030-01-01')
+    await user.type(within(rotateCard).getByLabelText(/^new key name$/i), 'Rotated primary key')
+    await user.type(within(rotateCard).getByLabelText(/^expires on/i), '2030-01-01')
     await user.click(within(rotateCard).getByRole('checkbox', { name: /revoke the old primary after rotation/i }))
     await user.click(within(rotateCard).getByRole('button', { name: /^rotate$/i }))
 
@@ -447,15 +437,15 @@ describe('Tenant detail page', () => {
 
     expect(await screen.findByRole('heading', { name: /approval notifications/i })).toBeInTheDocument()
 
-    await user.type(getFieldByLabelText(/^webhook url$/i), 'https://hooks.example.test/alerts')
+    await user.type(screen.getByLabelText(/^webhook url$/i), 'https://hooks.example.test/alerts')
     await user.click(screen.getByRole('button', { name: /save notification config/i }))
 
     expect(await screen.findByText(/webhook secret reference is required/i)).toBeInTheDocument()
     expect(putSpy).not.toHaveBeenCalled()
 
-    await user.type(getFieldByLabelText(/^approver group$/i), 'tenant_admin')
-    await user.type(getFieldByLabelText(/^slack channel$/i), '#tenant-alerts')
-    await user.type(getFieldByLabelText(/^webhook secret reference$/i), 'tenant-alert-secret')
+    await user.type(screen.getByLabelText(/^approver group$/i), 'tenant_admin')
+    await user.type(screen.getByLabelText(/^slack channel$/i), '#tenant-alerts')
+    await user.type(screen.getByLabelText(/^webhook secret reference$/i), 'tenant-alert-secret')
     await user.click(screen.getByRole('button', { name: /save notification config/i }))
 
     await waitFor(() =>
@@ -471,9 +461,9 @@ describe('Tenant detail page', () => {
     await user.click(screen.getByRole('button', { name: /approvers/i }))
 
     expect(await screen.findByRole('heading', { name: /add approver/i })).toBeInTheDocument()
-    await user.type(getFieldByLabelText(/^email$/i), 'grace@example.com')
-    await user.type(getFieldByLabelText(/^slack user id/i), 'U123456789')
-    await user.type(getFieldByLabelText(/^name/i), 'Grace Hopper')
+    await user.type(screen.getByLabelText(/^email$/i), 'grace@example.com')
+    await user.type(screen.getByLabelText(/^slack user id/i), 'U123456789')
+    await user.type(screen.getByLabelText(/^name \(optional\)$/i), 'Grace Hopper')
     await user.click(screen.getByRole('button', { name: /add approver/i }))
 
     await waitFor(() =>
@@ -505,7 +495,7 @@ describe('Tenant detail page', () => {
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/alerts/rules'))
 
     const createCard = getCardByHeading(/create deny_spike rule/i)
-    await user.type(getFieldIn(createCard, /^rule name$/i), 'Night shift deny spike')
+    await user.type(within(createCard).getByLabelText(/^rule name$/i), 'Night shift deny spike')
     await user.click(within(createCard).getByRole('checkbox', { name: /enabled immediately/i }))
     await user.click(within(createCard).getByRole('button', { name: /^create$/i }))
 
@@ -526,8 +516,8 @@ describe('Tenant detail page', () => {
 
     const modalContainer = modal.closest('.modal')
     expect(modalContainer).not.toBeNull()
-    await user.clear(getFieldIn(modalContainer as HTMLElement, /^rule name$/i))
-    await user.type(getFieldIn(modalContainer as HTMLElement, /^rule name$/i), 'Existing deny spike updated')
+    await user.clear(within(modalContainer as HTMLElement).getByLabelText(/^rule name$/i))
+    await user.type(within(modalContainer as HTMLElement).getByLabelText(/^rule name$/i), 'Existing deny spike updated')
     await user.click(screen.getByRole('button', { name: /^save rule$/i }))
 
     await waitFor(() =>
@@ -556,7 +546,7 @@ describe('Tenant detail page', () => {
     expect(await screen.findByRole('heading', { name: /tenant analytics/i })).toBeInTheDocument()
     expect(await screen.findByText(/resolved utc range/i)).toBeInTheDocument()
 
-    await user.selectOptions(getFieldByLabelText(/^range$/i), '48')
+    await user.selectOptions(screen.getByLabelText(/^range$/i), '48')
 
     await waitFor(() =>
       expect(getSpy).toHaveBeenCalledWith(
@@ -635,5 +625,64 @@ describe('Tenant detail page', () => {
     expect(screen.getByText('Wrapped alert event')).toBeInTheDocument()
     expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/approvers')
     expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/alerts/rules')
+  })
+
+  it('drops stale notification config state when a later refetch can no longer load it', async () => {
+    const user = userEvent.setup()
+    let notifCalls = 0
+    const getSpy = mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [{ id: 'agent-a', name: 'Agent A', tenant_id: 'tenant-1', status: 'active', created_at: '2026-03-22T12:00:00Z' }] }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=false', { agents: [{ id: 'agent-a', name: 'Agent A', tenant_id: 'tenant-1', status: 'active', created_at: '2026-03-22T12:00:00Z' }] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', () => {
+        notifCalls += 1
+        if (notifCalls === 1) {
+          return {
+            approver_group: 'tenant_admin',
+            notify: [{ kind: 'slack', channel: '#tenant-alerts' }],
+          }
+        }
+        throw new Error('Notification configuration unavailable')
+      }],
+      ['/admin/tenants/tenant-1/alerts/rules', []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=api_keys' })
+
+    expect(await screen.findByRole('heading', { name: /approval notifications/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/^approver group$/i)).toHaveValue('tenant_admin')
+
+    await user.click(screen.getByRole('button', { name: /agents/i }))
+    await user.click(await screen.findByRole('checkbox', { name: /hide disabled/i }))
+
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/agents?include_disabled=false'))
+
+    await user.click(screen.getByRole('button', { name: /api keys/i }))
+    expect(await screen.findByText(/notification configuration unavailable/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^approver group$/i)).not.toBeInTheDocument()
   })
 })

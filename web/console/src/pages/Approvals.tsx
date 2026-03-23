@@ -369,8 +369,8 @@ export default function Approvals() {
                   The agent can resume the run with <code>POST /v1/toolcalls/{selected.event_id}/execute</code>.
                 </p>
                 <div className="form-group">
-                  <label>Gateway API key</label>
-                  <input value={executeApiKey} onChange={e => setExecuteApiKey(e.target.value)} placeholder="sk-oc-..." className="mono" />
+                  <label htmlFor="approvals-execute-api-key">Gateway API key</label>
+                  <input id="approvals-execute-api-key" value={executeApiKey} onChange={e => setExecuteApiKey(e.target.value)} placeholder="sk-oc-..." className="mono" />
                 </div>
                 <pre className="code-block">{executeCommand}</pre>
                 <div className="btn-group mt-16">

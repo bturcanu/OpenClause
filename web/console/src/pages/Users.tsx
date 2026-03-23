@@ -312,23 +312,26 @@ export default function Users() {
               <h3>Create User</h3>
               <form onSubmit={handleCreateUser}>
                 <div className="form-group">
-                  <label>Email</label>
+                  <label htmlFor="users-create-email">Email</label>
                   <input
+                    id="users-create-email"
                     value={createUserForm.email}
                     onChange={e => setCreateUserForm({ ...createUserForm, email: e.target.value })}
                     required
                   />
                 </div>
                 <div className="form-group">
-                  <label>Name</label>
+                  <label htmlFor="users-create-name">Name</label>
                   <input
+                    id="users-create-name"
                     value={createUserForm.name}
                     onChange={e => setCreateUserForm({ ...createUserForm, name: e.target.value })}
                   />
                 </div>
                 <div className="form-group">
-                  <label>Password (optional)</label>
+                  <label htmlFor="users-create-password">Password (optional)</label>
                   <input
+                    id="users-create-password"
                     type="password"
                     value={createUserForm.password}
                     onChange={e => setCreateUserForm({ ...createUserForm, password: e.target.value })}
@@ -336,8 +339,9 @@ export default function Users() {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Slack user id (optional)</label>
+                  <label htmlFor="users-create-slack-user-id">Slack user id (optional)</label>
                   <input
+                    id="users-create-slack-user-id"
                     value={createUserForm.slack_user_id}
                     onChange={e => setCreateUserForm({ ...createUserForm, slack_user_id: e.target.value })}
                   />
@@ -353,28 +357,29 @@ export default function Users() {
               <form onSubmit={handleCreateInvite}>
                 <div className="form-grid form-grid-2">
                   <div className="form-group">
-                    <label>Email</label>
-                    <input value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} required />
+                    <label htmlFor="users-invite-email">Email</label>
+                    <input id="users-invite-email" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} required />
                   </div>
                   <div className="form-group">
-                    <label>Tenant ID</label>
+                    <label htmlFor="users-invite-tenant-id">Tenant ID</label>
                     <input
+                      id="users-invite-tenant-id"
                       value={inviteForm.tenant_id}
                       onChange={e => setInviteForm({ ...inviteForm, tenant_id: e.target.value })}
                       required
                     />
                   </div>
                   <div className="form-group">
-                    <label>Role</label>
-                    <select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value as any })}>
+                    <label htmlFor="users-invite-role">Role</label>
+                    <select id="users-invite-role" value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value as any })}>
                       <option value="tenant_admin">tenant_admin</option>
                       <option value="approver">approver</option>
                       <option value="viewer">viewer</option>
                     </select>
                   </div>
                   <div className="form-group">
-                    <label>Name (optional)</label>
-                    <input value={inviteForm.name} onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })} />
+                    <label htmlFor="users-invite-name">Name (optional)</label>
+                    <input id="users-invite-name" value={inviteForm.name} onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })} />
                   </div>
                 </div>
                 <div className="form-actions-row">
@@ -477,8 +482,8 @@ export default function Users() {
             <form onSubmit={handleAssignRole}>
               <div className="form-grid assign-role-grid">
                 <div className="form-group">
-                  <label>User</label>
-                  <select value={assignRoleForm.user_id} onChange={e => setAssignRoleForm({ ...assignRoleForm, user_id: e.target.value })}>
+                  <label htmlFor="users-assign-user">User</label>
+                  <select id="users-assign-user" value={assignRoleForm.user_id} onChange={e => setAssignRoleForm({ ...assignRoleForm, user_id: e.target.value })}>
                     <option value="">Select user…</option>
                     {users.map(u => (
                       <option key={u.id} value={u.id}>
@@ -488,16 +493,17 @@ export default function Users() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label>Role</label>
-                  <select value={assignRoleForm.role} onChange={e => setAssignRoleForm({ ...assignRoleForm, role: e.target.value as any })}>
+                  <label htmlFor="users-assign-role">Role</label>
+                  <select id="users-assign-role" value={assignRoleForm.role} onChange={e => setAssignRoleForm({ ...assignRoleForm, role: e.target.value as any })}>
                     <option value="tenant_admin">tenant_admin</option>
                     <option value="approver">approver</option>
                     <option value="viewer">viewer</option>
                   </select>
                 </div>
                 <div className="form-group">
-                  <label>Tenant ID</label>
+                  <label htmlFor="users-assign-tenant-id">Tenant ID</label>
                   <input
+                    id="users-assign-tenant-id"
                     value={assignRoleForm.tenant_id}
                     onChange={e => setAssignRoleForm({ ...assignRoleForm, tenant_id: e.target.value })}
                     placeholder="tenant1"

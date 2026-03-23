@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { APIClientError, api } from '../api'
 import Events from './Events'
 import { renderRoute } from '../test/render'
-import { getFieldByLabelText } from '../test/form'
 import { mockApiGet } from '../test/mockApi'
 
 const eventFixture = {
@@ -55,13 +54,13 @@ describe('Audit Trail page', () => {
     renderRoute(<Events />, { path: '/events', route: '/events?tenant_id=tenant-1&decision=approve' })
 
     expect(await screen.findByRole('heading', { name: /audit trail/i })).toBeInTheDocument()
-    await waitFor(() => expect(getFieldByLabelText(/^tenant$/i)).toHaveValue('tenant-1'))
-    expect(getFieldByLabelText(/^decision$/i)).toHaveValue('approve')
+    await waitFor(() => expect(screen.getByLabelText(/^tenant$/i)).toHaveValue('tenant-1'))
+    expect(screen.getByLabelText(/^decision$/i)).toHaveValue('approve')
 
     await user.click(screen.getByRole('button', { name: /decision: approve/i }))
 
-    await waitFor(() => expect(getFieldByLabelText(/^decision$/i)).toHaveValue(''))
-    expect(getFieldByLabelText(/^tenant$/i)).toHaveValue('tenant-1')
+    await waitFor(() => expect(screen.getByLabelText(/^decision$/i)).toHaveValue(''))
+    expect(screen.getByLabelText(/^tenant$/i)).toHaveValue('tenant-1')
   })
 
   it('applies inline row filters and keeps open actions available', async () => {
@@ -76,7 +75,7 @@ describe('Audit Trail page', () => {
 
     await user.click(screen.getByRole('button', { name: 'approve' }))
 
-    await waitFor(() => expect(getFieldByLabelText(/^decision$/i)).toHaveValue('approve'))
+    await waitFor(() => expect(screen.getByLabelText(/^decision$/i)).toHaveValue('approve'))
     expect(getSpy).toHaveBeenCalledWith(expect.stringContaining('decision=approve'))
     expect(screen.getByRole('link', { name: /open session/i })).toHaveAttribute('href', expect.stringContaining('/sessions/session-1'))
   })
@@ -96,16 +95,16 @@ describe('Audit Trail page', () => {
     })
 
     expect(await screen.findByRole('heading', { name: /audit trail/i })).toBeInTheDocument()
-    await waitFor(() => expect(getFieldByLabelText(/^tenant$/i)).toHaveValue('tenant-1'))
-    expect(getFieldByLabelText(/^decision$/i)).toHaveValue('approve')
+    await waitFor(() => expect(screen.getByLabelText(/^tenant$/i)).toHaveValue('tenant-1'))
+    expect(screen.getByLabelText(/^decision$/i)).toHaveValue('approve')
 
     await user.click(screen.getByRole('button', { name: /clear filters/i }))
 
     await waitFor(() => {
-      expect(getFieldByLabelText(/^tenant$/i)).toHaveValue('')
-      expect(getFieldByLabelText(/^decision$/i)).toHaveValue('')
-      expect(getFieldByLabelText(/^tool$/i)).toHaveValue('')
-      expect(getFieldByLabelText(/^since/i)).toHaveValue('')
+      expect(screen.getByLabelText(/^tenant$/i)).toHaveValue('')
+      expect(screen.getByLabelText(/^decision$/i)).toHaveValue('')
+      expect(screen.getByLabelText(/^tool$/i)).toHaveValue('')
+      expect(screen.getByLabelText(/^since/i)).toHaveValue('')
     })
 
     await user.click(screen.getByText(/export ▾/i))
@@ -114,7 +113,7 @@ describe('Audit Trail page', () => {
     expect(await screen.findByText(/select a tenant before exporting csv/i)).toBeInTheDocument()
     expect(getBlobSpy).not.toHaveBeenCalled()
 
-    await user.type(getFieldByLabelText(/^tenant$/i), 'tenant-1')
+    await user.type(screen.getByLabelText(/^tenant$/i), 'tenant-1')
     await user.click(screen.getByText(/export ▾/i))
     await user.click(screen.getByRole('button', { name: /export csv/i }))
 

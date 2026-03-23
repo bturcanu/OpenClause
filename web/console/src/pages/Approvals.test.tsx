@@ -87,7 +87,7 @@ describe('Approvals page', () => {
     expect(await screen.findByRole('heading', { name: /execute approved request/i })).toBeInTheDocument()
 
     const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText')
-    await user.type(screen.getByPlaceholderText(/sk-oc/i), 'sk-oc-live-123')
+    await user.type(screen.getByLabelText(/^gateway api key$/i), 'sk-oc-live-123')
     await user.click(screen.getByRole('button', { name: /copy execute command/i }))
 
     expect(writeTextSpy).toHaveBeenCalledWith(

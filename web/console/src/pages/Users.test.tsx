@@ -11,13 +11,6 @@ function makeToken(payload: Record<string, unknown>) {
   return `header.${encoded}.signature`
 }
 
-function getFieldIn(container: HTMLElement, labelText: RegExp | string) {
-  const label = within(container).getByText(labelText, { selector: 'label' })
-  const control = label.parentElement?.querySelector('input, select, textarea')
-  if (!control) throw new Error(`No form control found for ${String(labelText)}`)
-  return control as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
-}
-
 describe('Users page', () => {
   it('accepts array-form user and auth-session payloads at the API boundary', async () => {
     const user = userEvent.setup()
@@ -139,10 +132,10 @@ describe('Users page', () => {
 
     const inviteCard = screen.getByRole('heading', { name: /invite user/i }).closest('.form-card') as HTMLElement | null
     expect(inviteCard).not.toBeNull()
-    await user.type(getFieldIn(inviteCard!, /^email$/i), 'new.user@example.com')
-    await user.type(getFieldIn(inviteCard!, /^tenant id$/i), 'tenant-demo')
-    await user.selectOptions(getFieldIn(inviteCard!, /^role$/i), 'approver')
-    await user.type(getFieldIn(inviteCard!, /^name \(optional\)$/i), 'New User')
+    await user.type(within(inviteCard!).getByLabelText(/^email$/i), 'new.user@example.com')
+    await user.type(within(inviteCard!).getByLabelText(/^tenant id$/i), 'tenant-demo')
+    await user.selectOptions(within(inviteCard!).getByLabelText(/^role$/i), 'approver')
+    await user.type(within(inviteCard!).getByLabelText(/^name \(optional\)$/i), 'New User')
     await user.click(within(inviteCard!).getByRole('button', { name: /create invite/i }))
 
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/admin/invites', expect.any(Object)))

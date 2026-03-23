@@ -288,6 +288,7 @@ export default function TenantDetail() {
     setRotationError('')
     setNotifForm({ approver_group: '', slack_channel: '', webhook_url: '', webhook_secret_ref: '' })
     setAllowlistSource('db')
+    setNotificationConfig(null)
 
     try {
       const [tenantResp, agentsResp, keysResp, approversResp, notifCfgResp] = await Promise.allSettled([
@@ -342,6 +343,7 @@ export default function TenantDetail() {
           webhook_secret_ref: webhook?.secret_ref || '',
         })
       } else {
+        setNotificationConfig(null)
         setNotifError(notifCfgResp.reason?.message || 'Failed to load notification config')
       }
 
@@ -785,8 +787,8 @@ export default function TenantDetail() {
             <form onSubmit={createAgent}>
               <div className="form-inline">
                 <div className="form-group">
-                  <label>Agent Name</label>
-                  <input value={agentForm.name} onChange={e => setAgentForm({ name: e.target.value })} required />
+                  <label htmlFor="tenant-agent-name">Agent Name</label>
+                  <input id="tenant-agent-name" value={agentForm.name} onChange={e => setAgentForm({ name: e.target.value })} required />
                 </div>
                 <button className="btn btn-primary" disabled={creating}>Create</button>
               </div>
@@ -857,8 +859,8 @@ export default function TenantDetail() {
             <form onSubmit={createKey}>
               <div className="form-inline">
                 <div className="form-group">
-                  <label>Name</label>
-                  <input value={keyForm.name} onChange={e => setKeyForm({ name: e.target.value })} required />
+                  <label htmlFor="tenant-api-key-name">Name</label>
+                  <input id="tenant-api-key-name" value={keyForm.name} onChange={e => setKeyForm({ name: e.target.value })} required />
                 </div>
                 <button className="btn btn-primary" disabled={creating}>Create</button>
               </div>
@@ -883,13 +885,14 @@ export default function TenantDetail() {
             <form onSubmit={rotatePrimaryKey}>
               <div className="form-grid api-key-rotation-grid">
                 <div className="form-group api-key-rotation-field">
-                  <label>New key name</label>
-                  <input value={rotationName} onChange={e => setRotationName(e.target.value)} required placeholder="e.g., rotated-2026-03" />
+                  <label htmlFor="tenant-rotation-name">New key name</label>
+                  <input id="tenant-rotation-name" value={rotationName} onChange={e => setRotationName(e.target.value)} required placeholder="e.g., rotated-2026-03" />
                 </div>
 
                 <div className="form-group api-key-rotation-field">
-                  <label>Expires on (UTC date, optional)</label>
+                  <label htmlFor="tenant-rotation-expires">Expires on (UTC date, optional)</label>
                   <input
+                    id="tenant-rotation-expires"
                     type="date"
                     value={rotationExpiresAt}
                     onChange={e => setRotationExpiresAt(e.target.value)}
@@ -945,8 +948,9 @@ export default function TenantDetail() {
                   <div className="detail-panel notification-config-card">
                     <h3>Routing defaults</h3>
                     <div className="form-group">
-                      <label>Approver group</label>
+                      <label htmlFor="tenant-approver-group">Approver group</label>
                       <input
+                        id="tenant-approver-group"
                         value={notifForm.approver_group}
                         onChange={e => setNotifForm({ ...notifForm, approver_group: e.target.value })}
                         placeholder="platform_admin or tenant_admin"
@@ -964,8 +968,9 @@ export default function TenantDetail() {
                     <div className="detail-panel notification-config-card">
                       <h3>Slack delivery</h3>
                       <div className="form-group">
-                        <label>Slack channel</label>
+                        <label htmlFor="tenant-slack-channel">Slack channel</label>
                         <input
+                          id="tenant-slack-channel"
                           value={notifForm.slack_channel}
                           onChange={e => setNotifForm({ ...notifForm, slack_channel: e.target.value })}
                           placeholder="#team-alerts"
@@ -978,8 +983,9 @@ export default function TenantDetail() {
                       <h3>Webhook delivery</h3>
                       <div className="form-grid form-grid-2">
                         <div className="form-group">
-                          <label>Webhook URL</label>
+                          <label htmlFor="tenant-webhook-url">Webhook URL</label>
                           <input
+                            id="tenant-webhook-url"
                             value={notifForm.webhook_url}
                             onChange={e => setNotifForm({ ...notifForm, webhook_url: e.target.value })}
                             placeholder="https://hooks.example.com/..."
@@ -987,8 +993,9 @@ export default function TenantDetail() {
                         </div>
 
                         <div className="form-group">
-                          <label>Webhook secret reference</label>
+                          <label htmlFor="tenant-webhook-secret-ref">Webhook secret reference</label>
                           <input
+                            id="tenant-webhook-secret-ref"
                             value={notifForm.webhook_secret_ref}
                             onChange={e => setNotifForm({ ...notifForm, webhook_secret_ref: e.target.value })}
                             placeholder="secret_ref name"
@@ -1099,8 +1106,9 @@ export default function TenantDetail() {
             <form onSubmit={createAlertRule}>
               <div className="form-grid alert-rule-form-grid">
                 <div className="form-group">
-                  <label>Rule name</label>
+                  <label htmlFor="tenant-alert-rule-name">Rule name</label>
                   <input
+                    id="tenant-alert-rule-name"
                     value={alertRuleForm.name}
                     onChange={e => setAlertRuleForm(f => ({ ...f, name: e.target.value }))}
                     placeholder="e.g., Deny spike detector"
@@ -1108,8 +1116,9 @@ export default function TenantDetail() {
                   />
                 </div>
                 <div className="form-group">
-                  <label>N (denies)</label>
+                  <label htmlFor="tenant-alert-rule-threshold">N (denies)</label>
                   <input
+                    id="tenant-alert-rule-threshold"
                     type="number"
                     value={alertRuleForm.n}
                     min={1}
@@ -1118,8 +1127,9 @@ export default function TenantDetail() {
                   />
                 </div>
                 <div className="form-group">
-                  <label>M (window minutes)</label>
+                  <label htmlFor="tenant-alert-rule-window">M (window minutes)</label>
                   <input
+                    id="tenant-alert-rule-window"
                     type="number"
                     value={alertRuleForm.mMinutes}
                     min={1}
@@ -1221,16 +1231,18 @@ export default function TenantDetail() {
                 </div>
                 <div className="form-grid alert-rule-form-grid">
                   <div className="form-group">
-                    <label>Rule name</label>
+                    <label htmlFor="tenant-edit-alert-rule-name">Rule name</label>
                     <input
+                      id="tenant-edit-alert-rule-name"
                       value={editRuleForm.name}
                       onChange={e => setEditRuleForm(f => ({ ...f, name: e.target.value }))}
                       required
                     />
                   </div>
                   <div className="form-group">
-                    <label>N (denies)</label>
+                    <label htmlFor="tenant-edit-alert-rule-threshold">N (denies)</label>
                     <input
+                      id="tenant-edit-alert-rule-threshold"
                       type="number"
                       min={1}
                       value={editRuleForm.n}
@@ -1238,8 +1250,9 @@ export default function TenantDetail() {
                     />
                   </div>
                   <div className="form-group">
-                    <label>M (window minutes)</label>
+                    <label htmlFor="tenant-edit-alert-rule-window">M (window minutes)</label>
                     <input
+                      id="tenant-edit-alert-rule-window"
                       type="number"
                       min={1}
                       value={editRuleForm.mMinutes}
@@ -1345,8 +1358,8 @@ export default function TenantDetail() {
             <h3>Tenant analytics</h3>
             <div className="analytics-toolbar">
               <div className="form-group analytics-range-select">
-                <label>Range</label>
-                <select value={analyticsRangeHours} onChange={(e) => setAnalyticsRangeHours(Number(e.target.value))}>
+                <label htmlFor="tenant-analytics-range">Range</label>
+                <select id="tenant-analytics-range" value={analyticsRangeHours} onChange={(e) => setAnalyticsRangeHours(Number(e.target.value))}>
                   <option value={6}>Last 6 hours</option>
                   <option value={24}>Last 24 hours</option>
                   <option value={48}>Last 48 hours</option>
@@ -1595,16 +1608,16 @@ export default function TenantDetail() {
             <form onSubmit={addApprover}>
               <div className="form-grid approver-form-grid">
                 <div className="form-group">
-                  <label>Email</label>
-                  <input value={approverEmail} onChange={e => setApproverEmail(e.target.value)} placeholder="name@company.com" />
+                  <label htmlFor="tenant-approver-email">Email</label>
+                  <input id="tenant-approver-email" value={approverEmail} onChange={e => setApproverEmail(e.target.value)} placeholder="name@company.com" />
                 </div>
                 <div className="form-group">
-                  <label>Slack user id (optional)</label>
-                  <input value={approverSlackUserID} onChange={e => setApproverSlackUserID(e.target.value)} placeholder="U1234567890" />
+                  <label htmlFor="tenant-approver-slack-user-id">Slack user id (optional)</label>
+                  <input id="tenant-approver-slack-user-id" value={approverSlackUserID} onChange={e => setApproverSlackUserID(e.target.value)} placeholder="U1234567890" />
                 </div>
                 <div className="form-group">
-                  <label>Name (optional)</label>
-                  <input value={approverName} onChange={e => setApproverName(e.target.value)} placeholder="Full name" />
+                  <label htmlFor="tenant-approver-name">Name (optional)</label>
+                  <input id="tenant-approver-name" value={approverName} onChange={e => setApproverName(e.target.value)} placeholder="Full name" />
                 </div>
                 <div className="form-actions-row form-actions-row-end approver-form-actions">
                   <button className="btn btn-primary" disabled={creating}>Add approver</button>

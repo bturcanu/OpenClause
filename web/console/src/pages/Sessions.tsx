@@ -206,36 +206,36 @@ export default function Sessions() {
         <div className="filters-panel-note">Date filters use your local browser time.</div>
         <div className="form-grid sessions-filter-grid">
           <div className="form-group">
-            <label>Tenant</label>
-            <input value={filters.tenant_id} onChange={e => updateFilter('tenant_id', e.target.value)} placeholder="tenant_id" />
+            <label htmlFor="sessions-filter-tenant">Tenant</label>
+            <input id="sessions-filter-tenant" value={filters.tenant_id} onChange={e => updateFilter('tenant_id', e.target.value)} placeholder="tenant_id" />
           </div>
           <div className="form-group">
-            <label>Session ID</label>
-            <input value={filters.session_id} onChange={e => updateFilter('session_id', e.target.value)} placeholder="session_id" />
+            <label htmlFor="sessions-filter-session-id">Session ID</label>
+            <input id="sessions-filter-session-id" value={filters.session_id} onChange={e => updateFilter('session_id', e.target.value)} placeholder="session_id" />
           </div>
           <div className="form-group">
-            <label>User ID</label>
-            <input value={filters.user_id} onChange={e => updateFilter('user_id', e.target.value)} placeholder="user_id" />
+            <label htmlFor="sessions-filter-user-id">User ID</label>
+            <input id="sessions-filter-user-id" value={filters.user_id} onChange={e => updateFilter('user_id', e.target.value)} placeholder="user_id" />
           </div>
           <div className="form-group">
-            <label>Agent ID</label>
-            <input value={filters.agent_id} onChange={e => updateFilter('agent_id', e.target.value)} placeholder="agent_id" />
+            <label htmlFor="sessions-filter-agent-id">Agent ID</label>
+            <input id="sessions-filter-agent-id" value={filters.agent_id} onChange={e => updateFilter('agent_id', e.target.value)} placeholder="agent_id" />
           </div>
           <div className="form-group">
-            <label>Trace ID</label>
-            <input value={filters.trace_id} onChange={e => updateFilter('trace_id', e.target.value)} placeholder="trace_id" />
+            <label htmlFor="sessions-filter-trace-id">Trace ID</label>
+            <input id="sessions-filter-trace-id" value={filters.trace_id} onChange={e => updateFilter('trace_id', e.target.value)} placeholder="trace_id" />
           </div>
           <div className="form-group">
-            <label>Tool</label>
-            <input value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
+            <label htmlFor="sessions-filter-tool">Tool</label>
+            <input id="sessions-filter-tool" value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
           </div>
           <div className="form-group">
-            <label>Action</label>
-            <input value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
+            <label htmlFor="sessions-filter-action">Action</label>
+            <input id="sessions-filter-action" value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
           </div>
           <div className="form-group">
-            <label>Decision</label>
-            <select value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
+            <label htmlFor="sessions-filter-decision">Decision</label>
+            <select id="sessions-filter-decision" value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
               <option value="">Any</option>
               <option value="allow">Allow</option>
               <option value="deny">Deny</option>
@@ -243,8 +243,9 @@ export default function Sessions() {
             </select>
           </div>
           <div className="form-group form-group-small session-filter-field-short">
-            <label>Risk min</label>
+            <label htmlFor="sessions-filter-risk-min">Risk min</label>
             <input
+              id="sessions-filter-risk-min"
               type="number"
               min={0}
               max={10}
@@ -255,8 +256,9 @@ export default function Sessions() {
             />
           </div>
           <div className="form-group form-group-small session-filter-field-short">
-            <label>Risk max</label>
+            <label htmlFor="sessions-filter-risk-max">Risk max</label>
             <input
+              id="sessions-filter-risk-max"
               type="number"
               min={0}
               max={10}
@@ -267,12 +269,12 @@ export default function Sessions() {
             />
           </div>
           <div className="form-group session-filter-field-wide">
-            <label>Since (local time)</label>
-            <input value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
+            <label htmlFor="sessions-filter-since">Since (local time)</label>
+            <input id="sessions-filter-since" value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
           </div>
           <div className="form-group session-filter-field-wide">
-            <label>Until (local time)</label>
-            <input value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
+            <label htmlFor="sessions-filter-until">Until (local time)</label>
+            <input id="sessions-filter-until" value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
           </div>
         </div>
       </div>
