@@ -58,6 +58,71 @@ describe('ui helpers', () => {
     expect(params.toString()).toContain('trace_id=trace%2Fdemo%3F1')
   })
 
+  it('keeps query serialization stable across a broader parameter matrix', () => {
+    const cases = [
+      {
+        params: { tenant_id: 'tenant-1', session_id: 'demo', page: 0, risk_min: 0, risk_max: 10 },
+        expected: '?tenant_id=tenant-1&session_id=demo&page=0&risk_min=0&risk_max=10',
+      },
+      {
+        params: { tenant_id: ' tenant-2 ', tool: 'slack bot', action: 'msg/post', empty: '   ' },
+        expected: '?tenant_id=tenant-2&tool=slack+bot&action=msg%2Fpost',
+      },
+      {
+        params: { since: '2026-03-23T10:00:00Z', until: '2026-03-23T11:00:00Z', tenant_id: null, ignored: undefined },
+        expected: '?since=2026-03-23T10%3A00%3A00Z&until=2026-03-23T11%3A00%3A00Z',
+      },
+      {
+        params: { page: Number.NaN, risk_min: Number.NEGATIVE_INFINITY, top_agents: Number.POSITIVE_INFINITY, decision: 'deny' },
+        expected: '?decision=deny',
+      },
+    ]
+
+    cases.forEach(({ params, expected }) => {
+      const query = buildQuery(params)
+      expect(query).toBe(expected)
+      expect(query).not.toMatch(/NaN|Infinity|undefined|null/)
+      expect(query).not.toContain('&&')
+    })
+  })
+
+  it('preserves query invariants across a generated parameter matrix', () => {
+    let seed = 123456789
+    const next = () => {
+      seed = (seed * 1664525 + 1013904223) % 0x100000000
+      return seed / 0x100000000
+    }
+
+    for (let index = 0; index < 40; index += 1) {
+      const rawText = ` value-${index} / ${Math.floor(next() * 9)} `
+      const numeric = index % 5 === 0
+        ? Number.NaN
+        : index % 7 === 0
+          ? Number.POSITIVE_INFINITY
+          : Math.floor(next() * 50)
+      const params = {
+        tenant_id: index % 3 === 0 ? `tenant-${index}` : '   ',
+        session_id: index % 4 === 0 ? `session-${Math.floor(next() * 1000)}` : '',
+        tool: index % 2 === 0 ? rawText : undefined,
+        page: numeric,
+        risk_min: index % 6 === 0 ? 0 : Math.floor(next() * 10),
+        ignored: index % 8 === 0 ? null : undefined,
+      }
+
+      const query = buildQuery(params)
+      expect(query).not.toMatch(/NaN|Infinity|undefined|null/)
+      expect(query).not.toContain('&&')
+      if (!query) continue
+
+      const parsed = new URLSearchParams(query)
+      if (params.tenant_id.trim()) expect(parsed.get('tenant_id')).toBe(params.tenant_id.trim())
+      if (params.session_id.trim()) expect(parsed.get('session_id')).toBe(params.session_id.trim())
+      if (params.tool?.trim()) expect(parsed.get('tool')).toBe(params.tool.trim())
+      if (Number.isFinite(params.page)) expect(parsed.get('page')).toBe(String(params.page))
+      expect(parsed.get('risk_min')).toBe(String(params.risk_min))
+    }
+  })
+
   it('compares text, numbers, dates, and applies sort direction', () => {
     expect(compareText('beta', 'Alpha')).toBeGreaterThan(0)
     expect(compareNumber(9, 3)).toBe(6)

@@ -292,7 +292,10 @@ describe('Session detail page', () => {
     await user.click(screen.getByRole('button', { name: /export csv/i }))
 
     expect(await screen.findByText(/^Export blocked \(request id: req-session-9\)$/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
-    expect(screen.getByText('req-session-9', { selector: 'code' })).toBeInTheDocument()
+    expect(screen.getAllByText('req-session-9', { selector: 'code' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('tenant_required', { selector: 'code' }).length).toBeGreaterThan(0)
+    expect(screen.getByText(/issue history \(1\)/i, { selector: 'summary' })).toBeInTheDocument()
+    expect(screen.getAllByText('export:csv', { selector: 'code' }).length).toBeGreaterThan(0)
     expect(warnSpy).toHaveBeenCalledWith(
       '[openclause-console] session detail issue',
       expect.objectContaining({
@@ -403,6 +406,70 @@ describe('Session detail page', () => {
     expect(screen.getByRole('link', { name: /open execution event/i })).toHaveAttribute('href', '/events/event-execution-1')
   })
 
+  it('drops malformed approval and execution payloads while keeping the timeline row visible', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stubMutableApi()
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
+        id: 'demo',
+        tenant_id: 'tenant-a',
+        agent_id: 'agent-1',
+        user_id: 'user-1',
+        user_name: 'Ada Lovelace',
+        user_email: 'ada@example.com',
+        trace_id: 'trace-1',
+        started_at: '2026-03-23T10:00:00Z',
+        last_event_at: '2026-03-23T10:15:00Z',
+        event_count: 1,
+        allow_count: 0,
+        deny_count: 0,
+        approve_count: 1,
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', {
+        events: [
+          {
+            event_id: 'event-approve',
+            tenant_id: 'tenant-a',
+            agent_id: 'agent-1',
+            tool: 'slack',
+            action: 'msg.post',
+            risk_score: 8,
+            decision: 'approve',
+            session_id: 'demo',
+            received_at: '2026-03-23T10:15:00Z',
+            explain: 'Needs approval',
+            approval: {
+              id: '',
+              status: 'approved',
+              created_at: '2026-03-23T10:14:00Z',
+              expires_at: '2026-03-23T10:20:00Z',
+            },
+            execution: {
+              event_id: 'event-execution-1',
+              received_at: '2026-03-23T10:16:00Z',
+              status: 200,
+            },
+          },
+        ],
+      }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText(/some timeline detail sections were malformed and were ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText('slack.msg.post')).toBeInTheDocument()
+    expect(screen.queryByText(/approval/i, { selector: 'strong' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/execution/i, { selector: 'strong' })).not.toBeInTheDocument()
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] session detail issue',
+      expect.objectContaining({
+        stage: 'timeline-contract',
+        droppedRows: 0,
+        droppedNested: 2,
+      }),
+    )
+  })
+
   it('keeps the summary visible when a fulfilled timeline payload is malformed and logs the contract issue', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     stubMutableApi()
@@ -494,15 +561,15 @@ describe('Session detail page', () => {
 
     renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
 
-    expect(await screen.findByText(/some timeline rows were malformed and were ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(await screen.findByText(/some timeline data was malformed and was ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.getByText('slack.msg.post')).toBeInTheDocument()
     expect(screen.queryByText('jira.issue.delete')).not.toBeInTheDocument()
     expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
-    expect(screen.getByText(/some timeline rows were malformed and were ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText(/some timeline data was malformed and was ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /copy session diagnostics/i }))
     expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=timeline-contract'))
-    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('message=Some timeline rows were malformed and were ignored.'))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('message=Some timeline data was malformed and was ignored.'))
     expect(warnSpy).toHaveBeenCalledWith(
       '[openclause-console] session detail issue',
       expect.objectContaining({
@@ -597,14 +664,14 @@ describe('Session detail page', () => {
 
     renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
 
-    expect(await screen.findByText(/some timeline rows were malformed and were ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(await screen.findByText(/some timeline data was malformed and was ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^retry$/i }))
 
     expect(await screen.findByText('jira.issue.delete')).toBeInTheDocument()
     expect(screen.queryByText(/latest diagnostics/i)).not.toBeInTheDocument()
-    expect(screen.queryAllByText(/some timeline rows were malformed and were ignored/i)).toHaveLength(0)
+    expect(screen.queryAllByText(/some timeline data was malformed and was ignored/i)).toHaveLength(0)
   })
 
   it('fails closed when every fulfilled timeline row is malformed instead of showing a filter-empty state', async () => {
@@ -677,7 +744,7 @@ describe('Session detail page', () => {
     renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
 
     expect(await screen.findByText(/^Session blocked \(request id: req-summary-5\)$/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
-    expect(screen.getByText('req-summary-5', { selector: 'code' })).toBeInTheDocument()
+    expect(screen.getAllByText('req-summary-5', { selector: 'code' }).length).toBeGreaterThan(0)
     expect(screen.queryByText(/run context/i)).not.toBeInTheDocument()
     expect(warnSpy).toHaveBeenCalledWith(
       '[openclause-console] session detail issue',
@@ -725,7 +792,7 @@ describe('Session detail page', () => {
     renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
 
     expect(await screen.findByText(/^Timeline blocked \(request id: req-timeline-1\)$/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
-    expect(screen.getByText('req-timeline-1', { selector: 'code' })).toBeInTheDocument()
+    expect(screen.getAllByText('req-timeline-1', { selector: 'code' }).length).toBeGreaterThan(0)
     expect(screen.getByText(/requested by ada/i)).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^retry$/i }))
@@ -734,8 +801,10 @@ describe('Session detail page', () => {
     expect(screen.getByText(/repeated failures detected/i)).toBeInTheDocument()
     expect(screen.getByText(/repeated timeline failures detected for this run/i)).toBeInTheDocument()
     expect(screen.getByText(/^Timeline blocked \(request id: req-timeline-2\)$/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText(/issue history \(1\)/i, { selector: 'summary' })).toBeInTheDocument()
+    expect(screen.getByText('2x')).toBeInTheDocument()
     expect(screen.getByText(/latest stage:/i)).toBeInTheDocument()
-    expect(screen.getByText('req-timeline-2')).toBeInTheDocument()
+    expect(screen.getAllByText('req-timeline-2', { selector: 'code' }).length).toBeGreaterThan(0)
     await user.click(screen.getByRole('button', { name: /copy session diagnostics/i }))
     expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('session_id=demo'))
     expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('request_id=req-timeline-2'))
@@ -748,5 +817,85 @@ describe('Session detail page', () => {
         requestId: 'req-timeline-2',
       }),
     )
+  })
+
+  it('tracks multiple active issues in session diagnostics history and clears repeated-triage state after recovery', async () => {
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    stubMutableApi()
+    let timelineCalls = 0
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
+        id: 'demo',
+        tenant_id: 'tenant-a',
+        agent_id: 'agent-1',
+        user_id: 'user-1',
+        user_name: 'Ada Lovelace',
+        user_email: 'ada@example.com',
+        trace_id: 'trace-1',
+        started_at: '2026-03-23T10:00:00Z',
+        last_event_at: '2026-03-23T10:15:00Z',
+        event_count: 1,
+        allow_count: 1,
+        deny_count: 0,
+        approve_count: 0,
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', () => {
+        timelineCalls += 1
+        if (timelineCalls < 3) {
+          throw new APIClientError(`Timeline blocked (request id: req-history-${timelineCalls})`, {
+            status: 502,
+            code: 'timeline_unavailable',
+            requestId: `req-history-${timelineCalls}`,
+          })
+        }
+        return {
+          events: [
+            {
+              event_id: 'event-valid',
+              tenant_id: 'tenant-a',
+              agent_id: 'agent-1',
+              tool: 'slack',
+              action: 'msg.post',
+              risk_score: 2,
+              decision: 'allow',
+              session_id: 'demo',
+              received_at: '2026-03-23T10:15:00Z',
+              explain: 'Recovered event',
+            },
+          ],
+        }
+      }],
+    ])
+    vi.spyOn(api, 'getBlob').mockRejectedValue(new APIClientError('Export blocked (request id: req-export-history)', {
+      status: 409,
+      code: 'tenant_required',
+      requestId: 'req-export-history',
+    }))
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText(/^Timeline blocked \(request id: req-history-1\)$/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
+
+    await user.click(screen.getByText(/export/i, { selector: 'summary' }))
+    await user.click(screen.getByRole('button', { name: /export csv/i }))
+
+    expect(await screen.findByText(/issue history \(2\)/i, { selector: 'summary' })).toBeInTheDocument()
+    expect(screen.getAllByText('timeline', { selector: 'code' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('export:csv', { selector: 'code' }).length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: /copy session diagnostics/i }))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('active_issues:'))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=export:csv'))
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+    expect(await screen.findByText(/^Timeline blocked \(request id: req-history-2\)$/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText('2x')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+    expect(await screen.findByText('slack.msg.post')).toBeInTheDocument()
+    expect(screen.queryByText(/repeated failures detected/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/issue history \(/i, { selector: 'summary' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /copy session diagnostics/i })).not.toBeInTheDocument()
   })
 })

@@ -69,6 +69,27 @@ type SessionIssueSummary = {
   stage: string
   message: string
   requestId?: string
+  code?: string
+  status?: number
+}
+
+type SessionIssueHistoryEntry = SessionIssueSummary & {
+  key: string
+  count: number
+  lastSeenAt: string
+}
+
+type NormalizedTimelineEvents = {
+  events: SessionTimelineEvent[]
+  dropped: number
+  droppedNested: number
+}
+
+function repeatedSessionTriageNotice(stage: string, requestId?: string) {
+  const stageLabel = stage.startsWith('export:')
+    ? `session ${stage.replace(':', ' ')}`
+    : stage.replace(/-/g, ' ')
+  return `Repeated ${stageLabel} failures detected for this run. Check the latest request id${requestId ? ` (${requestId})` : ''} and browser console details before retrying.`
 }
 
 const defaultFilters: TimelineFilters = {
@@ -120,16 +141,109 @@ function isSessionTimelineEvent(value: unknown): value is SessionTimelineEvent {
   )
 }
 
-function normalizeTimelineEvents(payload: unknown): { events: SessionTimelineEvent[]; dropped: number } | null {
+function normalizeApproval(value: unknown): SessionTimelineEvent['approval'] | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as NonNullable<SessionTimelineEvent['approval']>
+  if (
+    typeof candidate.id !== 'string' ||
+    !candidate.id.trim() ||
+    typeof candidate.status !== 'string' ||
+    !candidate.status.trim() ||
+    typeof candidate.created_at !== 'string' ||
+    !candidate.created_at.trim() ||
+    typeof candidate.expires_at !== 'string' ||
+    !candidate.expires_at.trim() ||
+    (candidate.reason !== undefined && typeof candidate.reason !== 'string') ||
+    (candidate.deny_reason !== undefined && typeof candidate.deny_reason !== 'string')
+  ) {
+    return null
+  }
+  return {
+    id: candidate.id,
+    status: candidate.status,
+    created_at: candidate.created_at,
+    expires_at: candidate.expires_at,
+    reason: candidate.reason,
+    deny_reason: candidate.deny_reason,
+  }
+}
+
+function normalizeExecution(value: unknown): SessionTimelineEvent['execution'] | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as NonNullable<SessionTimelineEvent['execution']>
+  if (
+    typeof candidate.event_id !== 'string' ||
+    !candidate.event_id.trim() ||
+    typeof candidate.received_at !== 'string' ||
+    !candidate.received_at.trim() ||
+    typeof candidate.status !== 'string' ||
+    !candidate.status.trim() ||
+    (candidate.error_msg !== undefined && typeof candidate.error_msg !== 'string') ||
+    (candidate.duration_ms !== undefined && typeof candidate.duration_ms !== 'number') ||
+    (candidate.policy_reason !== undefined && typeof candidate.policy_reason !== 'string')
+  ) {
+    return null
+  }
+  return {
+    event_id: candidate.event_id,
+    received_at: candidate.received_at,
+    status: candidate.status,
+    error_msg: candidate.error_msg,
+    duration_ms: candidate.duration_ms,
+    policy_reason: candidate.policy_reason,
+  }
+}
+
+function normalizeTimelineEvent(value: SessionTimelineEvent): { event: SessionTimelineEvent; droppedNested: number } {
+  let droppedNested = 0
+  const approval = normalizeApproval(value.approval)
+  const execution = normalizeExecution(value.execution)
+  if (value.approval !== undefined && approval === null) droppedNested += 1
+  if (value.execution !== undefined && execution === null) droppedNested += 1
+  const riskFactors = Array.isArray(value.risk_factors)
+    ? value.risk_factors.filter((factor): factor is string => typeof factor === 'string' && factor.trim() !== '')
+    : undefined
+  if (Array.isArray(value.risk_factors) && riskFactors && riskFactors.length !== value.risk_factors.length) droppedNested += 1
+
+  return {
+    event: {
+      ...value,
+      user_id: typeof value.user_id === 'string' && value.user_id.trim() ? value.user_id : undefined,
+      user_name: typeof value.user_name === 'string' && value.user_name.trim() ? value.user_name : undefined,
+      user_email: typeof value.user_email === 'string' && value.user_email.trim() ? value.user_email : undefined,
+      resource: typeof value.resource === 'string' && value.resource.trim() ? value.resource : undefined,
+      trace_id: typeof value.trace_id === 'string' && value.trace_id.trim() ? value.trace_id : undefined,
+      policy_reason: typeof value.policy_reason === 'string' && value.policy_reason.trim() ? value.policy_reason : undefined,
+      risk_factors: riskFactors && riskFactors.length > 0 ? riskFactors : undefined,
+      approval: approval ?? null,
+      execution: execution ?? null,
+    },
+    droppedNested,
+  }
+}
+
+function normalizeTimelineEvents(payload: unknown): NormalizedTimelineEvents | null {
   if (Array.isArray(payload)) {
-    const events = payload.filter(isSessionTimelineEvent)
-    return { events, dropped: payload.length - events.length }
+    const events = payload.filter(isSessionTimelineEvent).map(normalizeTimelineEvent)
+    return {
+      events: events.map(entry => entry.event),
+      dropped: payload.length - events.length,
+      droppedNested: events.reduce((sum, entry) => sum + entry.droppedNested, 0),
+    }
   }
   if (!payload || typeof payload !== 'object') return null
   const wrapped = (payload as { events?: unknown }).events
   if (!Array.isArray(wrapped)) return null
-  const events = wrapped.filter(isSessionTimelineEvent)
-  return { events, dropped: wrapped.length - events.length }
+  const events = wrapped.filter(isSessionTimelineEvent).map(normalizeTimelineEvent)
+  return {
+    events: events.map(entry => entry.event),
+    dropped: wrapped.length - events.length,
+    droppedNested: events.reduce((sum, entry) => sum + entry.droppedNested, 0),
+  }
 }
 
 export default function SessionTimeline() {
@@ -149,6 +263,7 @@ export default function SessionTimeline() {
   const [copyStatus, setCopyStatus] = useState('')
   const [triageNotice, setTriageNotice] = useState('')
   const [latestIssue, setLatestIssue] = useState<SessionIssueSummary | null>(null)
+  const [issueHistory, setIssueHistory] = useState<SessionIssueHistoryEntry[]>([])
   const fetchSeq = useRef(0)
   const issueCounts = useRef<Record<string, number>>({})
 
@@ -160,10 +275,29 @@ export default function SessionTimeline() {
         changed = true
       }
     })
-    if (changed && Object.keys(issueCounts.current).length === 0) {
+    if (!changed) return
+
+    const activeStages = new Set(Object.keys(issueCounts.current))
+    let nextHistory: SessionIssueHistoryEntry[] = []
+    setIssueHistory(current => {
+      nextHistory = current.filter(entry => activeStages.has(entry.stage))
+      return nextHistory
+    })
+
+    const remainingStages = Object.keys(issueCounts.current)
+    if (remainingStages.length === 0) {
       setTriageNotice('')
       setLatestIssue(null)
+      return
     }
+
+    const freshest = [...nextHistory].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0]
+    setLatestIssue(freshest ? { stage: freshest.stage, message: freshest.message, requestId: freshest.requestId } : null)
+
+    const freshestRepeated = [...nextHistory]
+      .filter(entry => (issueCounts.current[entry.stage] || 0) >= 2)
+      .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0]
+    setTriageNotice(freshestRepeated ? repeatedSessionTriageNotice(freshestRepeated.stage, freshestRepeated.requestId) : '')
   }, [])
 
   const markSessionIssue = useCallback((stage: string, requestId?: string) => {
@@ -171,24 +305,34 @@ export default function SessionTimeline() {
     issueCounts.current[stage] = nextCount
     if (nextCount < 2) return
 
-    const stageLabel = stage.startsWith('export:')
-      ? `session ${stage.replace(':', ' ')}`
-      : stage.replace(/-/g, ' ')
-    setTriageNotice(
-      `Repeated ${stageLabel} failures detected for this run. Check the latest request id${requestId ? ` (${requestId})` : ''} and browser console details before retrying.`,
-    )
+    setTriageNotice(repeatedSessionTriageNotice(stage, requestId))
   }, [])
 
   const logSessionDetailIssue = useCallback((stage: string, err: unknown, extra: Record<string, unknown> = {}) => {
     const message = err instanceof Error ? err.message : String(err || 'Unknown session detail failure')
     const requestId = err instanceof APIClientError ? err.requestId : undefined
+    const code = err instanceof APIClientError ? err.code : undefined
+    const status = err instanceof APIClientError ? err.status : undefined
+    const lastSeenAt = new Date().toISOString()
     markSessionIssue(stage, requestId)
-    setLatestIssue({ stage, message, requestId })
+    setLatestIssue({ stage, message, requestId, code, status })
+    setIssueHistory(current => {
+      const key = stage
+      const existing = current.find(entry => entry.key === key)
+      const next = existing
+        ? current.map(entry => entry.key === key ? { ...entry, message, requestId, code, status, count: entry.count + 1, lastSeenAt } : entry)
+        : [{ key, stage, message, requestId, code, status, count: 1, lastSeenAt }, ...current]
+      return next
+        .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+        .slice(0, 5)
+    })
     console.warn('[openclause-console] session detail issue', {
       stage,
       sessionId: id,
       tenantId: tenantID || undefined,
       requestId,
+      code,
+      status,
       message,
       ...extra,
     })
@@ -196,15 +340,33 @@ export default function SessionTimeline() {
 
   const sessionDiagnostics = useMemo(() => {
     if (!latestIssue) return ''
-    return [
+    const latestCount = issueHistory.find(entry => entry.stage === latestIssue.stage)?.count || 1
+    const lines = [
       'OpenClause session detail diagnostics',
       `session_id=${id || ''}`,
       `tenant_id=${tenantID || ''}`,
       `stage=${latestIssue.stage}`,
       `request_id=${latestIssue.requestId || ''}`,
+      `error_code=${latestIssue.code || ''}`,
+      `status=${latestIssue.status ?? ''}`,
+      `occurrences=${latestCount}`,
       `message=${latestIssue.message}`,
-    ].join('\n')
-  }, [id, latestIssue, tenantID])
+    ]
+    if (issueHistory.length > 0) {
+      lines.push('', 'active_issues:')
+      issueHistory.forEach((entry, index) => {
+        lines.push(
+          `${index + 1}. stage=${entry.stage}; count=${entry.count}; request_id=${entry.requestId || ''}; error_code=${entry.code || ''}; status=${entry.status ?? ''}; last_seen=${entry.lastSeenAt}; message=${entry.message}`,
+        )
+      })
+    }
+    return lines.join('\n')
+  }, [id, issueHistory, latestIssue, tenantID])
+
+  const latestIssueCount = useMemo(
+    () => (latestIssue ? issueHistory.find(entry => entry.stage === latestIssue.stage)?.count || 1 : 0),
+    [issueHistory, latestIssue],
+  )
 
   const handleSessionError = useCallback((err: unknown) => {
     const message = err instanceof Error ? err.message : 'Failed to load session'
@@ -274,9 +436,16 @@ export default function SessionTimeline() {
             setError(malformedRowsError.message)
           } else {
             setEvents(normalizedTimeline.events)
-            if (normalizedTimeline.dropped > 0) {
-              const partialTimelineError = new Error('Some timeline rows were malformed and were ignored.')
-              logSessionDetailIssue('timeline-contract', partialTimelineError, { droppedRows: normalizedTimeline.dropped })
+            if (normalizedTimeline.dropped > 0 || normalizedTimeline.droppedNested > 0) {
+              const partialTimelineError = new Error(
+                normalizedTimeline.dropped > 0
+                  ? 'Some timeline data was malformed and was ignored.'
+                  : 'Some timeline detail sections were malformed and were ignored.',
+              )
+              logSessionDetailIssue('timeline-contract', partialTimelineError, {
+                droppedRows: normalizedTimeline.dropped,
+                droppedNested: normalizedTimeline.droppedNested,
+              })
               setError(partialTimelineError.message)
             } else {
               setError('')
@@ -426,7 +595,25 @@ export default function SessionTimeline() {
           <div className="warn-banner-meta">
             <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
             {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+            {latestIssue.code ? <span>Error code: <code className="mono">{latestIssue.code}</code></span> : null}
+            {latestIssueCount > 0 ? <span>Occurrences: <code className="mono">{latestIssueCount}</code></span> : null}
           </div>
+          {issueHistory.length > 0 ? (
+            <details className="warn-banner-history">
+              <summary>Issue history ({issueHistory.length})</summary>
+              <ul className="warn-banner-history-list">
+                {issueHistory.map(entry => (
+                  <li key={entry.key}>
+                    <code className="mono">{entry.stage}</code>
+                    <span>{entry.message}</span>
+                    {entry.requestId ? <code className="mono">{entry.requestId}</code> : null}
+                    {entry.code ? <code className="mono">{entry.code}</code> : null}
+                    {entry.count > 1 ? <span className="badge badge-yellow">{entry.count}x</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </div>
       ) : null}
       {triageNotice ? (
@@ -442,8 +629,26 @@ export default function SessionTimeline() {
               <div className="warn-banner-meta">
                 <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
                 {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+                {latestIssue.code ? <span>Error code: <code className="mono">{latestIssue.code}</code></span> : null}
+                {latestIssueCount > 0 ? <span>Occurrences: <code className="mono">{latestIssueCount}</code></span> : null}
               </div>
             </>
+          ) : null}
+          {issueHistory.length > 0 ? (
+            <details className="warn-banner-history">
+              <summary>Issue history ({issueHistory.length})</summary>
+              <ul className="warn-banner-history-list">
+                {issueHistory.map(entry => (
+                  <li key={entry.key}>
+                    <code className="mono">{entry.stage}</code>
+                    <span>{entry.message}</span>
+                    {entry.requestId ? <code className="mono">{entry.requestId}</code> : null}
+                    {entry.code ? <code className="mono">{entry.code}</code> : null}
+                    {entry.count > 1 ? <span className="badge badge-yellow">{entry.count}x</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </details>
           ) : null}
         </div>
       ) : null}

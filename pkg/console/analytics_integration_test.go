@@ -326,7 +326,7 @@ func TestStoreGetDecisionTimeseriesSupportsLargerBucketIntervalsWithoutLosingTot
 func TestStoreGetDecisionTimeseriesBucketMatrixPreservesTotalsAndAlignment(t *testing.T) {
 	fx := newAnalyticsFixture(t)
 
-	for _, bucketMinutes := range []int{15, 30, 60, 120} {
+	for _, bucketMinutes := range []int{5, 10, 15, 20, 30, 45, 60, 90, 120, 180} {
 		t.Run(fmt.Sprintf("%dm", bucketMinutes), func(t *testing.T) {
 			series, err := fx.store.GetDecisionTimeseries(fx.ctx, fx.tenantID, fx.since, bucketMinutes)
 			if err != nil {

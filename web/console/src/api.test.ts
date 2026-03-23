@@ -158,6 +158,24 @@ describe('api helpers', () => {
     }
   })
 
+  it('preserves minute precision across a generated datetime matrix', () => {
+    const samples: string[] = []
+    for (const month of [1, 3, 6, 11]) {
+      for (const day of [1, 8, 15, 28]) {
+        for (const hour of [0, 1, 12, 23]) {
+          const minute = (month * day + hour) % 60
+          samples.push(`2026-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)
+        }
+      }
+    }
+
+    for (const sample of samples) {
+      const iso = toQueryTimestamp(sample)
+      expect(iso).toMatch(/Z$/)
+      expect(toLocalDateTimeInput(iso)).toBe(sample)
+    }
+  })
+
   it('trims datetime input edges while preserving passthrough values that are already API-safe', () => {
     const cases = [
       { input: ' 2026-02-29T09:15 ', matcher: /^2026-03-01T/ },

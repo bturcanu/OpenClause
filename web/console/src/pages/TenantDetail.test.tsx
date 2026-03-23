@@ -1037,10 +1037,13 @@ describe('Tenant detail page', () => {
     expect(await screen.findByText(/some alert data could not be loaded: events/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.getByText(/repeated failures detected/i)).toBeInTheDocument()
     expect(screen.getByText(/repeated alerts partial failures detected for this tenant/i)).toBeInTheDocument()
+    expect(screen.getByText(/issue history \(1\)/i, { selector: 'summary' })).toBeInTheDocument()
+    expect(screen.getByText('2x')).toBeInTheDocument()
     expect(screen.getByText(/latest stage:/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
     expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('tenant_id=tenant-1'))
     expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=alerts-partial'))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('active_issues:'))
     expect(warnSpy).toHaveBeenCalledWith(
       '[openclause-console] tenant detail issue',
       expect.objectContaining({
@@ -1127,6 +1130,7 @@ describe('Tenant detail page', () => {
     expect(await screen.findByText(/notification configuration payload was malformed/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
     expect(screen.getByText(/notification configuration payload was malformed/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText(/issue history \(1\)/i, { selector: 'summary' })).toBeInTheDocument()
     expect(screen.queryByLabelText(/^approver group$/i)).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
@@ -1228,6 +1232,7 @@ describe('Tenant detail page', () => {
     expect(screen.getByText(/some alert data was malformed and was ignored/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
     expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
     expect(screen.getByText(/some alert data was malformed and was ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText(/issue history \(1\)/i, { selector: 'summary' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
     expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=alerts-contract'))
@@ -1328,5 +1333,140 @@ describe('Tenant detail page', () => {
     expect(await screen.findByText('Recovered alert event')).toBeInTheDocument()
     expect(screen.queryByText(/latest diagnostics/i)).not.toBeInTheDocument()
     expect(screen.queryAllByText(/some alert data was malformed and was ignored/i)).toHaveLength(0)
+    expect(screen.queryByText(/issue history \(/i, { selector: 'summary' })).not.toBeInTheDocument()
+  })
+
+  it('keeps valid notification routes, drops malformed rows, and surfaces notification contract history', async () => {
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', {
+        approver_group: 'tenant_admin',
+        notify: [
+          { kind: 'slack', channel: '#tenant-alerts' },
+          { kind: 'slack', channel: '' },
+          { bogus: true },
+          { kind: 'webhook', url: 'https://hooks.example.test/tenant', secret_ref: 'tenant-secret' },
+          { kind: 'webhook', url: 'https://hooks.example.test/missing-secret' },
+          { kind: 'pagerduty', channel: 'ops-oncall' },
+        ],
+      }],
+      ['/admin/tenants/tenant-1/alerts/rules', []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=api_keys' })
+
+    expect(await screen.findByDisplayValue('tenant_admin')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('#tenant-alerts')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('https://hooks.example.test/tenant')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('tenant-secret')).toBeInTheDocument()
+    expect(screen.getByLabelText(/webhook url/i)).not.toHaveValue('https://hooks.example.test/missing-secret')
+    expect(screen.getByText(/some notification delivery entries were malformed and were ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText(/issue history \(1\)/i, { selector: 'summary' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=notification-config-contract'))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('active_issues:'))
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] tenant detail issue',
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        stage: 'notification-config-contract',
+        droppedRows: 4,
+      }),
+    )
+  })
+
+  it('clears repeated notification diagnostics after a later successful refetch', async () => {
+    const user = userEvent.setup()
+    let notifCalls = 0
+    mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [{ id: 'agent-a', name: 'Agent A', tenant_id: 'tenant-1', status: 'active', created_at: '2026-03-22T12:00:00Z' }] }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=false', { agents: [{ id: 'agent-a', name: 'Agent A', tenant_id: 'tenant-1', status: 'active', created_at: '2026-03-22T12:00:00Z' }] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', () => {
+        notifCalls += 1
+        if (notifCalls < 3) {
+          throw new Error(`Notification configuration unavailable ${notifCalls}`)
+        }
+        return {
+          approver_group: 'tenant_admin',
+          notify: [{ kind: 'slack', channel: '#tenant-alerts' }],
+        }
+      }],
+      ['/admin/tenants/tenant-1/alerts/rules', []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=api_keys' })
+
+    expect(await screen.findByText(/notification configuration unavailable 1/i, { selector: '.form-card .error-msg' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /agents/i }))
+    await user.click(await screen.findByRole('checkbox', { name: /hide disabled/i }))
+
+    await user.click(screen.getByRole('button', { name: /api keys/i }))
+    expect(await screen.findByText(/notification configuration unavailable 2/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText(/repeated failures detected/i)).toBeInTheDocument()
+    expect(screen.getByText(/issue history \(1\)/i, { selector: 'summary' })).toBeInTheDocument()
+    expect(screen.getByText('2x')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /agents/i }))
+    await user.click(screen.getByRole('checkbox', { name: /hide disabled/i }))
+    await user.click(screen.getByRole('button', { name: /api keys/i }))
+
+    expect(await screen.findByDisplayValue('tenant_admin')).toBeInTheDocument()
+    expect(screen.queryByText(/repeated failures detected/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/issue history \(/i, { selector: 'summary' })).not.toBeInTheDocument()
   })
 })

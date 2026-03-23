@@ -2479,6 +2479,33 @@ pre {
   font-size: 12px;
 }
 
+.warn-banner-history {
+  margin-top: 10px;
+}
+
+.warn-banner-history summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.warn-banner-history-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.warn-banner-history-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .tenant-alert-actions-cell {
   width: 280px;
 }

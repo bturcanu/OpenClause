@@ -131,6 +131,19 @@ type TenantIssueSummary = {
   stage: string
   message: string
   requestId?: string
+  code?: string
+  status?: number
+}
+
+type TenantIssueHistoryEntry = TenantIssueSummary & {
+  key: string
+  count: number
+  lastSeenAt: string
+}
+
+function repeatedTenantTriageNotice(stage: string, requestId?: string) {
+  const stageLabel = stage.replace(/-/g, ' ')
+  return `Repeated ${stageLabel} failures detected for this tenant. Check the latest request id${requestId ? ` (${requestId})` : ''} and browser console details before retrying.`
 }
 
 function formatUTCDateTime(value?: string | null) {
@@ -174,14 +187,23 @@ function normalizeTenantNotificationConfig(payload: unknown): { config: TenantNo
   if (candidate.notify !== undefined && !Array.isArray(candidate.notify)) return null
 
   const rawNotify = Array.isArray(candidate.notify) ? candidate.notify : []
-  const notify = rawNotify.filter((row): row is NonNullable<TenantNotificationConfig['notify']>[number] => {
-    if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+  const notify: NonNullable<TenantNotificationConfig['notify']> = []
+  rawNotify.forEach((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return
     const item = row as Record<string, unknown>
-    if (typeof item.kind !== 'string' || !item.kind.trim()) return false
-    if (item.url !== undefined && typeof item.url !== 'string') return false
-    if (item.secret_ref !== undefined && typeof item.secret_ref !== 'string') return false
-    if (item.channel !== undefined && typeof item.channel !== 'string') return false
-    return true
+    if (typeof item.kind !== 'string' || !item.kind.trim()) return
+    const kind = item.kind.trim().toLowerCase()
+    if (kind === 'slack') {
+      if (typeof item.channel !== 'string' || !item.channel.trim()) return
+      notify.push({ kind: 'slack', channel: item.channel.trim() })
+      return
+    }
+    if (kind === 'webhook') {
+      if (typeof item.url !== 'string' || !item.url.trim()) return
+      if (typeof item.secret_ref !== 'string' || !item.secret_ref.trim()) return
+      notify.push({ kind: 'webhook', url: item.url.trim(), secret_ref: item.secret_ref.trim() })
+      return
+    }
   })
 
   return {
@@ -394,6 +416,7 @@ export default function TenantDetail() {
   const [analyticsTopAgents] = useState(5)
   const [triageNotice, setTriageNotice] = useState('')
   const [latestIssue, setLatestIssue] = useState<TenantIssueSummary | null>(null)
+  const [issueHistory, setIssueHistory] = useState<TenantIssueHistoryEntry[]>([])
   const issueCounts = useRef<Record<string, number>>({})
 
   function clearTenantIssues(...stages: string[]) {
@@ -404,10 +427,29 @@ export default function TenantDetail() {
         changed = true
       }
     })
-    if (changed && Object.keys(issueCounts.current).length === 0) {
+    if (!changed) return
+
+    const activeStages = new Set(Object.keys(issueCounts.current))
+    let nextHistory: TenantIssueHistoryEntry[] = []
+    setIssueHistory(current => {
+      nextHistory = current.filter(entry => activeStages.has(entry.stage))
+      return nextHistory
+    })
+
+    const remainingStages = Object.keys(issueCounts.current)
+    if (remainingStages.length === 0) {
       setTriageNotice('')
       setLatestIssue(null)
+      return
     }
+
+    const freshest = [...nextHistory].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0]
+    setLatestIssue(freshest ? { stage: freshest.stage, message: freshest.message, requestId: freshest.requestId } : null)
+
+    const freshestRepeated = [...nextHistory]
+      .filter(entry => (issueCounts.current[entry.stage] || 0) >= 2)
+      .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0]
+    setTriageNotice(freshestRepeated ? repeatedTenantTriageNotice(freshestRepeated.stage, freshestRepeated.requestId) : '')
   }
 
   function markTenantIssue(stage: string, requestId?: string) {
@@ -415,21 +457,33 @@ export default function TenantDetail() {
     issueCounts.current[stage] = nextCount
     if (nextCount < 2) return
 
-    const stageLabel = stage.replace(/-/g, ' ')
-    setTriageNotice(
-      `Repeated ${stageLabel} failures detected for this tenant. Check the latest request id${requestId ? ` (${requestId})` : ''} and browser console details before retrying.`,
-    )
+    setTriageNotice(repeatedTenantTriageNotice(stage, requestId))
   }
 
   function logTenantDetailIssue(stage: string, err: unknown, extra: Record<string, unknown> = {}) {
     const message = err instanceof Error ? err.message : String(err || 'Unknown tenant detail failure')
     const requestId = err instanceof Error && 'requestId' in err ? (err as { requestId?: string }).requestId : undefined
+    const code = err instanceof Error && 'code' in err ? (err as { code?: string }).code : undefined
+    const status = err instanceof Error && 'status' in err ? (err as { status?: number }).status : undefined
+    const lastSeenAt = new Date().toISOString()
     markTenantIssue(stage, requestId)
-    setLatestIssue({ stage, message, requestId })
+    setLatestIssue({ stage, message, requestId, code, status })
+    setIssueHistory(current => {
+      const key = stage
+      const existing = current.find(entry => entry.key === key)
+      const next = existing
+        ? current.map(entry => entry.key === key ? { ...entry, message, requestId, code, status, count: entry.count + 1, lastSeenAt } : entry)
+        : [{ key, stage, message, requestId, code, status, count: 1, lastSeenAt }, ...current]
+      return next
+        .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+        .slice(0, 5)
+    })
     console.warn('[openclause-console] tenant detail issue', {
       tenantId: id,
       stage,
       requestId,
+      code,
+      status,
       message,
       ...extra,
     })
@@ -437,15 +491,33 @@ export default function TenantDetail() {
 
   const tenantDiagnostics = useMemo(() => {
     if (!latestIssue) return ''
-    return [
+    const latestCount = issueHistory.find(entry => entry.stage === latestIssue.stage)?.count || 1
+    const lines = [
       'OpenClause tenant detail diagnostics',
       `tenant_id=${id || ''}`,
       `active_tab=${activeTab}`,
       `stage=${latestIssue.stage}`,
       `request_id=${latestIssue.requestId || ''}`,
+      `error_code=${latestIssue.code || ''}`,
+      `status=${latestIssue.status ?? ''}`,
+      `occurrences=${latestCount}`,
       `message=${latestIssue.message}`,
-    ].join('\n')
-  }, [activeTab, id, latestIssue])
+    ]
+    if (issueHistory.length > 0) {
+      lines.push('', 'active_issues:')
+      issueHistory.forEach((entry, index) => {
+        lines.push(
+          `${index + 1}. stage=${entry.stage}; count=${entry.count}; request_id=${entry.requestId || ''}; error_code=${entry.code || ''}; status=${entry.status ?? ''}; last_seen=${entry.lastSeenAt}; message=${entry.message}`,
+        )
+      })
+    }
+    return lines.join('\n')
+  }, [activeTab, id, issueHistory, latestIssue])
+
+  const latestIssueCount = useMemo(
+    () => (latestIssue ? issueHistory.find(entry => entry.stage === latestIssue.stage)?.count || 1 : 0),
+    [issueHistory, latestIssue],
+  )
 
   const visibleAgents = useMemo(
     () =>
@@ -1005,8 +1077,26 @@ export default function TenantDetail() {
               <div className="warn-banner-meta">
                 <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
                 {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+                {latestIssue.code ? <span>Error code: <code className="mono">{latestIssue.code}</code></span> : null}
+                {latestIssueCount > 0 ? <span>Occurrences: <code className="mono">{latestIssueCount}</code></span> : null}
               </div>
             </>
+          ) : null}
+          {issueHistory.length > 0 ? (
+            <details className="warn-banner-history">
+              <summary>Issue history ({issueHistory.length})</summary>
+              <ul className="warn-banner-history-list">
+                {issueHistory.map(entry => (
+                  <li key={entry.key}>
+                    <code className="mono">{entry.stage}</code>
+                    <span>{entry.message}</span>
+                    {entry.requestId ? <code className="mono">{entry.requestId}</code> : null}
+                    {entry.code ? <code className="mono">{entry.code}</code> : null}
+                    {entry.count > 1 ? <span className="badge badge-yellow">{entry.count}x</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </details>
           ) : null}
         </div>
       ) : null}
@@ -1020,7 +1110,25 @@ export default function TenantDetail() {
           <div className="warn-banner-meta">
             <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
             {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+            {latestIssue.code ? <span>Error code: <code className="mono">{latestIssue.code}</code></span> : null}
+            {latestIssueCount > 0 ? <span>Occurrences: <code className="mono">{latestIssueCount}</code></span> : null}
           </div>
+          {issueHistory.length > 0 ? (
+            <details className="warn-banner-history">
+              <summary>Issue history ({issueHistory.length})</summary>
+              <ul className="warn-banner-history-list">
+                {issueHistory.map(entry => (
+                  <li key={entry.key}>
+                    <code className="mono">{entry.stage}</code>
+                    <span>{entry.message}</span>
+                    {entry.requestId ? <code className="mono">{entry.requestId}</code> : null}
+                    {entry.code ? <code className="mono">{entry.code}</code> : null}
+                    {entry.count > 1 ? <span className="badge badge-yellow">{entry.count}x</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </div>
       ) : null}
 

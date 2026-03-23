@@ -80,3 +80,34 @@ func FuzzParseSinceReturnsFiniteTime(f *testing.F) {
 		}
 	})
 }
+
+func FuzzParseRangeDurationAlwaysReturnsPositiveDuration(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"24",
+		"48h",
+		"7d",
+		"0",
+		"-5",
+		"999999999999999999999",
+		"not-a-duration",
+		"  12h  ",
+		"1.5d",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		req := httptest.NewRequest("GET", "/admin/tenants/demo/analytics/summary", nil)
+		if raw != "" {
+			values := url.Values{}
+			values.Set("range", raw)
+			req.URL.RawQuery = values.Encode()
+		}
+
+		got := parseRangeDuration(req, 24*time.Hour)
+		if got <= 0 {
+			t.Fatalf("parseRangeDuration(%q) returned non-positive duration %s", raw, got)
+		}
+	})
+}
