@@ -8,6 +8,7 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     css: true,
     globals: true,
+    include: ['src/**/*.test.{ts,tsx}'],
   },
   server: {
     port: 3000,

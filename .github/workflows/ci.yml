@@ -34,6 +34,47 @@ jobs:
       - name: Run vet
         run: go vet ./...
 
+  console-ui:
+    name: Console UI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+
+      - name: Install console dependencies
+        run: npm ci --prefix web/console
+
+      - name: Run console tests
+        run: npm --prefix web/console run test
+
+      - name: Build console
+        run: npm --prefix web/console run build
+
+  python-sdk-39:
+    name: Python SDK 3.9
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python SDK
+        run: python -m pip install -e sdk/python
+
+      - name: Verify core imports
+        run: python -c "import openclause; import openclause.client; import openclause.models"
+
   policy-test:
     name: Policy Test
     runs-on: ubuntu-latest
@@ -49,6 +90,36 @@ jobs:
 
       - name: Run OPA tests
         run: opa test policy/bundles/v0 policy/tests -v
+
+  browser-smoke:
+    name: Browser Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+
+      - name: Install console dependencies
+        run: npm ci --prefix web/console
+
+      - name: Install Playwright browser
+        run: npx --prefix web/console playwright install --with-deps chromium
+
+      - name: Start stack
+        run: ./scripts/dev.sh
+
+      - name: Seed smoke data
+        run: ./scripts/demo.sh
+
+      - name: Run browser smoke tests
+        run: npm --prefix web/console run test:e2e
 
   lint:
     name: Lint
