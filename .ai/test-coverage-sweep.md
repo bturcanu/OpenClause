@@ -88,6 +88,6 @@ Legend:
 
 ## True Backlog
 
-- Review the first Linux `browser-smoke` CI artifacts and harden selectors only if the real stack differs from local macOS repro.
-- Deepen the remaining thin session-detail and tenant-detail UI branches beyond the now-covered malformed contract, stale-state, export, and repeated-failure-triage paths.
-- Expand the current auth/date/analytics fuzz smokes into broader property/fuzz coverage where it buys real signal.
+- Keep watching future Linux `browser-smoke` CI artifacts and only harden selectors if a later real stack/runtime difference appears; the first uploaded Linux run was already green.
+- Deepen the remaining thin session-detail and tenant-detail UI branches beyond the now-covered malformed contract, stale-state, malformed alert/notification payloads, export, and repeated-failure-triage paths.
+- Expand the current auth/date/analytics fuzz smokes and deterministic query/bucketing edge matrices into broader property/fuzz coverage where it buys real signal.

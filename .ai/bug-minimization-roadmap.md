@@ -26,7 +26,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 - Strong backend coverage exists across console/auth/store/evidence/approvals/alerts/gateway/SDKs.
 - Console UI now has a `Vitest + React Testing Library` harness with focused integration coverage.
-- `web/console` currently passes `17` test files / `97` tests locally on this branch.
+- `web/console` currently passes `17` test files / `102` tests locally on this branch.
 - A tiny Playwright smoke pack now covers the 4 highest-value browser flows in CI (`login -> overview`, `tenant create/agent/key`, `audit trail -> event detail`, `sessions -> execution linkage`).
 - The browser smoke pack now also passes locally on this macOS host when Playwright uses the installed Google Chrome channel outside the sandbox, which removes the old bundled-Chromium blocker for manual repro work.
 - GitHub Actions now runs the full repo verification matrix plus a short Go fuzz-smoke layer for analytics, auth-header, and timestamp parsers.
@@ -61,8 +61,10 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Added repeated API-failure telemetry in [`web/console/src/api.ts`](../web/console/src/api.ts) so the console now emits structured warnings after the third consecutive failure for the same method/path and resets that counter after a success.
 - Added a tiny Playwright browser smoke pack plus CI jobs for `console-ui`, `browser-smoke`, and explicit Python 3.9 SDK install/import verification.
 - Hardened the browser smoke pack after the first real local run, and added Playwright HTML/test-result artifact upload in CI so the first Linux failures are inspectable instead of opaque.
+- Reviewed the first uploaded Linux `browser-smoke` artifact (`3d63373456c090aaea428c0f1067ca740b5e1eff`) and confirmed it was already green (`4/4`), so there was no CI-specific selector drift to harden from that run.
 - Added deterministic and fuzz-backed analytics parser coverage for `range`, `bucket_minutes`, and `top_agents`.
 - Expanded deterministic edge coverage into query/date helpers and analytics bucketing, including half-hour bucket integration coverage in `pkg/console`.
+- Extended the deterministic edge layer again with non-finite query-value filtering in the shared query builder plus two-hour analytics bucket invariants.
 - Bound the remaining high-traffic console form labels to their controls and added label-driven tests so those accessibility regressions now break CI.
 - Fixed stale notification-config state in tenant detail so failed refetches no longer leave misleading routing values on screen.
 - Fixed session-detail and tenant-detail race/contract edges:
@@ -84,6 +86,9 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Corrected tracker drift: the approvals notifier malformed-webhook-row fail-closed coverage already exists, and Python SDK metadata now declares `requires-python >=3.9`.
 - Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) previously trusted “successful” summary payloads too much, so malformed wrapped responses like `{ "session": null }` could still render a broken session-detail shell instead of failing closed.
 - Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) treated malformed fulfilled timeline payloads as “no events matched your filters,” which was misleading; the page now reports a timeline load failure instead and logs the contract issue.
+- Fixed: [`web/console/src/ui.tsx`](../web/console/src/ui.tsx) used to serialize `NaN` / `Infinity` into query strings, which could leak obviously invalid filter values into URLs; `buildQuery()` now drops non-finite numbers.
+- Fixed: [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) trusted fulfilled notification-config and tenant-alert payloads too much; malformed notification config now fails closed, malformed alert rows are dropped with an honest contract warning, and operators get copyable “Latest diagnostics” on the first visible failure instead of only after repeats.
+- Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) now distinguishes between “all timeline rows were malformed” vs “some rows were ignored,” preserving valid rows when possible and failing closed when none are usable.
 - Fixed: [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) and [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) only pushed repeated-failure details into the browser console; the UI now exposes copyable diagnostics so operators can paste the latest stage/request ID into bug reports without digging through DevTools.
 - Fixed: [`cmd/console-api/tenant_analytics_handlers.go`](../cmd/console-api/tenant_analytics_handlers.go) let huge raw `range` hour values overflow `time.Duration` negative before the handler clamp, which fuzzing reproduced with `range=2700000`.
 - Fixed: [`web/console/vite.config.ts`](../web/console/vite.config.ts) needed an explicit `src/**/*.test.{ts,tsx}` include so Vitest would not try to execute the Playwright smoke spec as a unit suite.
@@ -201,8 +206,8 @@ Definition of done:
 
 ### P0
 
-- Review the first Linux `browser-smoke` CI artifacts once they land and do one more selector-hardening pass only if CI reveals stack-specific drift.
-- Finish the last thin session-detail and tenant-detail branches that still rely on smoke-plus-one-action coverage after the newer malformed-timeline, export, partial-failure, and repeated-failure-triage tests.
+- Keep watching future Linux `browser-smoke` artifacts and only harden selectors if a later CI/runtime difference appears; the first uploaded Linux run was already green (`4/4`).
+- Finish the last thin session-detail and tenant-detail branches that still rely on smoke-plus-one-action coverage after the newer malformed-timeline, malformed-alert/notification, export, partial-failure, and repeated-failure-triage tests.
 - Add regression tests whenever local/manual console verification finds a mismatch.
 
 ### P1
