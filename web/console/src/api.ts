@@ -149,6 +149,21 @@ export function toQueryTimestamp(value: string | undefined | null): string {
   return text
 }
 
+export function toLocalDateTimeInput(value: string | undefined | null): string {
+  const text = (value || '').trim()
+  if (!text) return ''
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text)) {
+    return text
+  }
+
+  const parsed = new Date(text)
+  if (Number.isNaN(parsed.getTime())) return text
+
+  const pad = (input: number) => String(input).padStart(2, '0')
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`
+}
+
 export function formatDate(value: string | undefined | null, style: 'full' | 'date' = 'full'): string {
   if (!value) return '—';
   const d = new Date(value);

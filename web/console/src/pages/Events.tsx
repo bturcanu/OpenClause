@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { APIClientError, api, formatDate, toQueryTimestamp } from '../api'
+import { useSearchParams } from 'react-router-dom'
+import { APIClientError, api, formatDate, toLocalDateTimeInput, toQueryTimestamp } from '../api'
 import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, buildQuery, decisionTone, downloadBlob, formatRequester, shortID } from '../ui'
 
 type Event = {
@@ -49,11 +50,30 @@ const defaultFilters: EventFilters = {
   until: '',
 }
 
+function filtersFromSearchParams(searchParams: URLSearchParams): EventFilters {
+  return {
+    ...defaultFilters,
+    tenant_id: searchParams.get('tenant_id') || '',
+    user_id: searchParams.get('user_id') || '',
+    agent_id: searchParams.get('agent_id') || '',
+    trace_id: searchParams.get('trace_id') || '',
+    tool: searchParams.get('tool') || '',
+    action: searchParams.get('action') || '',
+    decision: searchParams.get('decision') || '',
+    session_id: searchParams.get('session_id') || '',
+    risk_min: searchParams.get('risk_min') || '',
+    risk_max: searchParams.get('risk_max') || '',
+    since: toLocalDateTimeInput(searchParams.get('since')),
+    until: toLocalDateTimeInput(searchParams.get('until')),
+  }
+}
+
 export default function Events() {
+  const [searchParams] = useSearchParams()
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [filters, setFilters] = useState<EventFilters>(defaultFilters)
+  const [filters, setFilters] = useState<EventFilters>(() => filtersFromSearchParams(searchParams))
   const fetchSeq = useRef(0)
   const [page, setPage] = useState(0)
   const limit = 25
@@ -105,6 +125,15 @@ export default function Events() {
   useEffect(() => {
     void fetchEvents()
   }, [fetchEvents])
+
+  useEffect(() => {
+    const nextFilters = filtersFromSearchParams(searchParams)
+    setFilters(current => {
+      const matches = (Object.keys(nextFilters) as Array<keyof EventFilters>).every(key => current[key] === nextFilters[key])
+      return matches ? current : nextFilters
+    })
+    setPage(0)
+  }, [searchParams])
 
   function updateFilter(key: keyof EventFilters, value: string) {
     setFilters(current => ({ ...current, [key]: value }))

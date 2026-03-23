@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, StatCard, TableSkeleton } from '../ui'
+import { EmptyState, InlineErrorState, PageHeaderBlock, StatCard, TableSkeleton, buildQuery } from '../ui'
 
 interface OverviewData {
   total_events: number
@@ -100,6 +100,16 @@ export default function Overview() {
   }, [])
 
   const maxCount = Math.max(...timeseries.map(bucket => bucket.total || 0), 1)
+  const bucketIntervalMs = (() => {
+    const parsedTimes = timeseries
+      .map(bucket => new Date(bucket.bucket).getTime())
+      .filter(value => !Number.isNaN(value))
+    for (let index = 1; index < parsedTimes.length; index += 1) {
+      const delta = parsedTimes[index] - parsedTimes[index - 1]
+      if (delta > 0) return delta
+    }
+    return 60 * 60 * 1000
+  })()
   const activeBucketIndex = timeseries.length === 0
     ? null
     : Math.min(pinnedBucketIndex ?? hoveredBucketIndex ?? (timeseries.length - 1), timeseries.length - 1)
@@ -107,6 +117,29 @@ export default function Overview() {
   const pinnedBucket = pinnedBucketIndex == null ? null : timeseries[Math.min(pinnedBucketIndex, timeseries.length - 1)]
   const scaleTicks = Array.from(new Set([maxCount, Math.ceil(maxCount / 2), 0])).sort((a, b) => b - a)
   const midpointBucket = timeseries.length > 2 ? timeseries[Math.floor((timeseries.length - 1) / 2)] : null
+  const activeBucketWindow = (() => {
+    if (!activeBucket) return null
+    const start = new Date(activeBucket.bucket)
+    if (Number.isNaN(start.getTime())) return null
+    const end = new Date(start.getTime() + bucketIntervalMs)
+    const formatWindow = new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+    return {
+      start,
+      end,
+      label: `${formatWindow.format(start)} – ${formatWindow.format(end)}`,
+    }
+  })()
+  const pinnedAuditTrailQuery = pinnedBucket && activeBucketWindow
+    ? buildQuery({
+      since: activeBucketWindow.start.toISOString(),
+      until: activeBucketWindow.end.toISOString(),
+    })
+    : ''
 
   return (
     <div>
@@ -135,7 +168,7 @@ export default function Overview() {
               <div className="event-volume-summary">
                 <span className="event-volume-total">{activeBucket.total}</span>
                 <span>
-                  {activeBucket.total === 1 ? 'event' : 'events'} on {formatDate(activeBucket.bucket, 'date')}
+                  {activeBucket.total === 1 ? 'event' : 'events'} in {activeBucketWindow?.label || formatDate(activeBucket.bucket)}
                 </span>
               </div>
             ) : null}
@@ -157,10 +190,30 @@ export default function Overview() {
                     index === hoveredBucketIndex ? 'is-hovered' : '',
                     index === pinnedBucketIndex ? 'is-pinned' : '',
                   ].filter(Boolean).join(' ')}
-                  title={`${formatDate(bucket.bucket, 'date')}: ${bucket.total} events`}
-                  aria-label={`${bucket.total} events on ${formatDate(bucket.bucket, 'date')}`}
+                  title={(() => {
+                    const start = new Date(bucket.bucket)
+                    const end = new Date(start.getTime() + bucketIntervalMs)
+                    return Number.isNaN(start.getTime())
+                      ? `${bucket.total} events`
+                      : `${new Intl.DateTimeFormat(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      }).format(start)} – ${new Intl.DateTimeFormat(undefined, {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      }).format(end)}: ${bucket.total} events`
+                  })()}
+                  aria-label={(() => {
+                    const start = new Date(bucket.bucket)
+                    const end = new Date(start.getTime() + bucketIntervalMs)
+                    return Number.isNaN(start.getTime())
+                      ? `${bucket.total} events`
+                      : `${bucket.total} events between ${start.toLocaleString()} and ${end.toLocaleString()}`
+                  })()}
                   aria-pressed={index === pinnedBucketIndex}
-                  onClick={() => setPinnedBucketIndex(index)}
+                  onClick={() => setPinnedBucketIndex(current => current === index ? null : index)}
                   onMouseEnter={() => setHoveredBucketIndex(index)}
                   onMouseLeave={() => setHoveredBucketIndex(null)}
                   onFocus={() => setHoveredBucketIndex(index)}
@@ -183,12 +236,17 @@ export default function Overview() {
               <div>
                 <div className="event-volume-selected-label">Selected</div>
                 <div className="event-volume-selected-value">
-                  {formatDate(pinnedBucket.bucket, 'date')} — {pinnedBucket.total} {pinnedBucket.total === 1 ? 'event' : 'events'}
+                  {activeBucketWindow?.label || formatDate(pinnedBucket.bucket)} — {pinnedBucket.total} {pinnedBucket.total === 1 ? 'event' : 'events'}
                 </div>
               </div>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => setPinnedBucketIndex(null)}>
-                Clear selection
-              </button>
+              <div className="event-volume-selected-actions">
+                <Link to={`/events${pinnedAuditTrailQuery}`} className="btn btn-primary btn-sm">
+                  View events in Audit Trail
+                </Link>
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => setPinnedBucketIndex(null)}>
+                  Clear selection
+                </button>
+              </div>
             </div>
           ) : null}
         </div>
