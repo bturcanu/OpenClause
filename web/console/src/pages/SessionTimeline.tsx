@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { APIClientError, api, formatDate } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, StatCard, buildQuery, copyText, decisionTone, downloadBlob, formatRequester, noneText } from '../ui'
+import { CopyIconButton, EmptyState, InlineErrorState, PageHeaderBlock, StatCard, buildQuery, copyText, decisionTone, downloadBlob, formatRequester, noneText } from '../ui'
 
 type SessionSummary = {
   id: string
@@ -214,17 +214,6 @@ export default function SessionTimeline() {
     }
   }
 
-  async function handleCopyValue(label: string, value: string) {
-    try {
-      await copyText(value)
-      setCopyStatus(`${label} copied`)
-      window.setTimeout(() => setCopyStatus(''), 1800)
-    } catch {
-      setCopyStatus('Copy failed')
-      window.setTimeout(() => setCopyStatus(''), 1800)
-    }
-  }
-
   async function exportSession(kind: 'csv' | 'json') {
     try {
       const query = buildQuery({ tenant_id: tenantID })
@@ -285,8 +274,8 @@ export default function SessionTimeline() {
           <p className="table-subtext">
             {ambiguityMessage || 'This session id exists in multiple tenants for your platform-admin view.'}
           </p>
-          <div className="form-inline mt-16">
-            <div className="form-group" style={{ minWidth: 320 }}>
+            <div className="form-inline mt-16">
+            <div className="form-group session-tenant-picker">
               <label>Tenant</label>
               <select value={selectedTenantCandidate} onChange={e => handleTenantCandidateChange(e.target.value)}>
                 <option value="">Choose a tenant</option>
@@ -321,45 +310,35 @@ export default function SessionTimeline() {
               <span className="meta-label">Session</span>
               <div className="identity-copy-row">
                 <code className="mono" title={noneText(session.id)}>{noneText(session.id)}</code>
-                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Session ID', session.id)}>
-                  Copy
-                </button>
+                <CopyIconButton text={session.id} label="Session ID" />
               </div>
             </div>
             <div className="identity-card">
               <span className="meta-label">Tenant</span>
               <div className="identity-copy-row">
                 <code className="mono" title={noneText(session.tenant_id)}>{noneText(session.tenant_id)}</code>
-                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Tenant ID', session.tenant_id)}>
-                  Copy
-                </button>
+                <CopyIconButton text={session.tenant_id} label="Tenant ID" />
               </div>
             </div>
             <div className="identity-card">
               <span className="meta-label">Agent</span>
               <div className="identity-copy-row">
                 <code className="mono" title={noneText(session.agent_id)}>{noneText(session.agent_id)}</code>
-                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Agent ID', session.agent_id)}>
-                  Copy
-                </button>
+                <CopyIconButton text={session.agent_id} label="Agent ID" />
               </div>
             </div>
             <div className="identity-card">
               <span className="meta-label">User ID</span>
               <div className="identity-copy-row">
-                <code className="mono">{noneText(session.user_id)}</code>
-                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('User ID', noneText(session.user_id))} disabled={!session.user_id}>
-                  Copy
-                </button>
+                <code className="mono" title={noneText(session.user_id)}>{noneText(session.user_id)}</code>
+                <CopyIconButton text={session.user_id} label="User ID" disabled={!session.user_id} />
               </div>
             </div>
             <div className="identity-card">
               <span className="meta-label">Trace</span>
               <div className="identity-copy-row">
                 <code className="mono" title={noneText(session.trace_id)}>{noneText(session.trace_id)}</code>
-                <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Trace ID', noneText(session.trace_id))} disabled={!session.trace_id}>
-                  Copy
-                </button>
+                <CopyIconButton text={session.trace_id} label="Trace ID" disabled={!session.trace_id} />
               </div>
             </div>
           </div>
@@ -520,10 +499,8 @@ export default function SessionTimeline() {
                       <div className="mini-detail-row">
                         <span className="meta-label">Approval ID</span>
                         <div className="identity-copy-row">
-                          <code className="mono">{event.approval.id}</code>
-                          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Approval ID', event.approval!.id)}>
-                            Copy
-                          </button>
+                          <code className="mono" title={event.approval.id}>{event.approval.id}</code>
+                          <CopyIconButton text={event.approval.id} label="Approval ID" />
                         </div>
                       </div>
                       <div className="mini-detail-row">
@@ -558,10 +535,8 @@ export default function SessionTimeline() {
                       <div className="mini-detail-row">
                         <span className="meta-label">Execution event</span>
                         <div className="identity-copy-row">
-                          <code className="mono">{event.execution.event_id}</code>
-                          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Execution event ID', event.execution!.event_id)}>
-                            Copy
-                          </button>
+                          <code className="mono" title={event.execution.event_id}>{event.execution.event_id}</code>
+                          <CopyIconButton text={event.execution.event_id} label="Execution event ID" />
                         </div>
                       </div>
                       <div className="mini-detail-row">

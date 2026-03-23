@@ -1,8 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useSearchParams } from 'react-router-dom'
-import { APIClientError, api, formatDate, toLocalDateTimeInput, toQueryTimestamp } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, buildQuery, decisionTone, downloadBlob, formatRequester, shortID } from '../ui'
+import { APIClientError, api, toLocalDateTimeInput, toQueryTimestamp } from '../api'
+import {
+  ActiveFiltersBar,
+  CopyIconButton,
+  InlineErrorState,
+  PageHeaderBlock,
+  SortHeader,
+  TableEmptyStateRow,
+  TableFrame,
+  TableSkeleton,
+  applySort,
+  buildQuery,
+  compareDate,
+  compareNumber,
+  compareText,
+  decisionTone,
+  downloadBlob,
+  formatRequester,
+  formatTimeWithTitle,
+  shortID,
+  type SortState,
+} from '../ui'
 
 type Event = {
   event_id: string
@@ -69,13 +89,14 @@ function filtersFromSearchParams(searchParams: URLSearchParams): EventFilters {
 }
 
 export default function Events() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState<EventFilters>(() => filtersFromSearchParams(searchParams))
   const fetchSeq = useRef(0)
   const [page, setPage] = useState(0)
+  const [sortState, setSortState] = useState<SortState<'received_at' | 'risk_score' | 'decision'>>({ key: null, dir: 'desc' })
   const limit = 25
 
   const selectedTenant = filters.tenant_id.trim()
@@ -135,15 +156,59 @@ export default function Events() {
     setPage(0)
   }, [searchParams])
 
+  function syncFiltersToURL(nextFilters: EventFilters) {
+    const next = new URLSearchParams()
+    ;(Object.entries(nextFilters) as Array<[keyof EventFilters, string]>).forEach(([key, value]) => {
+      const trimmed = value.trim()
+      if (!trimmed) return
+      if (key === 'since' || key === 'until') {
+        const resolved = toQueryTimestamp(trimmed)
+        if (resolved) next.set(key, resolved)
+        return
+      }
+      next.set(key, trimmed)
+    })
+    setSearchParams(next)
+  }
+
   function updateFilter(key: keyof EventFilters, value: string) {
-    setFilters(current => ({ ...current, [key]: value }))
+    const nextFilters = { ...filters, [key]: value }
+    setFilters(nextFilters)
+    syncFiltersToURL(nextFilters)
     setPage(0)
   }
 
   function clearFilters() {
     setFilters(defaultFilters)
+    setSearchParams(new URLSearchParams())
     setPage(0)
   }
+
+  const visibleEvents = useMemo(() => {
+    if (!sortState.key) return events
+    return [...events].sort((left, right) => {
+      switch (sortState.key) {
+        case 'received_at':
+          return applySort(compareDate(left.received_at, right.received_at), sortState.dir)
+        case 'risk_score':
+          return applySort(compareNumber(left.risk_score, right.risk_score), sortState.dir)
+        case 'decision':
+          return applySort(compareText(left.decision, right.decision), sortState.dir)
+        default:
+          return 0
+      }
+    })
+  }, [events, sortState])
+
+  const activeFilterChips = useMemo(() => (
+    (Object.entries(filters) as Array<[keyof EventFilters, string]>)
+      .filter(([, value]) => value.trim() !== '')
+      .map(([key, value]) => ({
+        key,
+        label: `${key.replace(/_/g, ' ')}: ${value.trim()}`,
+        onRemove: () => updateFilter(key, ''),
+      }))
+  ), [filters])
 
   function exportQuery() {
     return buildQuery({
@@ -190,6 +255,10 @@ export default function Events() {
     } catch (err) {
       setError(exportErrorMessage(err, 'bundle'))
     }
+  }
+
+  function updateSort(key: 'received_at' | 'risk_score' | 'decision', dir: 'asc' | 'desc') {
+    setSortState({ key, dir })
   }
 
   return (
@@ -285,70 +354,139 @@ export default function Events() {
         </div>
       </div>
 
-      <div className="table-container table-sticky">
+      <ActiveFiltersBar
+        resultCount={visibleEvents.length}
+        resultLabel={visibleEvents.length === 1 ? 'event' : 'events'}
+        chips={activeFilterChips}
+        onClearAll={hasActiveFilters ? clearFilters : undefined}
+        note={sortState.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
+      />
+
+      <TableFrame stickyHeader>
         <table>
           <thead>
             <tr>
-              <th>Event</th>
+              <th>Tool call</th>
               <th>Requested by</th>
-              <th>Tool</th>
-              <th>Decision</th>
               <th>Tenant</th>
-              <th>Session</th>
-              <th>Time</th>
+              <th>
+                <SortHeader label="Decision" sortKey="decision" sortState={sortState} onSortChange={updateSort} />
+              </th>
+              <th className="col-num">
+                <SortHeader label="Risk" sortKey="risk_score" sortState={sortState} onSortChange={updateSort} className="col-num" />
+              </th>
+              <th className="col-time">
+                <SortHeader label="Time" sortKey="received_at" sortState={sortState} onSortChange={updateSort} defaultDir="desc" className="col-time" />
+              </th>
+              <th className="table-action-col"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <TableSkeleton columns={7} rows={6} />
-            ) : events.length === 0 ? (
-              <tr>
-                <td colSpan={7}>
-                  <EmptyState
-                    icon="▤"
-                    title={hasActiveFilters ? 'No audit events match these filters' : 'No audit events yet'}
-                    description={hasActiveFilters ? 'Adjust the tenant, user, agent, session, or time filters to widen the search.' : 'Tool calls will appear here once agents start sending governed runs through the gateway.'}
-                    action={hasActiveFilters ? <button className="btn btn-outline btn-sm" type="button" onClick={clearFilters}>Clear filters</button> : undefined}
-                  />
-                </td>
-              </tr>
+            ) : visibleEvents.length === 0 ? (
+              <TableEmptyStateRow
+                colSpan={7}
+                icon="▤"
+                title={hasActiveFilters ? 'No audit events match these filters' : 'No audit events yet'}
+                description={hasActiveFilters ? 'Adjust the tenant, user, agent, session, or time filters to widen the search.' : 'Tool calls will appear here once agents start sending governed runs through the gateway.'}
+                action={hasActiveFilters ? <button className="btn btn-outline btn-sm" type="button" onClick={clearFilters}>Clear filters</button> : undefined}
+              />
             ) : (
-              events.map(event => (
+              visibleEvents.map(event => {
+                const received = formatTimeWithTitle(event.received_at)
+                return (
                 <tr key={event.event_id}>
                   <td>
-                    <Link to={`/events/${event.event_id}`} className="table-primary">
-                      {shortID(event.event_id)}
-                    </Link>
-                    <div className="table-subtext">Trace {event.trace_id ? shortID(event.trace_id) : '(none)'}</div>
+                    <div className="table-primary-cell">
+                      <Link to={`/events/${event.event_id}`} className="table-primary table-primary-link" title={`${event.tool}.${event.action}`}>
+                        {event.tool}.{event.action}
+                      </Link>
+                      <div className="inline-value-copy">
+                        <code className="mono" title={event.event_id}>{shortID(event.event_id)}</code>
+                        <CopyIconButton text={event.event_id} label="Event ID" />
+                      </div>
+                      <div className="table-tertiary">
+                        <button className="filter-chip filter-chip-inline" type="button" onClick={() => updateFilter('tool', event.tool)}>
+                          {event.tool}
+                        </button>
+                        <button className="filter-chip filter-chip-inline" type="button" onClick={() => updateFilter('action', event.action)}>
+                          {event.action}
+                        </button>
+                        {event.trace_id ? (
+                          <button className="filter-chip filter-chip-inline" type="button" onClick={() => updateFilter('trace_id', event.trace_id || '')} title={event.trace_id}>
+                            Trace {shortID(event.trace_id, 10)}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
                   </td>
                   <td>
-                    <div className="table-primary">{formatRequester(event.user_id, event.user_name, event.user_email, event.agent_id)}</div>
-                    <div className="table-subtext">Agent <span className="mono">{event.agent_id || '(none)'}</span></div>
+                    <div className="table-primary-cell">
+                      <div className="table-primary">{formatRequester(event.user_id, event.user_name, event.user_email, event.agent_id)}</div>
+                      <div className="table-subtext">Agent <span className="mono" title={event.agent_id || '(none)'}>{event.agent_id || '(none)'}</span></div>
+                      <div className="table-tertiary">
+                        {event.user_id ? (
+                          <button className="filter-chip filter-chip-inline" type="button" onClick={() => updateFilter('user_id', event.user_id || '')} title={event.user_id}>
+                            User {shortID(event.user_id, 10)}
+                          </button>
+                        ) : null}
+                        <button className="filter-chip filter-chip-inline" type="button" onClick={() => updateFilter('agent_id', event.agent_id || '')} title={event.agent_id || '(none)'}>
+                          Agent {shortID(event.agent_id, 10)}
+                        </button>
+                      </div>
+                    </div>
                   </td>
                   <td>
-                    <div className="table-primary">{event.tool}.{event.action}</div>
-                    <div className="table-subtext">Risk {event.risk_score}</div>
+                    <div className="table-primary-cell">
+                      <div className="inline-value-copy">
+                        <code className="mono" title={event.tenant_id}>{shortID(event.tenant_id, 12)}</code>
+                        <CopyIconButton text={event.tenant_id} label="Tenant ID" />
+                      </div>
+                      <div className="table-tertiary">
+                        <button className="filter-chip filter-chip-inline" type="button" onClick={() => updateFilter('tenant_id', event.tenant_id)} title={event.tenant_id}>
+                          Tenant {shortID(event.tenant_id, 10)}
+                        </button>
+                        {event.session_id ? (
+                          <div className="inline-value-copy">
+                            <button className="filter-chip filter-chip-inline" type="button" onClick={() => updateFilter('session_id', event.session_id || '')} title={event.session_id}>
+                              Session {shortID(event.session_id, 10)}
+                            </button>
+                            <CopyIconButton text={event.session_id} label="Session ID" />
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
                   </td>
                   <td>
-                    <span className={`badge badge-${decisionTone(event.decision)}`}>{event.decision}</span>
+                    <button className={`badge badge-${decisionTone(event.decision)} badge-button`} type="button" onClick={() => updateFilter('decision', event.decision)}>
+                      {event.decision}
+                    </button>
                   </td>
-                  <td>
-                    <span className="mono">{shortID(event.tenant_id, 12)}</span>
+                  <td className="col-num">{event.risk_score}</td>
+                  <td className="col-time" title={received.title}>{received.label}</td>
+                  <td className="table-action-cell">
+                    <div className="table-primary-cell table-action-stack">
+                      <Link to={`/events/${event.event_id}`} className="btn btn-outline btn-sm">
+                        Open event
+                      </Link>
+                      {event.session_id ? (
+                        <Link
+                          to={`/sessions/${encodeURIComponent(event.session_id)}${buildQuery({ tenant_id: event.tenant_id })}`}
+                          className="link-button"
+                          title={event.session_id}
+                        >
+                          Open session
+                        </Link>
+                      ) : null}
+                    </div>
                   </td>
-                  <td>
-                    {event.session_id ? (
-                      <Link to={`/sessions/${encodeURIComponent(event.session_id)}${buildQuery({ tenant_id: event.tenant_id })}`} className="mono">{shortID(event.session_id)}</Link>
-                    ) : (
-                      '(none)'
-                    )}
-                  </td>
-                  <td>{formatDate(event.received_at)}</td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
 
       <div className="pagination">
         <button className="btn btn-outline btn-sm" disabled={page === 0 || loading} onClick={() => setPage(current => current - 1)}>

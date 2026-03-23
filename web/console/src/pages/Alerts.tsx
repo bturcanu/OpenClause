@@ -1,6 +1,23 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, shortID } from '../ui'
+import {
+  ActiveFiltersBar,
+  CopyIconButton,
+  InlineErrorState,
+  PageHeaderBlock,
+  SortHeader,
+  TableEmptyStateRow,
+  TableFrame,
+  TableSkeleton,
+  applySort,
+  compareDate,
+  compareNumber,
+  compareText,
+  formatTimeWithTitle,
+  shortID,
+  type SortState,
+} from '../ui'
 
 interface AlertRule {
   id: string
@@ -36,6 +53,11 @@ export default function Alerts() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ tenantId: '', name: '', n: 3, mMinutes: 5, enabled: true })
   const [creating, setCreating] = useState(false)
+  const [ruleSort, setRuleSort] = useState<SortState<'tenant_id' | 'name' | 'status' | 'created_at'>>({ key: null, dir: 'asc' })
+  const [eventSort, setEventSort] = useState<SortState<'status' | 'severity' | 'attempt_count' | 'created_at' | 'next_attempt_at'>>({
+    key: null,
+    dir: 'desc',
+  })
 
   useEffect(() => {
     const token = localStorage.getItem('oc_token')
@@ -119,6 +141,44 @@ export default function Alerts() {
       setCreating(false)
     }
   }
+
+  const visibleRules = useMemo(() => {
+    if (!ruleSort.key) return rules
+    return [...rules].sort((left, right) => {
+      switch (ruleSort.key) {
+        case 'tenant_id':
+          return applySort(compareText(left.tenant_id, right.tenant_id), ruleSort.dir)
+        case 'name':
+          return applySort(compareText(left.name, right.name), ruleSort.dir)
+        case 'status':
+          return applySort(compareText(left.enabled ? 'active' : 'disabled', right.enabled ? 'active' : 'disabled'), ruleSort.dir)
+        case 'created_at':
+          return applySort(compareDate(left.created_at, right.created_at), ruleSort.dir)
+        default:
+          return 0
+      }
+    })
+  }, [ruleSort, rules])
+
+  const visibleEvents = useMemo(() => {
+    if (!eventSort.key) return events
+    return [...events].sort((left, right) => {
+      switch (eventSort.key) {
+        case 'status':
+          return applySort(compareText(left.status, right.status), eventSort.dir)
+        case 'severity':
+          return applySort(compareText(left.severity, right.severity), eventSort.dir)
+        case 'attempt_count':
+          return applySort(compareNumber(left.attempt_count, right.attempt_count), eventSort.dir)
+        case 'created_at':
+          return applySort(compareDate(left.created_at, right.created_at), eventSort.dir)
+        case 'next_attempt_at':
+          return applySort(compareDate(left.next_attempt_at || '', right.next_attempt_at || ''), eventSort.dir)
+        default:
+          return 0
+      }
+    })
+  }, [eventSort, events])
 
   return (
     <div>
@@ -207,40 +267,61 @@ export default function Alerts() {
       ) : null}
 
       <div className="section-title">Alert Rules</div>
-      <div className="table-container table-sticky">
+      <ActiveFiltersBar
+        resultCount={visibleRules.length}
+        resultLabel={visibleRules.length === 1 ? 'rule' : 'rules'}
+        chips={[]}
+        note={ruleSort.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
+      />
+      <TableFrame stickyHeader>
         <table>
           <thead>
             <tr>
-              <th>Tenant</th>
-              <th>Name</th>
+              <th>
+                <SortHeader label="Tenant" sortKey="tenant_id" sortState={ruleSort} onSortChange={(key, dir) => setRuleSort({ key, dir })} />
+              </th>
+              <th>
+                <SortHeader label="Rule" sortKey="name" sortState={ruleSort} onSortChange={(key, dir) => setRuleSort({ key, dir })} />
+              </th>
               <th>Type</th>
-              <th>Status</th>
-              <th>Created</th>
+              <th>
+                <SortHeader label="Status" sortKey="status" sortState={ruleSort} onSortChange={(key, dir) => setRuleSort({ key, dir })} />
+              </th>
+              <th className="col-time">
+                <SortHeader label="Created" sortKey="created_at" sortState={ruleSort} onSortChange={(key, dir) => setRuleSort({ key, dir })} defaultDir="desc" className="col-time" />
+              </th>
+              <th className="table-action-col"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <TableSkeleton columns={5} rows={5} />
-            ) : rules.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ padding: 0 }}>
-                  <EmptyState
-                    icon="⚠"
-                    title="No global alert rules yet"
-                    description="Create a deny_spike rule to watch for unusual policy-deny volume across one or more tenants."
-                  />
-                </td>
-              </tr>
+              <TableSkeleton columns={6} rows={5} />
+            ) : visibleRules.length === 0 ? (
+              <TableEmptyStateRow
+                colSpan={6}
+                icon="⚠"
+                title="No global alert rules yet"
+                description="Create a deny_spike rule to watch for unusual policy-deny volume across one or more tenants."
+              />
             ) : (
-              rules.map(rule => (
+              visibleRules.map(rule => {
+                const created = formatTimeWithTitle(rule.created_at)
+                return (
                 <tr key={rule.id}>
                   <td>
-                    <div className="table-primary mono">{shortID(rule.tenant_id || '—', 12)}</div>
-                    <div className="table-subtext">Tenant scope</div>
+                    <div className="table-primary-cell">
+                      <div className="inline-value-copy">
+                        <code className="table-primary mono" title={rule.tenant_id || '—'}>{shortID(rule.tenant_id || '—', 12)}</code>
+                        {rule.tenant_id ? <CopyIconButton text={rule.tenant_id} label="Tenant ID" /> : null}
+                      </div>
+                      <div className="table-subtext">Tenant scope</div>
+                    </div>
                   </td>
                   <td>
-                    <div className="table-primary">{rule.name}</div>
-                    <div className="table-subtext mono">{rule.kind}</div>
+                    <div className="table-primary-cell">
+                      <div className="table-primary">{rule.name}</div>
+                      <div className="table-subtext mono">{rule.id}</div>
+                    </div>
                   </td>
                   <td className="mono">{rule.kind}</td>
                   <td>
@@ -248,51 +329,84 @@ export default function Alerts() {
                       ? <span className="badge badge-green">Active</span>
                       : <span className="badge badge-gray">Disabled</span>}
                   </td>
-                  <td>{formatDate(rule.created_at, 'date')}</td>
+                  <td className="col-time" title={created.title}>{created.label}</td>
+                  <td className="table-action-cell">
+                    <Link to={`/tenants/${encodeURIComponent(rule.tenant_id)}?tab=alerts`} className="btn btn-outline btn-sm">
+                      Open tenant
+                    </Link>
+                  </td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
 
       <div className="section-title mt-16">Alert Events</div>
-      <div className="table-container table-sticky">
+      <ActiveFiltersBar
+        resultCount={visibleEvents.length}
+        resultLabel={visibleEvents.length === 1 ? 'event' : 'events'}
+        chips={[]}
+        note={eventSort.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
+      />
+      <TableFrame stickyHeader>
         <table>
           <thead>
             <tr>
               <th>Tenant</th>
               <th>Rule</th>
-              <th>Status</th>
-              <th>Severity</th>
-              <th>Attempts</th>
+              <th>
+                <SortHeader label="Status" sortKey="status" sortState={eventSort} onSortChange={(key, dir) => setEventSort({ key, dir })} />
+              </th>
+              <th>
+                <SortHeader label="Severity" sortKey="severity" sortState={eventSort} onSortChange={(key, dir) => setEventSort({ key, dir })} />
+              </th>
+              <th className="col-num">
+                <SortHeader label="Attempts" sortKey="attempt_count" sortState={eventSort} onSortChange={(key, dir) => setEventSort({ key, dir })} defaultDir="desc" className="col-num" />
+              </th>
+              <th className="col-time">
+                <SortHeader label="Next attempt" sortKey="next_attempt_at" sortState={eventSort} onSortChange={(key, dir) => setEventSort({ key, dir })} defaultDir="asc" className="col-time" />
+              </th>
               <th>Message</th>
-              <th>Fired At</th>
+              <th className="col-time">
+                <SortHeader label="Fired" sortKey="created_at" sortState={eventSort} onSortChange={(key, dir) => setEventSort({ key, dir })} defaultDir="desc" className="col-time" />
+              </th>
+              <th className="table-action-col"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <TableSkeleton columns={7} rows={6} />
-            ) : events.length === 0 ? (
-              <tr>
-                <td colSpan={7} style={{ padding: 0 }}>
-                  <EmptyState
-                    icon="⌁"
-                    title="No alert events yet"
-                    description="Triggered deliveries and retry attempts will appear here as soon as a rule fires."
-                  />
-                </td>
-              </tr>
+              <TableSkeleton columns={9} rows={6} />
+            ) : visibleEvents.length === 0 ? (
+              <TableEmptyStateRow
+                colSpan={9}
+                icon="⌁"
+                title="No alert events yet"
+                description="Triggered deliveries and retry attempts will appear here as soon as a rule fires."
+              />
             ) : (
-              events.map(event => (
+              visibleEvents.map(event => {
+                const created = formatTimeWithTitle(event.created_at)
+                const nextAttempt = formatTimeWithTitle(event.next_attempt_at || null)
+                return (
                 <tr key={event.id}>
                   <td>
-                    <div className="table-primary mono">{shortID(event.tenant_id || '—', 12)}</div>
-                    <div className="table-subtext">Tenant</div>
+                    <div className="table-primary-cell">
+                      <div className="inline-value-copy">
+                        <code className="table-primary mono" title={event.tenant_id || '—'}>{shortID(event.tenant_id || '—', 12)}</code>
+                        {event.tenant_id ? <CopyIconButton text={event.tenant_id} label="Tenant ID" /> : null}
+                      </div>
+                      <div className="table-subtext">Tenant</div>
+                    </div>
                   </td>
                   <td>
-                    <div className="table-primary mono">{shortID(event.rule_id || '—', 12)}</div>
-                    <div className="table-subtext">Rule ID</div>
+                    <div className="table-primary-cell">
+                      <div className="inline-value-copy">
+                        <code className="table-primary mono" title={event.rule_id || '—'}>{shortID(event.rule_id || '—', 12)}</code>
+                        {event.rule_id ? <CopyIconButton text={event.rule_id} label="Rule ID" /> : null}
+                      </div>
+                      <div className="table-subtext">Rule ID</div>
+                    </div>
                   </td>
                   <td>
                     <span className={`badge ${
@@ -304,10 +418,6 @@ export default function Alerts() {
                     }`}>
                       {event.status || 'unknown'}
                     </span>
-                    {event.delivered_at ? <div className="table-subtext">Delivered {formatDate(event.delivered_at)}</div> : null}
-                    {!event.delivered_at && event.next_attempt_at ? (
-                      <div className="table-subtext">Retry scheduled {formatDate(event.next_attempt_at)}</div>
-                    ) : null}
                   </td>
                   <td>
                     <span className={`badge ${
@@ -320,18 +430,29 @@ export default function Alerts() {
                       {event.severity || 'info'}
                     </span>
                   </td>
-                  <td>{event.attempt_count ?? 0}</td>
-                  <td>
-                    <div>{event.message}</div>
-                    {event.last_error ? <div className="table-subtext">Last delivery error: {event.last_error}</div> : null}
+                  <td className="col-num tabular">{event.attempt_count ?? 0}</td>
+                  <td className="col-time" title={nextAttempt.title}>
+                    {event.next_attempt_at ? nextAttempt.label : <span className="table-subtext">—</span>}
                   </td>
-                  <td>{formatDate(event.created_at)}</td>
+                  <td>
+                    <div className="table-primary-cell">
+                      <div>{event.message}</div>
+                    {event.last_error ? <div className="table-subtext">Last delivery error: {event.last_error}</div> : null}
+                      {event.delivered_at ? <div className="table-subtext">Delivered {formatDate(event.delivered_at)}</div> : null}
+                    </div>
+                  </td>
+                  <td className="col-time" title={created.title}>{created.label}</td>
+                  <td className="table-action-cell">
+                    <Link to={`/tenants/${encodeURIComponent(event.tenant_id)}?tab=alerts`} className="btn btn-outline btn-sm">
+                      Open tenant
+                    </Link>
+                  </td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
     </div>
   )
 }

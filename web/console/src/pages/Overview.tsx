@@ -1,7 +1,18 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, StatCard, TableSkeleton, buildQuery } from '../ui'
+import {
+  EmptyState,
+  InlineErrorState,
+  PageHeaderBlock,
+  StatCard,
+  TableEmptyStateRow,
+  TableFrame,
+  TableSkeleton,
+  buildQuery,
+  formatTimeWithTitle,
+  shortID,
+} from '../ui'
 
 interface OverviewData {
   total_events: number
@@ -261,47 +272,54 @@ export default function Overview() {
       ) : null}
 
       <div className="section-title">Recent Events</div>
-      <div className="table-container table-sticky">
+      <TableFrame stickyHeader>
         <table>
           <thead>
             <tr>
-              <th>Tool</th>
-              <th>Action</th>
+              <th>Tool call</th>
+              <th>Tenant</th>
               <th>Decision</th>
-              <th>Risk</th>
-              <th>Time</th>
+              <th className="col-num">Risk</th>
+              <th className="col-time">Time</th>
+              <th className="table-action-col"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <TableSkeleton columns={5} rows={6} />
+              <TableSkeleton columns={6} rows={6} />
             ) : events.length === 0 ? (
-              <tr>
-                <td colSpan={5}>
-                  <EmptyState
-                    icon="◎"
-                    title="No recent events yet"
-                    description="Run the demo or submit a governed tool call to populate the dashboard and recent activity feed."
-                  />
-                </td>
-              </tr>
+              <TableEmptyStateRow
+                colSpan={6}
+                icon="◎"
+                title="No recent events yet"
+                description="Run the demo or submit a governed tool call to populate the dashboard and recent activity feed."
+              />
             ) : (
-              events.map(event => (
+              events.map(event => {
+                const received = formatTimeWithTitle(event.received_at)
+                return (
                 <tr key={event.event_id}>
-                  <td className="table-primary">
-                    <Link to={`/events/${event.event_id}`}>{event.tool}</Link>
-                    <div className="table-subtext">{event.tenant_id}</div>
+                  <td>
+                    <div className="table-primary-cell">
+                      <Link to={`/events/${event.event_id}`} className="table-primary table-primary-link">
+                        {event.tool}.{event.action}
+                      </Link>
+                      <div className="table-subtext mono" title={event.event_id}>Event {shortID(event.event_id)}</div>
+                    </div>
                   </td>
-                  <td>{event.action}</td>
+                  <td className="mono" title={event.tenant_id}>{shortID(event.tenant_id, 12)}</td>
                   <td><span className={`badge badge-${event.decision}`}>{event.decision}</span></td>
-                  <td>{event.risk_score}</td>
-                  <td>{formatDate(event.received_at)}</td>
+                  <td className="col-num">{event.risk_score}</td>
+                  <td className="col-time" title={received.title}>{received.label}</td>
+                  <td className="table-action-cell">
+                    <Link to={`/events/${event.event_id}`} className="btn btn-outline btn-sm">Open event</Link>
+                  </td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
 import {
+  CopyIconButton,
   InlineErrorState,
   PageHeaderBlock,
   StatCard,
@@ -187,64 +188,52 @@ export default function EventDetail() {
             <div className="identity-primary">{formatRequester(event.user_id, event.user_name, event.user_email, event.agent_id)}</div>
             <div className="identity-secondary">Use these IDs to correlate the event with approvals, sessions, and downstream traces.</div>
           </div>
-          <div className="identity-card">
-            <span className="meta-label">Event ID</span>
-            <div className="identity-copy-row">
-              <code className="mono">{event.event_id}</code>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Event ID', event.event_id)}>
-                Copy
-              </button>
-            </div>
-          </div>
-          <div className="identity-card">
-            <span className="meta-label">Tenant</span>
-            <div className="identity-copy-row">
-              <Link to={`/tenants/${event.tenant_id}`} className="mono">{event.tenant_id}</Link>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Tenant ID', event.tenant_id)}>
-                Copy
-              </button>
-            </div>
-          </div>
-          <div className="identity-card">
-            <span className="meta-label">Agent</span>
-            <div className="identity-copy-row">
-              <code className="mono">{noneText(event.agent_id)}</code>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Agent ID', event.agent_id)} disabled={!event.agent_id}>
-                Copy
-              </button>
-            </div>
-          </div>
-          <div className="identity-card">
-            <span className="meta-label">Session</span>
-            <div className="identity-copy-row">
-              {event.session_id ? (
-                <Link to={`/sessions/${encodeURIComponent(event.session_id)}${buildQuery({ tenant_id: event.tenant_id })}`} className="mono">{event.session_id}</Link>
-              ) : (
-                <code className="mono">(none)</code>
-              )}
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Session ID', event.session_id)} disabled={!event.session_id}>
-                Copy
-              </button>
-            </div>
-          </div>
-          <div className="identity-card">
-            <span className="meta-label">Trace</span>
-            <div className="identity-copy-row">
-              <code className="mono">{noneText(event.trace_id)}</code>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Trace ID', event.trace_id)} disabled={!event.trace_id}>
-                Copy
-              </button>
-            </div>
-          </div>
-          <div className="identity-card">
-            <span className="meta-label">User ID</span>
-            <div className="identity-copy-row">
-              <code className="mono">{noneText(event.user_id)}</code>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('User ID', event.user_id)} disabled={!event.user_id}>
-                Copy
-              </button>
-            </div>
-          </div>
+                <div className="identity-card">
+                  <span className="meta-label">Event ID</span>
+                  <div className="identity-copy-row">
+                    <code className="mono" title={event.event_id}>{event.event_id}</code>
+                    <CopyIconButton text={event.event_id} label="Event ID" />
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Tenant</span>
+                  <div className="identity-copy-row">
+                    <Link to={`/tenants/${event.tenant_id}`} className="mono" title={event.tenant_id}>{event.tenant_id}</Link>
+                    <CopyIconButton text={event.tenant_id} label="Tenant ID" />
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Agent</span>
+                  <div className="identity-copy-row">
+                    <code className="mono" title={noneText(event.agent_id)}>{noneText(event.agent_id)}</code>
+                    <CopyIconButton text={event.agent_id} label="Agent ID" disabled={!event.agent_id} />
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Session</span>
+                  <div className="identity-copy-row">
+                    {event.session_id ? (
+                      <Link to={`/sessions/${encodeURIComponent(event.session_id)}${buildQuery({ tenant_id: event.tenant_id })}`} className="mono" title={event.session_id}>{event.session_id}</Link>
+                    ) : (
+                      <code className="mono">(none)</code>
+                    )}
+                    <CopyIconButton text={event.session_id} label="Session ID" disabled={!event.session_id} />
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">Trace</span>
+                  <div className="identity-copy-row">
+                    <code className="mono" title={noneText(event.trace_id)}>{noneText(event.trace_id)}</code>
+                    <CopyIconButton text={event.trace_id} label="Trace ID" disabled={!event.trace_id} />
+                  </div>
+                </div>
+                <div className="identity-card">
+                  <span className="meta-label">User ID</span>
+                  <div className="identity-copy-row">
+                    <code className="mono" title={noneText(event.user_id)}>{noneText(event.user_id)}</code>
+                    <CopyIconButton text={event.user_id} label="User ID" disabled={!event.user_id} />
+                  </div>
+                </div>
           <div className="identity-card">
             <span className="meta-label">Resource</span>
             <div className="identity-primary">{noneText(event.resource)}</div>

@@ -1,7 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, formatDate, toQueryTimestamp } from '../api'
-import { TableSkeleton, EmptyState, InlineErrorState, PageHeaderBlock, StatCard, CopyIconButton, buildQuery, decisionTone, formatRequester, noneText, shortID } from '../ui'
+import { api, toQueryTimestamp } from '../api'
+import {
+  ActiveFiltersBar,
+  TableSkeleton,
+  InlineErrorState,
+  PageHeaderBlock,
+  StatCard,
+  CopyIconButton,
+  SortHeader,
+  TableEmptyStateRow,
+  TableFrame,
+  applySort,
+  buildQuery,
+  compareDate,
+  compareNumber,
+  decisionTone,
+  formatRequester,
+  formatTimeWithTitle,
+  noneText,
+  shortID,
+  type SortState,
+} from '../ui'
 
 type Session = {
   id: string
@@ -62,6 +82,10 @@ export default function Sessions() {
   const [error, setError] = useState('')
   const [page, setPage] = useState(0)
   const fetchSeq = useRef(0)
+  const [sortState, setSortState] = useState<SortState<'started_at' | 'last_event_at' | 'event_count' | 'approve_count'>>({
+    key: null,
+    dir: 'desc',
+  })
   const limit = 25
 
   const fetchSessions = useCallback(async () => {
@@ -112,6 +136,36 @@ export default function Sessions() {
       { eventCount: 0, allowCount: 0, denyCount: 0, approveCount: 0 }
     )
   }, [sessions])
+
+  const activeFilterChips = useMemo(
+    () =>
+      (Object.entries(filters) as Array<[keyof SessionFilters, string]>)
+        .filter(([, value]) => value.trim() !== '')
+        .map(([key, value]) => ({
+          key,
+          label: `${key.replace(/_/g, ' ')}: ${value.trim()}`,
+          onRemove: () => updateFilter(key, ''),
+        })),
+    [filters],
+  )
+
+  const visibleSessions = useMemo(() => {
+    if (!sortState.key) return sessions
+    return [...sessions].sort((left, right) => {
+      switch (sortState.key) {
+        case 'started_at':
+          return applySort(compareDate(left.started_at, right.started_at), sortState.dir)
+        case 'last_event_at':
+          return applySort(compareDate(left.last_event_at, right.last_event_at), sortState.dir)
+        case 'event_count':
+          return applySort(compareNumber(left.event_count, right.event_count), sortState.dir)
+        case 'approve_count':
+          return applySort(compareNumber(left.approve_count, right.approve_count), sortState.dir)
+        default:
+          return 0
+      }
+    })
+  }, [sessions, sortState])
 
   return (
     <div>
@@ -223,58 +277,84 @@ export default function Sessions() {
         </div>
       </div>
 
-      <div className="table-container table-sticky sessions-table-container">
+      <ActiveFiltersBar
+        resultCount={visibleSessions.length}
+        resultLabel={visibleSessions.length === 1 ? 'session' : 'sessions'}
+        chips={activeFilterChips}
+        onClearAll={activeFilterChips.length > 0 ? resetFilters : undefined}
+        note={sortState.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
+      />
+
+      <TableFrame className="sessions-table-container" stickyHeader>
         <table className="sessions-table">
           <thead>
             <tr>
               <th>Session</th>
               <th>Requested by</th>
               <th>Tenant</th>
-              <th>Trace</th>
-              <th>Started</th>
-              <th>Last event</th>
-              <th>Decision mix</th>
+              <th className="col-time">
+                <SortHeader label="Started" sortKey="started_at" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-time" />
+              </th>
+              <th className="col-time">
+                <SortHeader label="Last event" sortKey="last_event_at" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-time" />
+              </th>
+              <th className="col-num">
+                <SortHeader label="Events" sortKey="event_count" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-num" />
+              </th>
+              <th className="col-num">
+                <SortHeader label="Approvals" sortKey="approve_count" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-num" />
+              </th>
               <th>Last action</th>
-              <th className="session-open-header"></th>
+              <th className="table-action-col"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <TableSkeleton columns={9} rows={6} />
-            ) : sessions.length === 0 ? (
-              <tr>
-                <td colSpan={9}>
-                  <EmptyState
-                    icon="↻"
-                    title="No matching sessions"
-                    description="Try widening the time range or filtering by agent, user, or trace instead of an exact session id."
-                    action={
-                      <button className="btn btn-outline btn-sm" type="button" onClick={resetFilters}>
-                        Reset filters
-                      </button>
-                    }
-                  />
-                </td>
-              </tr>
+            ) : visibleSessions.length === 0 ? (
+              <TableEmptyStateRow
+                colSpan={9}
+                icon="↻"
+                title="No matching sessions"
+                description="Try widening the time range or filtering by agent, user, or trace instead of an exact session id."
+                action={
+                  <button className="btn btn-outline btn-sm" type="button" onClick={resetFilters}>
+                    Reset filters
+                  </button>
+                }
+              />
             ) : (
-              sessions.map(session => (
+              visibleSessions.map(session => {
+                const started = formatTimeWithTitle(session.started_at)
+                const lastEvent = formatTimeWithTitle(session.last_event_at)
+                return (
                 <tr key={`${session.tenant_id}:${session.id}`}>
                   <td>
-                    <div className="inline-value-copy">
-                      <Link
-                        to={`/sessions/${encodeURIComponent(session.id)}${buildQuery({ tenant_id: session.tenant_id })}`}
-                        className="table-primary"
-                        title={session.id}
-                      >
-                        {shortID(session.id, 14)}
-                      </Link>
-                      <CopyIconButton text={session.id} label="Session ID" />
+                    <div className="table-primary-cell">
+                      <div className="inline-value-copy">
+                        <Link
+                          to={`/sessions/${encodeURIComponent(session.id)}${buildQuery({ tenant_id: session.tenant_id })}`}
+                          className="table-primary table-primary-link"
+                          title={session.id}
+                        >
+                          {shortID(session.id, 14)}
+                        </Link>
+                        <CopyIconButton text={session.id} label="Session ID" />
+                      </div>
+                      <div className="table-subtext">
+                        Agent <span className="mono" title={session.agent_id || '(none)'}>{session.agent_id || '(none)'}</span>
+                      </div>
+                      <div className="inline-value-copy">
+                        <span className="table-subtext" title={noneText(session.trace_id)}>
+                          Trace {noneText(shortID(session.trace_id, 12))}
+                        </span>
+                        {session.trace_id ? <CopyIconButton text={session.trace_id} label="Trace ID" /> : null}
+                      </div>
                     </div>
-                    <div className="table-subtext">{session.event_count} events</div>
                   </td>
                   <td className="session-requester-cell">
                     <div className="table-primary">{formatRequester(session.user_id, session.user_name, session.user_email, session.agent_id)}</div>
-                    <div className="table-subtext">Agent {noneText(session.agent_id)}</div>
+                    <div className="table-subtext">{session.allow_count || 0} allow · {session.deny_count || 0} deny</div>
                   </td>
                   <td>
                     <div className="inline-value-copy">
@@ -282,33 +362,27 @@ export default function Sessions() {
                       <CopyIconButton text={session.tenant_id} label="Tenant ID" />
                     </div>
                   </td>
-                  <td>
-                    <div className="inline-value-copy">
-                      <div className="table-primary" title={noneText(session.trace_id)}>
-                        {noneText(shortID(session.trace_id, 12))}
-                      </div>
-                      {session.trace_id ? <CopyIconButton text={session.trace_id} label="Trace ID" /> : null}
-                    </div>
-                  </td>
-                  <td>{formatDate(session.started_at)}</td>
-                  <td>{formatDate(session.last_event_at)}</td>
-                  <td className="session-decision-cell">
-                    <div className="stacked-badges">
-                      <span className="badge badge-green">Allow {session.allow_count || 0}</span>
-                      <span className="badge badge-red">Deny {session.deny_count || 0}</span>
-                      <span className="badge badge-yellow">Approve {session.approve_count || 0}</span>
-                    </div>
-                  </td>
+                  <td className="col-time" title={started.title}>{started.label}</td>
+                  <td className="col-time" title={lastEvent.title}>{lastEvent.label}</td>
+                  <td className="col-num tabular">{session.event_count || 0}</td>
+                  <td className="col-num tabular">{session.approve_count || 0}</td>
                   <td className="session-last-action-cell">
-                    <div className="table-primary">
+                    <div className="table-primary-cell">
+                      <div className="table-primary">
                       {session.last_tool || '(unknown)'}.{session.last_action || '(unknown)'}
-                    </div>
-                    <div className="table-subtext">
-                      <span className={`badge badge-${decisionTone(session.last_decision)}`}>{noneText(session.last_decision)}</span>
-                      {' · '}Risk {session.last_risk_score ?? 0}
+                      </div>
+                      <div className="stacked-badges">
+                        <span className="badge badge-green">Allow {session.allow_count || 0}</span>
+                        <span className="badge badge-red">Deny {session.deny_count || 0}</span>
+                        <span className="badge badge-yellow">Approve {session.approve_count || 0}</span>
+                      </div>
+                      <div className="table-subtext">
+                        <span className={`badge badge-${decisionTone(session.last_decision)}`}>{noneText(session.last_decision)}</span>
+                        {' · '}Risk {session.last_risk_score ?? 0}
+                      </div>
                     </div>
                   </td>
-                  <td className="session-open-cell">
+                  <td className="table-action-cell session-open-cell">
                     <Link
                       to={`/sessions/${encodeURIComponent(session.id)}${buildQuery({ tenant_id: session.tenant_id })}`}
                       className="btn btn-outline btn-sm"
@@ -317,11 +391,11 @@ export default function Sessions() {
                     </Link>
                   </td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
 
       <div className="pagination">
         <button className="btn btn-outline btn-sm" disabled={page === 0 || loading} onClick={() => setPage(current => current - 1)}>

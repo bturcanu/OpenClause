@@ -1,7 +1,21 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, formatDate } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton } from '../ui'
+import { api } from '../api'
+import {
+  ActiveFiltersBar,
+  EmptyState,
+  InlineErrorState,
+  PageHeaderBlock,
+  SortHeader,
+  TableEmptyStateRow,
+  TableFrame,
+  TableSkeleton,
+  applySort,
+  compareDate,
+  compareText,
+  formatTimeWithTitle,
+  type SortState,
+} from '../ui'
 
 interface Tenant {
   id: string
@@ -73,6 +87,7 @@ export default function Policies() {
   const [destructiveActionsText, setDestructiveActionsText] = useState('')
   const [versionForm, setVersionForm] = useState({ version: '', notes: '' })
   const [selectedVersionID, setSelectedVersionID] = useState<number | null>(null)
+  const [versionSort, setVersionSort] = useState<SortState<'version' | 'deployed_at'>>({ key: null, dir: 'desc' })
 
   const [simForm, setSimForm] = useState({ agent_id: 'agent-1', tool: 'jira', action: 'issue.create', resource: 'project/OPS', risk_score: 8 })
 
@@ -81,7 +96,7 @@ export default function Policies() {
   async function fetchTenants() {
     try {
       const data = await api.get('/admin/tenants')
-      const items = Array.isArray(data) ? (data as Tenant[]) : []
+      const items = Array.isArray(data) ? (data as Tenant[]) : ((data as { tenants?: Tenant[] })?.tenants || [])
       setTenants(items)
       if (!selectedTenantID && items.length > 0) {
         const requestedTenantID = searchParams.get('tenant_id') || ''
@@ -233,6 +248,20 @@ export default function Policies() {
       }
     : null
 
+  const visibleVersions = useMemo(() => {
+    if (!versionSort.key) return versions
+    return [...versions].sort((left, right) => {
+      switch (versionSort.key) {
+        case 'version':
+          return applySort(compareText(left.version, right.version), versionSort.dir)
+        case 'deployed_at':
+          return applySort(compareDate(left.deployed_at, right.deployed_at), versionSort.dir)
+        default:
+          return 0
+      }
+    })
+  }, [versionSort, versions])
+
   if (!loading && tenants.length === 0) {
     return (
       <div>
@@ -261,7 +290,7 @@ export default function Policies() {
 
       <div className="form-card">
         <h3>Tenant</h3>
-        <div className="form-group" style={{ maxWidth: 420 }}>
+        <div className="form-group policy-tenant-field">
           <label>Selected tenant</label>
           <select value={selectedTenantID} onChange={e => setSelectedTenantID(e.target.value)}>
             {tenants.map(t => (
@@ -274,8 +303,8 @@ export default function Policies() {
       <div className="form-card mt-16">
         <h3>Rule Builder</h3>
         <form onSubmit={handleSaveConfig}>
-          <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
-            <div className="form-group" style={{ minWidth: 220 }}>
+          <div className="form-grid policy-builder-grid">
+            <div className="form-group">
               <label>Max risk auto-approve</label>
               <input
                 type="number"
@@ -285,9 +314,9 @@ export default function Policies() {
                 onChange={e => setBuilder(prev => ({ ...prev, max_risk_auto_approve: Number(e.target.value) }))}
               />
             </div>
-            <div className="form-group" style={{ minWidth: 280 }}>
+            <div className="form-group policy-toggle-group">
               <label>Destructive actions require approval</label>
-              <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+              <label className="toggle-field toggle-field-boxed">
                 <input
                   type="checkbox"
                   checked={builder.require_destructive_approval}
@@ -320,76 +349,98 @@ export default function Policies() {
       <div className="form-card mt-16">
         <h3>Create Version</h3>
         <form onSubmit={handleCreateVersion}>
-          <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
-            <div className="form-group" style={{ minWidth: 220 }}>
+          <div className="form-grid policy-version-grid">
+            <div className="form-group">
               <label>Version</label>
               <input value={versionForm.version} onChange={e => setVersionForm(prev => ({ ...prev, version: e.target.value }))} required />
             </div>
-            <div className="form-group" style={{ minWidth: 420 }}>
+            <div className="form-group">
               <label>Notes</label>
               <input value={versionForm.notes} onChange={e => setVersionForm(prev => ({ ...prev, notes: e.target.value }))} />
             </div>
-            <button className="btn btn-primary" disabled={creatingVersion || loading}>
-              {creatingVersion ? 'Creating…' : 'Create Version Snapshot'}
-            </button>
+            <div className="form-actions-row form-actions-row-end policy-version-actions">
+              <button className="btn btn-primary" disabled={creatingVersion || loading}>
+                {creatingVersion ? 'Creating…' : 'Create Version Snapshot'}
+              </button>
+            </div>
           </div>
         </form>
       </div>
 
-      <div className="table-container mt-16">
+      <ActiveFiltersBar
+        resultCount={visibleVersions.length}
+        resultLabel={visibleVersions.length === 1 ? 'version' : 'versions'}
+        chips={[]}
+        note={versionSort.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
+      />
+
+      <TableFrame className="mt-16" stickyHeader>
         <table>
           <thead>
             <tr>
-              <th>Version</th>
+              <th>
+                <SortHeader label="Version" sortKey="version" sortState={versionSort} onSortChange={(key, dir) => setVersionSort({ key, dir })} defaultDir="desc" />
+              </th>
               <th>ID</th>
               <th>Deployed By</th>
-              <th>Deployed At</th>
+              <th className="col-time">
+                <SortHeader label="Deployed" sortKey="deployed_at" sortState={versionSort} onSortChange={(key, dir) => setVersionSort({ key, dir })} defaultDir="desc" className="col-time" />
+              </th>
               <th>Notes</th>
+              <th className="table-action-col"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <TableSkeleton columns={5} rows={5} />
-            ) : versions.length === 0 ? (
-              <tr>
-                <td colSpan={5}>
-                  <EmptyState
-                    icon="↺"
-                    title="No saved policy versions yet"
-                    description="Save a version snapshot when you want a rollback point or a reviewable change history for this tenant."
-                  />
-                </td>
-              </tr>
+              <TableSkeleton columns={6} rows={5} />
+            ) : visibleVersions.length === 0 ? (
+              <TableEmptyStateRow
+                colSpan={6}
+                icon="↺"
+                title="No saved policy versions yet"
+                description="Save a version snapshot when you want a rollback point or a reviewable change history for this tenant."
+              />
             ) : (
-              versions.map(v => (
-                <tr
-                  key={v.id}
-                  onClick={() => setSelectedVersionID(v.id)}
-                  style={{ cursor: 'pointer', background: selectedVersionID === v.id ? '#eff6ff' : undefined }}
-                >
-                  <td><span className="badge badge-blue">{v.version}</span></td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{v.id}</td>
+              visibleVersions.map((v, index) => {
+                const deployed = formatTimeWithTitle(v.deployed_at)
+                const isCurrent = index === 0 && !versionSort.key
+                return (
+                <tr key={v.id} className={selectedVersionID === v.id ? 'policy-version-row is-selected' : 'policy-version-row'}>
+                  <td>
+                    <div className="table-primary-cell">
+                      <div className="stacked-badges">
+                        <span className="badge badge-blue">{v.version}</span>
+                        {isCurrent ? <span className="badge badge-green">Current</span> : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="mono">{v.id}</td>
                   <td>{v.deployed_by || '—'}</td>
-                  <td>{formatDate(v.deployed_at)}</td>
+                  <td className="col-time" title={deployed.title}>{deployed.label}</td>
                   <td>{v.notes || '—'}</td>
+                  <td className="table-action-cell">
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => setSelectedVersionID(v.id)}>
+                      {selectedVersionID === v.id ? 'Selected' : 'Select'}
+                    </button>
+                  </td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
 
       <div className="form-card mt-16">
         <h3>Version Diff + Rollback</h3>
         {!selectedVersion ? (
-          <div style={{ color: '#64748b' }}>Select a policy version to compare and rollback.</div>
+          <div className="policy-empty-copy">Select a policy version to compare and rollback.</div>
         ) : (
           <>
-            <div style={{ marginBottom: 12 }}>
+            <div className="policy-selected-version">
               Selected version: <span className="badge badge-blue">{selectedVersion.version}</span> ({selectedVersion.id})
             </div>
             {diffPreview && (
-              <pre className="code-block" style={{ maxHeight: 260 }}>
+              <pre className="code-block policy-code-block-sm">
                 {JSON.stringify(diffPreview, null, 2)}
               </pre>
             )}
@@ -402,11 +453,11 @@ export default function Policies() {
 
       <div className="form-card mt-16">
         <h3>Policy Simulator (Preview)</h3>
-        <p style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+        <p className="policy-helper-copy">
           Preview decisions using the current rule-builder values before saving.
         </p>
         <form onSubmit={handleSimulate}>
-          <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap' }}>
+          <div className="form-grid policy-simulator-grid">
             <div className="form-group">
               <label>Agent ID</label>
               <input value={simForm.agent_id} onChange={e => setSimForm(prev => ({ ...prev, agent_id: e.target.value }))} required />
@@ -433,23 +484,25 @@ export default function Policies() {
                 onChange={e => setSimForm(prev => ({ ...prev, risk_score: Number(e.target.value) }))}
               />
             </div>
-            <button className="btn btn-primary" disabled={simLoading || loading}>
-              {simLoading ? 'Simulating…' : 'Preview Decision'}
-            </button>
+            <div className="form-actions-row form-actions-row-end policy-simulator-actions">
+              <button className="btn btn-primary" disabled={simLoading || loading}>
+                {simLoading ? 'Simulating…' : 'Preview Decision'}
+              </button>
+            </div>
           </div>
         </form>
 
         {simResult && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ marginBottom: 8 }}>
+          <div className="policy-sim-result">
+            <div className="policy-sim-summary">
               <span className={`badge badge-${simResult.policy_result?.result?.decision || 'gray'}`}>
                 {simResult.policy_result?.result?.decision || 'unknown'}
               </span>
               {simResult.policy_result?.result?.reason && (
-                <span style={{ marginLeft: 8, fontSize: 13, color: '#475569' }}>{simResult.policy_result.result.reason}</span>
+                <span className="policy-sim-reason">{simResult.policy_result.result.reason}</span>
               )}
             </div>
-            <pre className="code-block" style={{ maxHeight: 280 }}>
+            <pre className="code-block policy-code-block">
               {JSON.stringify(simResult, null, 2)}
             </pre>
           </div>

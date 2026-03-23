@@ -1,7 +1,24 @@
-import { useEffect, useState, FormEvent } from 'react'
+import { useEffect, useMemo, useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, clearStoredAuth, formatDate, getStoredAuthClaims, getStoredSessionID } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, copyText } from '../ui'
+import {
+  ActiveFiltersBar,
+  CopyIconButton,
+  EmptyState,
+  InlineErrorState,
+  PageHeaderBlock,
+  SortHeader,
+  TableEmptyStateRow,
+  TableFrame,
+  applySort,
+  compareDate,
+  compareNumber,
+  compareText,
+  copyText,
+  formatTimeWithTitle,
+  shortID,
+  type SortState,
+} from '../ui'
 
 type UserRole = {
   id: string
@@ -32,6 +49,29 @@ type AuthSession = {
   expires_at: string
 }
 
+function roleRank(role: string) {
+  switch (role) {
+    case 'platform_admin':
+      return 0
+    case 'tenant_admin':
+      return 1
+    case 'approver':
+      return 2
+    case 'viewer':
+      return 3
+    default:
+      return 4
+  }
+}
+
+function sortRoles(roles: UserRole[]) {
+  return [...roles].sort((left, right) => {
+    const rankDiff = roleRank(left.role) - roleRank(right.role)
+    if (rankDiff !== 0) return rankDiff
+    return compareText(left.tenant_id || 'platform', right.tenant_id || 'platform')
+  })
+}
+
 export default function Users() {
   const navigate = useNavigate()
   const [users, setUsers] = useState<User[]>([])
@@ -45,6 +85,10 @@ export default function Users() {
   const [revokingSessionID, setRevokingSessionID] = useState('')
   const [authSessionsByUser, setAuthSessionsByUser] = useState<Record<string, AuthSession[]>>({})
   const [copyStatus, setCopyStatus] = useState('')
+  const [sortState, setSortState] = useState<SortState<'email' | 'created_at' | 'primary_role' | 'active_session_count'>>({
+    key: null,
+    dir: 'asc',
+  })
   const [inviteCreated, setInviteCreated] = useState<{
     token: string
     expires_at?: string
@@ -230,6 +274,26 @@ export default function Users() {
     if (parts.length === 0) return 'Unknown client'
     return parts.join(' · ')
   }
+
+  const visibleUsers = useMemo(() => {
+    if (!sortState.key) return users
+    return [...users].sort((left, right) => {
+      const leftRoles = sortRoles(left.roles)
+      const rightRoles = sortRoles(right.roles)
+      switch (sortState.key) {
+        case 'email':
+          return applySort(compareText(left.email, right.email), sortState.dir)
+        case 'created_at':
+          return applySort(compareDate(left.created_at, right.created_at), sortState.dir)
+        case 'primary_role':
+          return applySort(compareNumber(roleRank(leftRoles[0]?.role || ''), roleRank(rightRoles[0]?.role || '')), sortState.dir)
+        case 'active_session_count':
+          return applySort(compareNumber(left.active_session_count, right.active_session_count), sortState.dir)
+        default:
+          return 0
+      }
+    })
+  }, [sortState, users])
 
   return (
     <div>
@@ -455,72 +519,109 @@ export default function Users() {
         </div>
       )}
 
-      <div className="table-container mt-16">
+      <ActiveFiltersBar
+        resultCount={visibleUsers.length}
+        resultLabel={visibleUsers.length === 1 ? 'user' : 'users'}
+        chips={[]}
+        note={sortState.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
+      />
+
+      <TableFrame className="mt-16" stickyHeader>
         <table className="users-table">
           <thead>
             <tr>
-              <th>Email</th>
-              <th>Name</th>
+              <th>
+                <SortHeader label="User" sortKey="email" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} />
+              </th>
               <th>Slack</th>
-              <th>Created</th>
-              <th>Roles</th>
-              {canManageSessions ? <th>Sessions</th> : null}
+              <th className="col-time">
+                <SortHeader label="Created" sortKey="created_at" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-time" />
+              </th>
+              <th>
+                <SortHeader label="Roles" sortKey="primary_role" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} />
+              </th>
+              {canManageSessions ? (
+                <th className="col-num">
+                  <SortHeader label="Sessions" sortKey="active_session_count" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-num" />
+                </th>
+              ) : null}
+              {canManageSessions ? <th className="table-action-col"></th> : null}
             </tr>
           </thead>
           <tbody>
-            {users.length === 0 ? (
-              <tr>
-                <td colSpan={canManageSessions ? 6 : 5} style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
-                  No users
-                </td>
-              </tr>
+            {visibleUsers.length === 0 ? (
+              <TableEmptyStateRow
+                colSpan={canManageSessions ? 6 : 4}
+                icon="◎"
+                title="No users yet"
+                description="Create a user or send an invite to start assigning roles and reviewing login sessions."
+              />
             ) : (
-              users.flatMap(u => {
+              visibleUsers.flatMap(u => {
                 const sessions = authSessionsByUser[u.id] || []
                 const isExpanded = expandedUserID === u.id
+                const sortedRoles = sortRoles(u.roles)
+                const primaryRole = sortedRoles[0]
+                const remainingRoles = sortedRoles.slice(1)
+                const created = formatTimeWithTitle(u.created_at)
                 return [
                   <tr key={u.id}>
-                    <td>{u.email}</td>
-                    <td>{u.name || '—'}</td>
-                    <td className="users-slack-cell" style={{ fontFamily: 'monospace', fontSize: 12 }}>{u.slack_user_id ? u.slack_user_id : '—'}</td>
-                    <td>{formatDate(u.created_at, 'date')}</td>
                     <td>
-                      {u.roles.length === 0 ? (
+                      <div className="table-primary-cell">
+                        <div className="table-primary">{u.email}</div>
+                        <div className="table-subtext">{u.name || '—'}</div>
+                      </div>
+                    </td>
+                    <td className="users-slack-cell" style={{ fontFamily: 'monospace', fontSize: 12 }}>{u.slack_user_id ? u.slack_user_id : '—'}</td>
+                    <td className="col-time" title={created.title}>{created.label}</td>
+                    <td>
+                      {sortedRoles.length === 0 ? (
                         '—'
                       ) : (
-                        <div className="role-list">
-                          {u.roles.map(rr => (
-                            <div key={rr.id} className="role-item">
-                              <span className="badge badge-green badge-lower">
-                                {rr.role}
-                              </span>
-                              <span className="role-scope mono">
-                                {rr.tenant_id ?? 'platform'}
-                              </span>
-                              {canManageUsers ? (
-                                <button className="btn btn-danger btn-sm role-action-button" onClick={() => handleRemoveRole(u.id, rr.id)}>
-                                  Remove
-                                </button>
-                              ) : null}
-                            </div>
-                          ))}
+                        <div className="table-primary-cell">
+                          <div className="stacked-badges">
+                            <span className="badge badge-green badge-lower">{primaryRole.role}</span>
+                            <span className="role-scope mono">{primaryRole.tenant_id ?? 'platform'}</span>
+                          </div>
+                          {remainingRoles.length > 0 ? (
+                            <details className="roles-disclosure">
+                              <summary>+{remainingRoles.length} more</summary>
+                              <div className="role-list">
+                                {sortedRoles.map(rr => (
+                                  <div key={rr.id} className="role-item">
+                                    <span className="badge badge-green badge-lower">{rr.role}</span>
+                                    <span className="role-scope mono">{rr.tenant_id ?? 'platform'}</span>
+                                    {canManageUsers ? (
+                                      <button className="btn btn-danger btn-sm role-action-button" onClick={() => handleRemoveRole(u.id, rr.id)}>
+                                        Remove
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          ) : null}
                         </div>
                       )}
                     </td>
                     {canManageSessions ? (
-                      <td className="users-sessions-cell">
+                      <td className="users-sessions-cell col-num tabular">
                         <div className="session-summary-cell">
                           <span className={`badge ${(u.active_session_count || 0) > 0 ? 'badge-green' : 'badge-gray'}`}>
                             {u.active_session_count || 0} active
                           </span>
-                          <button
-                            className="btn btn-outline btn-sm"
-                            onClick={() => void toggleUserSessions(u.id)}
-                            disabled={sessionsLoadingUserID === u.id}
-                          >
-                            {isExpanded ? 'Hide' : 'Review'}
-                          </button>
                         </div>
+                      </td>
+                    ) : null}
+                    {canManageSessions ? (
+                      <td className="table-action-cell">
+                        <button
+                          className="btn btn-outline btn-sm"
+                          onClick={() => void toggleUserSessions(u.id)}
+                          disabled={sessionsLoadingUserID === u.id}
+                        >
+                          {isExpanded ? 'Hide' : 'Review'}
+                        </button>
                       </td>
                     ) : null}
                   </tr>,
@@ -538,32 +639,42 @@ export default function Users() {
                               description="This user does not have any active console sessions to revoke right now."
                             />
                           ) : (
-                            <div className="table-container" style={{ marginBottom: 0 }}>
+                            <TableFrame style={{ marginBottom: 0 }}>
                               <table>
                                 <thead>
                                   <tr>
                                     <th>Session</th>
-                                    <th>Created</th>
-                                    <th>Last Seen</th>
-                                    <th>Expires</th>
+                                    <th className="col-time">Created</th>
+                                    <th className="col-time">Last Seen</th>
+                                    <th className="col-time">Expires</th>
                                     <th>Client</th>
-                                    <th></th>
+                                    <th className="table-action-col"></th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {sessions.map(session => (
+                                  {sessions.map(session => {
+                                    const createdAt = formatTimeWithTitle(session.created_at)
+                                    const lastSeen = formatTimeWithTitle(session.last_seen_at)
+                                    const expiresAt = formatTimeWithTitle(session.expires_at)
+                                    const isStale = new Date(session.last_seen_at).getTime() < Date.now() - 24 * 60 * 60 * 1000
+                                    return (
                                     <tr key={session.id}>
-                                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                                        {session.id.slice(0, 12)}…
-                                        {session.id === currentSessionID ? (
-                                          <span className="badge badge-green" style={{ marginLeft: 8 }}>Current</span>
-                                        ) : null}
-                                      </td>
-                                      <td>{formatDate(session.created_at)}</td>
-                                      <td>{formatDate(session.last_seen_at)}</td>
-                                      <td>{formatDate(session.expires_at)}</td>
-                                      <td style={{ maxWidth: 360, fontSize: 12, color: '#64748b' }}>{formatClient(session)}</td>
                                       <td>
+                                        <div className="table-primary-cell">
+                                          <div className="inline-value-copy">
+                                            <code className="mono" title={session.id}>{shortID(session.id, 12)}</code>
+                                            <CopyIconButton text={session.id} label="Auth session ID" />
+                                            {session.id === currentSessionID ? <span className="badge badge-green">Current</span> : null}
+                                            {isStale ? <span className="badge badge-gray">Stale</span> : null}
+                                          </div>
+                                          <div className="table-subtext">{session.tenant_id || 'Platform-wide session'}</div>
+                                        </div>
+                                      </td>
+                                      <td className="col-time" title={createdAt.title}>{createdAt.label}</td>
+                                      <td className="col-time" title={lastSeen.title}>{lastSeen.label}</td>
+                                      <td className="col-time" title={expiresAt.title}>{expiresAt.label}</td>
+                                      <td style={{ maxWidth: 360, fontSize: 12, color: '#64748b' }}>{formatClient(session)}</td>
+                                      <td className="table-action-cell">
                                         <button
                                           className="btn btn-danger btn-sm"
                                           onClick={() => void handleRevokeSession(u.id, session.id)}
@@ -573,10 +684,10 @@ export default function Users() {
                                         </button>
                                       </td>
                                     </tr>
-                                  ))}
+                                  )})}
                                 </tbody>
                               </table>
-                            </div>
+                            </TableFrame>
                           )}
                         </div>
                       </td>
@@ -587,7 +698,7 @@ export default function Users() {
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
     </div>
   )
 }

@@ -1,7 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { EmptyState, InlineErrorState, PageHeaderBlock, TableSkeleton, buildQuery, copyText, decisionTone, formatRequester, noneText, shortID } from '../ui'
+import {
+  ActiveFiltersBar,
+  CopyIconButton,
+  InlineErrorState,
+  PageHeaderBlock,
+  SortHeader,
+  TableEmptyStateRow,
+  TableFrame,
+  TableSkeleton,
+  applySort,
+  buildQuery,
+  compareDate,
+  compareNumber,
+  compareText,
+  decisionTone,
+  formatRequester,
+  formatTimeWithTitle,
+  noneText,
+  shortID,
+  type SortState,
+} from '../ui'
 
 type Approval = {
   id: string
@@ -34,6 +54,10 @@ export default function Approvals() {
   const [copyStatus, setCopyStatus] = useState('')
   const [executeApiKey, setExecuteApiKey] = useState('')
   const fetchSeq = useRef(0)
+  const [sortState, setSortState] = useState<SortState<'risk_score' | 'created_at' | 'expires_at' | 'status'>>({
+    key: null,
+    dir: 'desc',
+  })
 
   const fetchApprovals = useCallback(async (silent = false) => {
     const seq = ++fetchSeq.current
@@ -95,25 +119,30 @@ export default function Approvals() {
     }
   }
 
-  async function handleCopy(label: string, value?: string | null) {
-    const text = (value || '').trim()
-    if (!text) return
-    try {
-      await copyText(text)
-      setCopyStatus(`${label} copied`)
-      window.setTimeout(() => setCopyStatus(''), 1500)
-    } catch {
-      setCopyStatus('Copy failed')
-      window.setTimeout(() => setCopyStatus(''), 1500)
-    }
-  }
-
   const executeCommand = (() => {
     if (!selected?.event_id) return ''
     const apiKey = executeApiKey.trim()
     const header = apiKey ? `X-API-Key: ${apiKey}` : 'X-API-Key: <API_KEY>'
     return `curl -s -X POST "http://localhost:8080/v1/toolcalls/${encodeURIComponent(selected.event_id)}/execute" -H "Content-Type: application/json" -H "${header}" -d '{}'`
   })()
+
+  const visibleApprovals = useMemo(() => {
+    if (!sortState.key) return approvals
+    return [...approvals].sort((left, right) => {
+      switch (sortState.key) {
+        case 'risk_score':
+          return applySort(compareNumber(left.risk_score, right.risk_score), sortState.dir)
+        case 'created_at':
+          return applySort(compareDate(left.created_at, right.created_at), sortState.dir)
+        case 'expires_at':
+          return applySort(compareDate(left.expires_at, right.expires_at), sortState.dir)
+        case 'status':
+          return applySort(compareText(left.status, right.status), sortState.dir)
+        default:
+          return 0
+      }
+    })
+  }, [approvals, sortState])
 
   return (
     <div>
@@ -129,78 +158,120 @@ export default function Approvals() {
 
       {error ? <InlineErrorState message={error} onRetry={() => void fetchApprovals(false)} /> : null}
 
-      <div className="table-container table-sticky">
+      <ActiveFiltersBar
+        resultCount={visibleApprovals.length}
+        resultLabel={visibleApprovals.length === 1 ? 'request' : 'requests'}
+        chips={[]}
+        note={sortState.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
+      />
+
+      <TableFrame stickyHeader>
         <table>
           <thead>
             <tr>
               <th>Approval</th>
               <th>Requested by</th>
-              <th>Tool</th>
-              <th>Tenant</th>
-              <th>Created</th>
-              <th>Status</th>
-              <th></th>
+              <th className="col-num">
+                <SortHeader label="Risk" sortKey="risk_score" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-num" />
+              </th>
+              <th className="col-time">
+                <SortHeader label="Age" sortKey="created_at" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="desc" className="col-time" />
+              </th>
+              <th className="col-time">
+                <SortHeader label="Expires" sortKey="expires_at" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} defaultDir="asc" className="col-time" />
+              </th>
+              <th>
+                <SortHeader label="Status" sortKey="status" sortState={sortState} onSortChange={(key, dir) => setSortState({ key, dir })} />
+              </th>
+              <th className="table-action-col"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <TableSkeleton columns={7} rows={5} />
-            ) : approvals.length === 0 ? (
-              <tr>
-                <td colSpan={7}>
-                  <EmptyState
-                    icon="✓"
-                    title="No approvals are waiting right now"
-                    description="New high-risk or destructive requests will appear here as soon as policy routes them for review."
-                  />
-                </td>
-              </tr>
+            ) : visibleApprovals.length === 0 ? (
+              <TableEmptyStateRow
+                colSpan={7}
+                icon="✓"
+                title="No approvals are waiting right now"
+                description="New high-risk or destructive requests will appear here as soon as policy routes them for review."
+              />
             ) : (
-              approvals.map(approval => (
+              visibleApprovals.map(approval => {
+                const created = formatTimeWithTitle(approval.created_at)
+                const expires = formatTimeWithTitle(approval.expires_at)
+                const expiresAt = new Date(approval.expires_at).getTime()
+                const now = Date.now()
+                const isExpired = !Number.isNaN(expiresAt) && expiresAt <= now
+                const expiresSoon = !isExpired && !Number.isNaN(expiresAt) && expiresAt - now <= 60 * 60 * 1000
+                return (
                 <tr key={approval.id}>
                   <td>
-                    <button className="link-button table-primary" onClick={() => setSelected(approval)} type="button">
-                      {shortID(approval.id)}
-                    </button>
-                    <div className="table-subtext">Risk {approval.risk_score} · Event {shortID(approval.event_id)}</div>
-                  </td>
-                  <td>
-                    <div className="table-primary">{formatRequester(approval.user_id, approval.user_name, approval.user_email, approval.agent_id)}</div>
-                    <div className="table-subtext">
-                      Session {approval.session_id ? shortID(approval.session_id) : '(none)'}
-                      {' · '}Trace {approval.trace_id ? shortID(approval.trace_id) : '(none)'}
+                    <div className="table-primary-cell">
+                      <div className="inline-value-copy">
+                        <button className="link-button table-primary" onClick={() => setSelected(approval)} type="button" title={approval.id}>
+                          {approval.tool}.{approval.action}
+                        </button>
+                        <CopyIconButton text={approval.id} label="Approval ID" />
+                      </div>
+                      <div className="table-subtext">
+                        Approval <span className="mono" title={approval.id}>{shortID(approval.id)}</span>
+                        {' · '}
+                        <span className="inline-value-copy">
+                          <span className="mono" title={approval.event_id}>Event {shortID(approval.event_id)}</span>
+                          <CopyIconButton text={approval.event_id} label="Event ID" />
+                        </span>
+                      </div>
+                      <div className="inline-value-copy">
+                        <code className="mono" title={approval.tenant_id}>{shortID(approval.tenant_id, 12)}</code>
+                        <CopyIconButton text={approval.tenant_id} label="Tenant ID" />
+                      </div>
                     </div>
                   </td>
                   <td>
-                    <div className="table-primary">{approval.tool}.{approval.action}</div>
-                    <div className="table-subtext">{approval.reason || 'Waiting for human review'}</div>
+                    <div className="table-primary-cell">
+                      <div className="table-primary">{formatRequester(approval.user_id, approval.user_name, approval.user_email, approval.agent_id)}</div>
+                      <div className="table-subtext">
+                      <span title={approval.session_id || '(none)'}>Session {approval.session_id ? shortID(approval.session_id) : '(none)'}</span>
+                      {' · '}
+                      <span title={approval.trace_id || '(none)'}>Trace {approval.trace_id ? shortID(approval.trace_id) : '(none)'}</span>
+                      </div>
+                    </div>
                   </td>
-                  <td>
-                    <code>{shortID(approval.tenant_id, 12)}</code>
+                  <td className="col-num tabular">{approval.risk_score}</td>
+                  <td className="col-time" title={created.title}>
+                    <div className="table-primary-cell">
+                      <span>{created.label}</span>
+                      <span className="table-subtext">{approval.reason || 'Waiting for human review'}</span>
+                    </div>
                   </td>
-                  <td>{formatDate(approval.created_at)}</td>
+                  <td className="col-time" title={expires.title}>
+                    <div className="table-primary-cell">
+                      <span className={isExpired ? 'table-danger-text' : expiresSoon ? 'table-warn-text' : ''}>{expires.label}</span>
+                      <span className="table-subtext">
+                        {isExpired ? 'Expired' : expiresSoon ? 'Expires soon' : formatDate(approval.expires_at)}
+                      </span>
+                    </div>
+                  </td>
                   <td>
                     <span className={`badge badge-${decisionTone(approval.status)}`}>{approval.status || 'pending'}</span>
                   </td>
-                  <td>
-                    <div className="btn-group">
+                  <td className="table-action-cell">
+                    <div className="table-primary-cell table-action-stack">
+                      <button className="btn btn-outline btn-sm" type="button" onClick={() => setSelected(approval)}>
+                        Review
+                      </button>
                       <Link to={`/events/${approval.event_id}`} className="btn btn-outline btn-sm">
-                        Event
+                        Open event
                       </Link>
-                      <button className="btn btn-success btn-sm" disabled={actionLoading === approval.id} onClick={() => handleAction(approval.id, 'approve')}>
-                        Approve
-                      </button>
-                      <button className="btn btn-danger btn-sm" disabled={actionLoading === approval.id} onClick={() => handleAction(approval.id, 'deny')}>
-                        Deny
-                      </button>
                     </div>
                   </td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>
-      </div>
+      </TableFrame>
 
       {selected ? (
         <div className="modal-backdrop" onClick={() => setSelected(null)}>
@@ -231,43 +302,35 @@ export default function Approvals() {
                 <div className="identity-card">
                   <span className="meta-label">Approval ID</span>
                   <div className="identity-copy-row">
-                    <code className="mono">{selected.id}</code>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Approval ID', selected.id)}>
-                      Copy
-                    </button>
+                    <code className="mono" title={selected.id}>{selected.id}</code>
+                    <CopyIconButton text={selected.id} label="Approval ID" />
                   </div>
                 </div>
                 <div className="identity-card">
                   <span className="meta-label">Event ID</span>
                   <div className="identity-copy-row">
-                    <Link to={`/events/${selected.event_id}`} className="mono">{selected.event_id}</Link>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Event ID', selected.event_id)}>
-                      Copy
-                    </button>
+                    <Link to={`/events/${selected.event_id}`} className="mono" title={selected.event_id}>{selected.event_id}</Link>
+                    <CopyIconButton text={selected.event_id} label="Event ID" />
                   </div>
                 </div>
                 <div className="identity-card">
                   <span className="meta-label">Session</span>
                   <div className="identity-copy-row">
                     {selected.session_id ? (
-                      <Link to={`/sessions/${encodeURIComponent(selected.session_id)}${buildQuery({ tenant_id: selected.tenant_id })}`} className="mono">
+                      <Link to={`/sessions/${encodeURIComponent(selected.session_id)}${buildQuery({ tenant_id: selected.tenant_id })}`} className="mono" title={selected.session_id}>
                         {selected.session_id}
                       </Link>
                     ) : (
                       <code className="mono">(none)</code>
                     )}
-                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Session ID', selected.session_id)} disabled={!selected.session_id}>
-                      Copy
-                    </button>
+                    <CopyIconButton text={selected.session_id} label="Session ID" disabled={!selected.session_id} />
                   </div>
                 </div>
                 <div className="identity-card">
                   <span className="meta-label">Trace</span>
                   <div className="identity-copy-row">
-                    <code className="mono">{noneText(selected.trace_id)}</code>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopy('Trace ID', selected.trace_id)} disabled={!selected.trace_id}>
-                      Copy
-                    </button>
+                    <code className="mono" title={noneText(selected.trace_id)}>{noneText(selected.trace_id)}</code>
+                    <CopyIconButton text={selected.trace_id} label="Trace ID" disabled={!selected.trace_id} />
                   </div>
                 </div>
                 <div className="identity-card">
@@ -307,7 +370,7 @@ export default function Approvals() {
                 </p>
                 <div className="form-group">
                   <label>Gateway API key</label>
-                  <input value={executeApiKey} onChange={e => setExecuteApiKey(e.target.value)} placeholder="sk-oc-..." style={{ fontFamily: 'monospace' }} />
+                  <input value={executeApiKey} onChange={e => setExecuteApiKey(e.target.value)} placeholder="sk-oc-..." className="mono" />
                 </div>
                 <pre className="code-block">{executeCommand}</pre>
                 <div className="btn-group mt-16">
