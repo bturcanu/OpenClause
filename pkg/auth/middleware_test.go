@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -171,4 +172,31 @@ func TestAPIKeyAuth_XAPIKeyTrimmed(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
+}
+
+func FuzzBearerAPIKeyOnlyReturnsTrimmedSecondField(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"Bearer sk-abc",
+		"   bearer    sk-abc   ",
+		"Token sk-abc",
+		"Bearer",
+		"Bearer sk-abc extra",
+		"Bearer\twith-tab",
+		"Bearer \nmultiline",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		fields := strings.Fields(raw)
+		want := ""
+		if len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
+			want = strings.TrimSpace(fields[1])
+		}
+
+		if got := bearerAPIKey(raw); got != want {
+			t.Fatalf("bearerAPIKey(%q) = %q, want %q", raw, got, want)
+		}
+	})
 }

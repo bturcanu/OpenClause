@@ -13,8 +13,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  test:
-    name: Test
+  go-test:
+    name: Go Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,10 +29,56 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test ./...
+        run: go test ./... -count=1
 
       - name: Run vet
         run: go vet ./...
+
+  go-race:
+    name: Go Race
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run race tests
+        run: go test -race ./... -count=1
+
+  go-fuzz-smoke:
+    name: Go Fuzz Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run analytics parser fuzz smoke
+        run: |
+          go test ./cmd/console-api -run '^$' -fuzz=FuzzParseRangeDurationDoesNotReturnNonPositiveValues -fuzztime=2s
+          go test ./cmd/console-api -run '^$' -fuzz=FuzzParseBucketMinutesStaysWithinSupportedBounds -fuzztime=2s
+          go test ./cmd/console-api -run '^$' -fuzz=FuzzParseTopAgentsStaysWithinSupportedBounds -fuzztime=2s
+
+      - name: Run auth and timestamp fuzz smoke
+        run: |
+          go test ./cmd/console-api -run '^$' -fuzz=FuzzBearerTokenOnlyReturnsTrimmedSecondField -fuzztime=2s
+          go test ./cmd/console-api -run '^$' -fuzz=FuzzParseOptionalTimestampNeverReturnsZeroTime -fuzztime=2s
+          go test ./cmd/console-api -run '^$' -fuzz=FuzzParseSinceReturnsFiniteTime -fuzztime=2s
+          go test ./pkg/auth -run '^$' -fuzz=FuzzBearerAPIKeyOnlyReturnsTrimmedSecondField -fuzztime=2s
 
   console-ui:
     name: Console UI
@@ -74,6 +120,65 @@ jobs:
 
       - name: Verify core imports
         run: python -c "import openclause; import openclause.client; import openclause.models"
+
+  python-sdk-tests:
+    name: Python SDK Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python SDK
+        run: python -m pip install -e sdk/python
+
+      - name: Run Python SDK tests
+        run: PYTHONPATH=sdk/python python -m unittest discover -s sdk/python/tests -v
+
+  typescript-sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+
+      - name: Install TypeScript SDK dependencies
+        run: npm ci --prefix sdk/typescript
+
+      - name: Build TypeScript SDK
+        run: npm --prefix sdk/typescript run build
+
+      - name: Run TypeScript SDK tests
+        run: npm --prefix sdk/typescript run test
+
+  java-sdk:
+    name: Java SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Run Java SDK tests
+        run: ./gradlew test
+        working-directory: sdk/java
 
   policy-test:
     name: Policy Test
@@ -153,7 +258,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, policy-test, lint]
+    needs: [go-test, go-race, go-fuzz-smoke, console-ui, python-sdk-39, python-sdk-tests, typescript-sdk, java-sdk, policy-test, browser-smoke, lint]
     permissions:
       contents: read
       packages: write
