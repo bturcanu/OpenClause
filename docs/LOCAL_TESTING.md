@@ -102,7 +102,7 @@ Coverage:
 - audit trail filter -> event detail
 - sessions -> session detail execution linkage
 
-If a locked-down local macOS host blocks the bundled Chromium process with a MachPort permission error, treat the `browser-smoke` CI job as the canonical verifier and keep using `npm --prefix web/console run test` locally for deterministic UI coverage.
+On macOS, `web/console/playwright.config.ts` now prefers the installed Google Chrome channel for local non-CI runs so the smoke pack can work around the bundled Chromium MachPort launch issue on locked-down hosts. If you are running from a sandboxed agent shell, use a normal unsandboxed terminal for `npm --prefix web/console run test:e2e`; the `browser-smoke` CI job remains the canonical Linux verifier and now uploads Playwright artifacts for debugging.
 
 ## 3. Console Login
 
