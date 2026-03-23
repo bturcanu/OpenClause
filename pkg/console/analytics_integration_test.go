@@ -322,3 +322,43 @@ func TestStoreGetDecisionTimeseriesSupportsLargerBucketIntervalsWithoutLosingTot
 		t.Fatalf("expected two-hour buckets to preserve 10 total events, got %d", totalEvents)
 	}
 }
+
+func TestStoreGetDecisionTimeseriesBucketMatrixPreservesTotalsAndAlignment(t *testing.T) {
+	fx := newAnalyticsFixture(t)
+
+	for _, bucketMinutes := range []int{15, 30, 60, 120} {
+		t.Run(fmt.Sprintf("%dm", bucketMinutes), func(t *testing.T) {
+			series, err := fx.store.GetDecisionTimeseries(fx.ctx, fx.tenantID, fx.since, bucketMinutes)
+			if err != nil {
+				t.Fatalf("GetDecisionTimeseries(%dm): %v", bucketMinutes, err)
+			}
+
+			var totalEvents int64
+			lastBucket := fx.since.Add(-time.Minute)
+			for i, got := range series {
+				bucket, ok := got["bucket"].(time.Time)
+				if !ok {
+					t.Fatalf("bucket %d was not a time.Time: %#v", i, got["bucket"])
+				}
+				if bucket.Before(lastBucket) {
+					t.Fatalf("bucket %d regressed in time: last=%s current=%s", i, lastBucket, bucket)
+				}
+				offset := bucket.Sub(fx.since)
+				step := time.Duration(bucketMinutes) * time.Minute
+				if offset < 0 || offset%step != 0 {
+					t.Fatalf("bucket %d was misaligned for %d-minute interval: since=%s bucket=%s", i, bucketMinutes, fx.since, bucket)
+				}
+				total, ok := got["total"].(int64)
+				if !ok {
+					t.Fatalf("bucket %d total was not int64: %#v", i, got["total"])
+				}
+				totalEvents += total
+				lastBucket = bucket
+			}
+
+			if totalEvents != 10 {
+				t.Fatalf("%d-minute buckets should preserve 10 total events, got %d", bucketMinutes, totalEvents)
+			}
+		})
+	}
+}

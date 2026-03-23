@@ -1000,10 +1000,13 @@ export default function TenantDetail() {
           </div>
           <div className="form-helper-text helper-text-warn">{triageNotice}</div>
           {latestIssue ? (
-            <div className="warn-banner-meta">
-              <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
-              {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
-            </div>
+            <>
+              <div className="form-helper-text helper-text-warn">{latestIssue.message}</div>
+              <div className="warn-banner-meta">
+                <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
+                {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+              </div>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -1013,6 +1016,7 @@ export default function TenantDetail() {
             <div className="warn-banner-title">Latest diagnostics</div>
             <CopyIconButton text={tenantDiagnostics} label="Tenant diagnostics" disabled={!tenantDiagnostics} />
           </div>
+          <div className="form-helper-text helper-text-warn">{latestIssue.message}</div>
           <div className="warn-banner-meta">
             <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
             {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}

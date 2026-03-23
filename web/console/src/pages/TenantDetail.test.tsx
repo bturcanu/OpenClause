@@ -616,13 +616,13 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=alerts' })
 
     expect(await screen.findByText('Retry burst')).toBeInTheDocument()
-    expect(await screen.findByText(/some alert data could not be loaded: events/i)).toBeInTheDocument()
+    expect(await screen.findByText(/some alert data could not be loaded: events/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^retry$/i }))
 
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/alerts/rules'))
     expect(await screen.findByText('Recovered event')).toBeInTheDocument()
-    expect(screen.queryByText(/some alert data could not be loaded: events/i)).not.toBeInTheDocument()
+    expect(screen.queryAllByText(/some alert data could not be loaded: events/i)).toHaveLength(0)
     expect(warnSpy).toHaveBeenCalledWith(
       '[openclause-console] tenant detail issue',
       expect.objectContaining({
@@ -964,7 +964,7 @@ describe('Tenant detail page', () => {
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/agents?include_disabled=false'))
 
     await user.click(screen.getByRole('button', { name: /api keys/i }))
-    expect(await screen.findByText(/notification configuration unavailable/i)).toBeInTheDocument()
+    expect(await screen.findByText(/notification configuration unavailable/i, { selector: '.form-card .error-msg' })).toBeInTheDocument()
     expect(screen.queryByLabelText(/^approver group$/i)).not.toBeInTheDocument()
     expect(warnSpy).toHaveBeenCalledWith(
       '[openclause-console] tenant detail issue',
@@ -1030,11 +1030,11 @@ describe('Tenant detail page', () => {
 
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=alerts' })
 
-    expect(await screen.findByText(/some alert data could not be loaded: events/i)).toBeInTheDocument()
+    expect(await screen.findByText(/some alert data could not be loaded: events/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^retry$/i }))
 
-    expect(await screen.findByText(/some alert data could not be loaded: events/i)).toBeInTheDocument()
+    expect(await screen.findByText(/some alert data could not be loaded: events/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.getByText(/repeated failures detected/i)).toBeInTheDocument()
     expect(screen.getByText(/repeated alerts partial failures detected for this tenant/i)).toBeInTheDocument()
     expect(screen.getByText(/latest stage:/i)).toBeInTheDocument()
@@ -1075,7 +1075,7 @@ describe('Tenant detail page', () => {
 
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=analytics' })
 
-    expect(await screen.findByText(/analytics summary payload was malformed/i)).toBeInTheDocument()
+    expect(await screen.findByText(/analytics summary payload was malformed/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.queryByText(/total events/i)).not.toBeInTheDocument()
     expect(warnSpy).toHaveBeenCalledWith(
       '[openclause-console] tenant detail issue',
@@ -1124,8 +1124,9 @@ describe('Tenant detail page', () => {
 
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=api_keys' })
 
-    expect(await screen.findByText(/notification configuration payload was malformed/i)).toBeInTheDocument()
+    expect(await screen.findByText(/notification configuration payload was malformed/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
+    expect(screen.getByText(/notification configuration payload was malformed/i, { selector: '.form-helper-text' })).toBeInTheDocument()
     expect(screen.queryByLabelText(/^approver group$/i)).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
@@ -1224,8 +1225,9 @@ describe('Tenant detail page', () => {
     expect(await screen.findByText('Valid rule')).toBeInTheDocument()
     expect(screen.getByText('Valid alert event')).toBeInTheDocument()
     expect(screen.queryByText('Malformed event')).not.toBeInTheDocument()
-    expect(screen.getByText(/some alert data was malformed and was ignored/i)).toBeInTheDocument()
+    expect(screen.getByText(/some alert data was malformed and was ignored/i, { selector: '.error-msg-rich div div' })).toBeInTheDocument()
     expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
+    expect(screen.getByText(/some alert data was malformed and was ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
     expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=alerts-contract'))
@@ -1237,5 +1239,94 @@ describe('Tenant detail page', () => {
         issues: ['1 malformed rule row', '1 malformed event row'],
       }),
     )
+  })
+
+  it('clears tenant alert contract diagnostics after a successful retry', async () => {
+    const user = userEvent.setup()
+    let eventCalls = 0
+    mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', { approver_group: '', notify: [] }],
+      ['/admin/tenants/tenant-1/alerts/rules', {
+        rules: [
+          {
+            id: 'rule-valid',
+            tenant_id: 'tenant-1',
+            name: 'Valid rule',
+            kind: 'deny_spike',
+            enabled: true,
+            config_json: { n: 3, m_minutes: 5 },
+            created_at: '2026-03-22T12:00:00Z',
+            updated_at: '2026-03-22T12:00:00Z',
+          },
+        ],
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), () => {
+        eventCalls += 1
+        if (eventCalls === 1) {
+          return {
+            events: [
+              {
+                id: 'alert-invalid',
+                rule_id: '',
+                tenant_id: 'tenant-1',
+                severity: 'warning',
+                message: 'Malformed event',
+                status: 'pending',
+                created_at: '2026-03-23T12:05:00Z',
+              },
+            ],
+          }
+        }
+        return {
+          events: [
+            {
+              id: 'alert-valid',
+              rule_id: 'rule-valid',
+              tenant_id: 'tenant-1',
+              severity: 'warning',
+              message: 'Recovered alert event',
+              status: 'pending',
+              created_at: '2026-03-23T12:10:00Z',
+            },
+          ],
+        }
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=alerts' })
+
+    expect(await screen.findByText(/some alert data was malformed and was ignored/i, { selector: '.form-helper-text' })).toBeInTheDocument()
+    expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+    expect(await screen.findByText('Recovered alert event')).toBeInTheDocument()
+    expect(screen.queryByText(/latest diagnostics/i)).not.toBeInTheDocument()
+    expect(screen.queryAllByText(/some alert data was malformed and was ignored/i)).toHaveLength(0)
   })
 })
