@@ -185,9 +185,9 @@ export default function Alerts() {
                   required
                 />
               </div>
-              <div className="form-group">
+              <div className="form-group alert-activation-field">
                 <label>Activation</label>
-                <label className="toggle-field">
+                <label className="toggle-field toggle-field-boxed">
                   <input
                     type="checkbox"
                     checked={form.enabled}

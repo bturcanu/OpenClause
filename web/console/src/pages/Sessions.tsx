@@ -223,7 +223,7 @@ export default function Sessions() {
         </div>
       </div>
 
-      <div className="table-container table-sticky">
+      <div className="table-container table-sticky sessions-table-container">
         <table className="sessions-table">
           <thead>
             <tr>

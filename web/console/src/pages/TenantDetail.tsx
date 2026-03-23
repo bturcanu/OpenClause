@@ -127,6 +127,32 @@ interface TenantAnalyticsSummary {
   onboarding_checklist: TenantOnboardingChecklist
 }
 
+function formatUTCDateTime(value?: string | null) {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return `${new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'UTC',
+  }).format(parsed)} UTC`
+}
+
+function analyticsRangeLabel(rangeHours: number) {
+  switch (rangeHours) {
+    case 6:
+      return 'Last 6 hours'
+    case 24:
+      return 'Last 24 hours'
+    case 48:
+      return 'Last 48 hours'
+    case 168:
+      return 'Last 7 days'
+    default:
+      return `Last ${rangeHours} hours`
+  }
+}
+
 export default function TenantDetail() {
   const { id } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
@@ -795,40 +821,42 @@ export default function TenantDetail() {
 
             <form onSubmit={rotatePrimaryKey}>
               <div className="form-grid api-key-rotation-grid">
-                <div className="form-group">
+                <div className="form-group api-key-rotation-field">
                   <label>New key name</label>
                   <input value={rotationName} onChange={e => setRotationName(e.target.value)} required placeholder="e.g., rotated-2026-03" />
                 </div>
 
-                <div className="form-group">
+                <div className="form-group api-key-rotation-field">
                   <label>Expires on (UTC date, optional)</label>
                   <input
                     type="date"
                     value={rotationExpiresAt}
                     onChange={e => setRotationExpiresAt(e.target.value)}
                   />
-                  <div className="form-helper-text">Use a calendar date like <code className="mono">2030-01-01</code>. The key stays active until that date passes.</div>
                 </div>
 
-                <div className="form-group">
+                <div className="form-group api-key-rotation-field">
                   <label>Rotation options</label>
-                  <div className="toggle-stack">
-                    <label className="toggle-field">
+                  <div className="toggle-stack rotation-options-stack">
+                    <label className="toggle-field toggle-field-boxed">
                       <input type="checkbox" checked={rotationMakePrimary} onChange={e => setRotationMakePrimary(e.target.checked)} />
                       <span>Make the new key primary immediately</span>
                     </label>
-                    <label className="toggle-field">
+                    <label className="toggle-field toggle-field-boxed">
                       <input type="checkbox" checked={rotationRevokeOldPrimary} onChange={e => setRotationRevokeOldPrimary(e.target.checked)} />
                       <span>Revoke the old primary after rotation</span>
                     </label>
                   </div>
                 </div>
 
-                <div className="form-actions-row form-actions-row-end">
+                <div className="form-actions-row form-actions-row-end api-key-rotation-actions">
                   <button className="btn btn-primary" disabled={rotating || creating}>
                     {rotating ? 'Rotating…' : 'Rotate'}
                   </button>
                 </div>
+              </div>
+              <div className="form-helper-text api-key-rotation-note">
+                Use a calendar date like <code className="mono">2030-01-01</code>. The key stays active until that date passes.
               </div>
             </form>
 
@@ -1029,9 +1057,9 @@ export default function TenantDetail() {
                     required
                   />
                 </div>
-                <div className="form-group">
+                <div className="form-group alert-activation-field">
                   <label>Activation</label>
-                  <label className="toggle-field">
+                  <label className="toggle-field toggle-field-boxed">
                     <input
                       type="checkbox"
                       checked={alertRuleForm.enabled}
@@ -1229,17 +1257,26 @@ export default function TenantDetail() {
 
           <div className="form-card mt-16">
             <h3>Tenant analytics</h3>
-            <div className="form-inline" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-              <div className="form-group" style={{ minWidth: 220 }}>
+            <div className="analytics-toolbar">
+              <div className="form-group analytics-range-select">
                 <label>Range</label>
                 <select value={analyticsRangeHours} onChange={(e) => setAnalyticsRangeHours(Number(e.target.value))}>
                   <option value={6}>Last 6 hours</option>
                   <option value={24}>Last 24 hours</option>
+                  <option value={48}>Last 48 hours</option>
                   <option value={168}>Last 7 days</option>
                 </select>
               </div>
-              <div style={{ fontSize: 13, color: '#64748b', paddingBottom: 6 }}>
-                Bucket: {analyticsBucketMinutes} min · Top agents: {analyticsTopAgents}
+              <div className="analytics-range-meta">
+                <div style={{ fontSize: 13, color: '#64748b' }}>
+                  Bucket: {analyticsBucketMinutes} min · Top agents: {analyticsTopAgents}
+                </div>
+                <div className="form-helper-text analytics-range-note">
+                  Resolved UTC range:{' '}
+                  {tenantAnalytics
+                    ? `${formatUTCDateTime(tenantAnalytics.range_start)} → ${formatUTCDateTime(tenantAnalytics.range_end)}`
+                    : `${analyticsRangeLabel(analyticsRangeHours)} (exact UTC bounds appear after refresh)`}
+                </div>
               </div>
             </div>
           </div>
@@ -1459,10 +1496,6 @@ export default function TenantDetail() {
                 <div className="form-group">
                   <label>Slack user id (optional)</label>
                   <input value={approverSlackUserID} onChange={e => setApproverSlackUserID(e.target.value)} placeholder="U1234567890" />
-                  <div className="form-helper-text">
-                    If provided without an email, this will only link to an existing user.
-                    Provide an email to create the user + link Slack id.
-                  </div>
                 </div>
                 <div className="form-group">
                   <label>Name (optional)</label>
@@ -1471,6 +1504,9 @@ export default function TenantDetail() {
                 <div className="form-actions-row form-actions-row-end approver-form-actions">
                   <button className="btn btn-primary" disabled={creating}>Add approver</button>
                 </div>
+              </div>
+              <div className="form-helper-text approver-form-note">
+                Add an email to create or match a console user. A Slack user id on its own only links to an existing user.
               </div>
             </form>
           </div>
