@@ -158,6 +158,23 @@ describe('api helpers', () => {
     }
   })
 
+  it('trims datetime input edges while preserving passthrough values that are already API-safe', () => {
+    const cases = [
+      { input: ' 2026-02-29T09:15 ', matcher: /^2026-03-01T/ },
+      { input: '2026-03-23T12:34:56+02:00', exact: '2026-03-23T12:34:56+02:00' },
+      { input: '2026-03-23', exact: '2026-03-23' },
+    ]
+
+    for (const testCase of cases) {
+      const got = toQueryTimestamp(testCase.input)
+      if (testCase.matcher) {
+        expect(got).toMatch(testCase.matcher)
+      } else {
+        expect(got).toBe(testCase.exact)
+      }
+    }
+  })
+
   it('formats dates defensively', () => {
     expect(formatDate('')).toBe('—')
     expect(formatDate('not-a-date')).toBe('not-a-date')

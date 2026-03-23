@@ -36,6 +36,24 @@ describe('ui helpers', () => {
     expect(buildQuery({ page: 0, risk_min: 0, tenant_id: ' tenant-1 ', empty: '', missing: undefined, none: null })).toBe('?page=0&risk_min=0&tenant_id=tenant-1')
   })
 
+  it('round-trips encoded query-builder values through URLSearchParams', () => {
+    const query = buildQuery({
+      decision: 'approve',
+      tenant_id: 'tenant 1',
+      trace_id: 'trace/demo?1',
+      since: '2026-03-23T10:00:00Z',
+      zero: 0,
+    })
+    const params = new URLSearchParams(query)
+
+    expect(params.get('decision')).toBe('approve')
+    expect(params.get('tenant_id')).toBe('tenant 1')
+    expect(params.get('trace_id')).toBe('trace/demo?1')
+    expect(params.get('since')).toBe('2026-03-23T10:00:00Z')
+    expect(params.get('zero')).toBe('0')
+    expect(params.toString()).toContain('trace_id=trace%2Fdemo%3F1')
+  })
+
   it('compares text, numbers, dates, and applies sort direction', () => {
     expect(compareText('beta', 'Alpha')).toBeGreaterThan(0)
     expect(compareNumber(9, 3)).toBe(6)
