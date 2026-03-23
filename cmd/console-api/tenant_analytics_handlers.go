@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,13 +12,15 @@ import (
 )
 
 func parseRangeDuration(r *http.Request, defaultDuration time.Duration) time.Duration {
+	const maxDuration = time.Duration(1<<63 - 1)
+	const maxSafeHours = int64(maxDuration / time.Hour)
 	v := strings.TrimSpace(r.URL.Query().Get("range"))
 	if v == "" {
 		return defaultDuration
 	}
 
 	// Allow raw integer as "hours".
-	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 && n <= maxSafeHours {
 		return time.Duration(n) * time.Hour
 	}
 
@@ -25,8 +28,9 @@ func parseRangeDuration(r *http.Request, defaultDuration time.Duration) time.Dur
 	if strings.HasSuffix(strings.ToLower(v), "d") {
 		raw := strings.TrimSpace(v[:len(v)-1])
 		f, err := strconv.ParseFloat(raw, 64)
-		if err == nil && f > 0 {
-			d := time.Duration(f * 24.0 * float64(time.Hour))
+		scaled := f * 24.0 * float64(time.Hour)
+		if err == nil && f > 0 && !math.IsNaN(scaled) && !math.IsInf(scaled, 0) && scaled <= float64(maxDuration) {
+			d := time.Duration(scaled)
 			return d
 		}
 	}
