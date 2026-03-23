@@ -14,7 +14,11 @@ function normalizeConnectors(data: any): Connector[] {
   return arr.map(c => ({
     name: c.name || c.tool || 'unknown',
     type: c.type,
-    actions: c.actions || [],
+    actions: Array.isArray(c.actions)
+      ? c.actions.filter((action: unknown): action is string => typeof action === 'string' && action.trim().length > 0)
+      : typeof c.actions === 'string' && c.actions.trim().length > 0
+        ? [c.actions.trim()]
+        : [],
     event_count: c.event_count,
   }))
 }

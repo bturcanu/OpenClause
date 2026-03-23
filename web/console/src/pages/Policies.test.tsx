@@ -167,4 +167,41 @@ describe('Policies page', () => {
 
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/policy/versions/1/rollback', {}))
   })
+
+  it('accepts wrapped policy version payloads without losing the current selection state', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/admin/tenants') {
+        return { tenants: [{ id: 'tenant-1', name: 'Tenant One', status: 'active' }] }
+      }
+      if (path === '/admin/tenants/tenant-1/policy/config') {
+        return {
+          max_risk_auto_approve: 5,
+          read_actions: ['jira.issue.read'],
+          write_actions: ['jira.issue.create'],
+          destructive_actions: [],
+          require_destructive_approval: true,
+        }
+      }
+      if (path === '/admin/tenants/tenant-1/policy/versions') {
+        return {
+          versions: [
+            {
+              id: 9,
+              version: 'v9',
+              deployed_by: 'admin@example.com',
+              deployed_at: '2026-03-25T12:00:00Z',
+              notes: 'Wrapped payload',
+            },
+          ],
+        }
+      }
+      throw new Error(`Unhandled api.get call for ${path}`)
+    })
+
+    renderRoute(<Policies />, { path: '/policies', route: '/policies' })
+
+    expect(await screen.findByText('Wrapped payload')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^selected$/i })).toBeInTheDocument()
+    expect(screen.getByText(/^current$/i, { selector: 'span' })).toBeInTheDocument()
+  })
 })

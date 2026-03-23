@@ -47,4 +47,21 @@ describe('Connectors page', () => {
     await user.click(screen.getByRole('button', { name: /clear search/i }))
     expect(await screen.findByText('slack')).toBeInTheDocument()
   })
+
+  it('normalizes malformed single-string action payloads instead of crashing the catalog', async () => {
+    mockApiGet([
+      ['/admin/connectors', {
+        connectors: [
+          { name: 'slack', type: 'remote', actions: 'msg.post' },
+          { name: 'jira', type: 'remote', actions: null },
+        ],
+      }],
+    ])
+
+    renderRoute(<Connectors />, { path: '/connectors', route: '/connectors' })
+
+    expect(await screen.findByText('slack')).toBeInTheDocument()
+    expect(screen.getByText('msg.post')).toBeInTheDocument()
+    expect(screen.getByText('jira')).toBeInTheDocument()
+  })
 })

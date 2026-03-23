@@ -134,7 +134,8 @@ export default function Policies() {
     }
 
     if (versionsResp.status === 'fulfilled') {
-      const vs = Array.isArray(versionsResp.value) ? (versionsResp.value as PolicyVersion[]) : []
+      const versionsData = versionsResp.value as PolicyVersion[] | { versions?: PolicyVersion[] }
+      const vs = Array.isArray(versionsData) ? versionsData : Array.isArray(versionsData?.versions) ? versionsData.versions : []
       setVersions(vs)
       setSelectedVersionID(vs.length > 0 ? vs[0].id : null)
     } else {
