@@ -2453,6 +2453,11 @@ pre {
   background: #fffbeb;
 }
 
+.warn-banner-subtle {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: #fffdf5;
+}
+
 .warn-banner-header {
   display: flex;
   align-items: center;

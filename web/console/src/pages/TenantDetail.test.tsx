@@ -1086,4 +1086,156 @@ describe('Tenant detail page', () => {
       }),
     )
   })
+
+  it('fails closed when notification configuration payloads are malformed and shows latest diagnostics', async () => {
+    const user = userEvent.setup()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', { approver_group: 'tenant_admin', notify: 'not-an-array' }],
+      ['/admin/tenants/tenant-1/alerts/rules', []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), []],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=api_keys' })
+
+    expect(await screen.findByText(/notification configuration payload was malformed/i)).toBeInTheDocument()
+    expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^approver group$/i)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=notification-config-contract'))
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] tenant detail issue',
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        stage: 'notification-config-contract',
+        message: 'Notification configuration payload was malformed.',
+      }),
+    )
+  })
+
+  it('keeps valid tenant alert rows, drops malformed ones, and surfaces the contract warning', async () => {
+    const user = userEvent.setup()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', { approver_group: '', notify: [] }],
+      ['/admin/tenants/tenant-1/alerts/rules', {
+        rules: [
+          {
+            id: 'rule-valid',
+            tenant_id: 'tenant-1',
+            name: 'Valid rule',
+            kind: 'deny_spike',
+            enabled: true,
+            config_json: { n: 3, m_minutes: 5 },
+            created_at: '2026-03-22T12:00:00Z',
+            updated_at: '2026-03-22T12:00:00Z',
+          },
+          {
+            id: 'rule-invalid',
+            tenant_id: 'tenant-1',
+            name: '',
+            kind: 'deny_spike',
+            enabled: true,
+            config_json: { n: 3, m_minutes: 5 },
+            created_at: '2026-03-22T12:00:00Z',
+            updated_at: '2026-03-22T12:00:00Z',
+          },
+        ],
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), {
+        events: [
+          {
+            id: 'alert-valid',
+            rule_id: 'rule-valid',
+            tenant_id: 'tenant-1',
+            severity: 'warning',
+            message: 'Valid alert event',
+            status: 'pending',
+            created_at: '2026-03-23T12:00:00Z',
+          },
+          {
+            id: 'alert-invalid',
+            rule_id: '',
+            tenant_id: 'tenant-1',
+            severity: 'warning',
+            message: 'Malformed event',
+            status: 'pending',
+            created_at: '2026-03-23T12:05:00Z',
+          },
+        ],
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=alerts' })
+
+    expect(await screen.findByText('Valid rule')).toBeInTheDocument()
+    expect(screen.getByText('Valid alert event')).toBeInTheDocument()
+    expect(screen.queryByText('Malformed event')).not.toBeInTheDocument()
+    expect(screen.getByText(/some alert data was malformed and was ignored/i)).toBeInTheDocument()
+    expect(screen.getByText(/latest diagnostics/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /copy tenant diagnostics/i }))
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('stage=alerts-contract'))
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] tenant detail issue',
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        stage: 'alerts-contract',
+        issues: ['1 malformed rule row', '1 malformed event row'],
+      }),
+    )
+  })
 })

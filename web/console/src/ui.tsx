@@ -339,6 +339,7 @@ export function buildQuery(params: Record<string, string | number | null | undef
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
     if (value === null || value === undefined) return
+    if (typeof value === 'number' && !Number.isFinite(value)) return
     const text = String(value).trim()
     if (!text) return
     query.set(key, text)

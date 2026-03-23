@@ -167,6 +167,103 @@ function approverLinkStatus(approver: Approver) {
   return { label: 'Email only', tone: 'gray' }
 }
 
+function normalizeTenantNotificationConfig(payload: unknown): { config: TenantNotificationConfig; dropped: number } | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const candidate = payload as Partial<TenantNotificationConfig>
+  if (candidate.approver_group !== undefined && typeof candidate.approver_group !== 'string') return null
+  if (candidate.notify !== undefined && !Array.isArray(candidate.notify)) return null
+
+  const rawNotify = Array.isArray(candidate.notify) ? candidate.notify : []
+  const notify = rawNotify.filter((row): row is NonNullable<TenantNotificationConfig['notify']>[number] => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+    const item = row as Record<string, unknown>
+    if (typeof item.kind !== 'string' || !item.kind.trim()) return false
+    if (item.url !== undefined && typeof item.url !== 'string') return false
+    if (item.secret_ref !== undefined && typeof item.secret_ref !== 'string') return false
+    if (item.channel !== undefined && typeof item.channel !== 'string') return false
+    return true
+  })
+
+  return {
+    config: {
+      approver_group: candidate.approver_group || '',
+      notify,
+    },
+    dropped: rawNotify.length - notify.length,
+  }
+}
+
+function isAlertRule(value: unknown): value is AlertRule {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Partial<AlertRule>
+  return (
+    typeof candidate.id === 'string' &&
+    candidate.id.trim() !== '' &&
+    typeof candidate.tenant_id === 'string' &&
+    candidate.tenant_id.trim() !== '' &&
+    typeof candidate.name === 'string' &&
+    candidate.name.trim() !== '' &&
+    typeof candidate.kind === 'string' &&
+    candidate.kind.trim() !== '' &&
+    typeof candidate.enabled === 'boolean' &&
+    !!candidate.config_json &&
+    typeof candidate.config_json.n === 'number' &&
+    typeof candidate.config_json.m_minutes === 'number' &&
+    typeof candidate.created_at === 'string' &&
+    candidate.created_at.trim() !== '' &&
+    typeof candidate.updated_at === 'string' &&
+    candidate.updated_at.trim() !== ''
+  )
+}
+
+function normalizeAlertRulesPayload(payload: unknown): { rules: AlertRule[]; dropped: number } | null {
+  if (Array.isArray(payload)) {
+    const rules = payload.filter(isAlertRule)
+    return { rules, dropped: payload.length - rules.length }
+  }
+  if (!payload || typeof payload !== 'object') return null
+  const wrapped = (payload as { rules?: unknown }).rules
+  if (!Array.isArray(wrapped)) return null
+  const rules = wrapped.filter(isAlertRule)
+  return { rules, dropped: wrapped.length - rules.length }
+}
+
+function isAlertEvent(value: unknown): value is AlertEvent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Partial<AlertEvent>
+  return (
+    typeof candidate.id === 'string' &&
+    candidate.id.trim() !== '' &&
+    typeof candidate.rule_id === 'string' &&
+    candidate.rule_id.trim() !== '' &&
+    typeof candidate.tenant_id === 'string' &&
+    candidate.tenant_id.trim() !== '' &&
+    typeof candidate.severity === 'string' &&
+    candidate.severity.trim() !== '' &&
+    typeof candidate.message === 'string' &&
+    candidate.message.trim() !== '' &&
+    typeof candidate.status === 'string' &&
+    candidate.status.trim() !== '' &&
+    typeof candidate.created_at === 'string' &&
+    candidate.created_at.trim() !== '' &&
+    (candidate.attempt_count === undefined || typeof candidate.attempt_count === 'number') &&
+    (candidate.next_attempt_at === undefined || typeof candidate.next_attempt_at === 'string') &&
+    (candidate.last_error === undefined || typeof candidate.last_error === 'string')
+  )
+}
+
+function normalizeAlertEventsPayload(payload: unknown): { events: AlertEvent[]; dropped: number } | null {
+  if (Array.isArray(payload)) {
+    const events = payload.filter(isAlertEvent)
+    return { events, dropped: payload.length - events.length }
+  }
+  if (!payload || typeof payload !== 'object') return null
+  const wrapped = (payload as { events?: unknown }).events
+  if (!Array.isArray(wrapped)) return null
+  const events = wrapped.filter(isAlertEvent)
+  return { events, dropped: wrapped.length - events.length }
+}
+
 function normalizeTenantAnalyticsSummary(payload: unknown): TenantAnalyticsSummary | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
   const candidate = payload as Partial<TenantAnalyticsSummary>
@@ -467,17 +564,32 @@ export default function TenantDetail() {
       }
 
       if (notifCfgResp.status === 'fulfilled') {
-        const notifCfg = notifCfgResp.value as TenantNotificationConfig
-        setNotificationConfig(notifCfg)
-        const slack = notifCfg.notify?.find((n: any) => n.kind === 'slack')
-        const webhook = notifCfg.notify?.find((n: any) => n.kind === 'webhook')
-        setNotifForm({
-          approver_group: notifCfg.approver_group || '',
-          slack_channel: slack?.channel || '',
-          webhook_url: webhook?.url || '',
-          webhook_secret_ref: webhook?.secret_ref || '',
-        })
-        clearTenantIssues('notification-config')
+        const normalizedConfig = normalizeTenantNotificationConfig(notifCfgResp.value)
+        if (!normalizedConfig) {
+          const malformedNotificationError = new Error('Notification configuration payload was malformed.')
+          setNotificationConfig(null)
+          setNotifError(malformedNotificationError.message)
+          logTenantDetailIssue('notification-config-contract', malformedNotificationError)
+        } else {
+          const notifCfg = normalizedConfig.config
+          setNotificationConfig(notifCfg)
+          const slack = notifCfg.notify?.find((n: any) => n.kind === 'slack')
+          const webhook = notifCfg.notify?.find((n: any) => n.kind === 'webhook')
+          setNotifForm({
+            approver_group: notifCfg.approver_group || '',
+            slack_channel: slack?.channel || '',
+            webhook_url: webhook?.url || '',
+            webhook_secret_ref: webhook?.secret_ref || '',
+          })
+          if (normalizedConfig.dropped > 0) {
+            const partialNotificationError = new Error('Some notification delivery entries were malformed and were ignored.')
+            setNotifError(partialNotificationError.message)
+            logTenantDetailIssue('notification-config-contract', partialNotificationError, { droppedRows: normalizedConfig.dropped })
+          } else {
+            setNotifError('')
+            clearTenantIssues('notification-config', 'notification-config-contract')
+          }
+        }
       } else {
         setNotificationConfig(null)
         setNotifError(notifCfgResp.reason?.message || 'Failed to load notification config')
@@ -512,16 +624,29 @@ export default function TenantDetail() {
       ])
       if (seq !== alertsFetchSeq.current) return
       const failures: string[] = []
+      const contractIssues: string[] = []
       if (rulesResp.status === 'fulfilled') {
-        const rulesData = rulesResp.value as AlertRule[] | { rules?: AlertRule[] }
-        setAlertRules(Array.isArray(rulesData) ? rulesData : rulesData?.rules || [])
+        const normalizedRules = normalizeAlertRulesPayload(rulesResp.value)
+        if (!normalizedRules) {
+          setAlertRules([])
+          contractIssues.push('rules payload')
+        } else {
+          setAlertRules(normalizedRules.rules)
+          if (normalizedRules.dropped > 0) contractIssues.push(`${normalizedRules.dropped} malformed rule row${normalizedRules.dropped === 1 ? '' : 's'}`)
+        }
       } else {
         setAlertRules([])
         failures.push('rules')
       }
       if (eventsResp.status === 'fulfilled') {
-        const eventsData = eventsResp.value as AlertEvent[] | { events?: AlertEvent[] }
-        setAlertEvents(Array.isArray(eventsData) ? eventsData : eventsData?.events || [])
+        const normalizedEvents = normalizeAlertEventsPayload(eventsResp.value)
+        if (!normalizedEvents) {
+          setAlertEvents([])
+          contractIssues.push('events payload')
+        } else {
+          setAlertEvents(normalizedEvents.events)
+          if (normalizedEvents.dropped > 0) contractIssues.push(`${normalizedEvents.dropped} malformed event row${normalizedEvents.dropped === 1 ? '' : 's'}`)
+        }
       } else {
         setAlertEvents([])
         failures.push('events')
@@ -529,8 +654,12 @@ export default function TenantDetail() {
       if (failures.length > 0) {
         logTenantDetailIssue('alerts-partial', new Error(`Some alert data could not be loaded: ${failures.join(', ')}.`), { sections: failures })
         setAlertsError(`Some alert data could not be loaded: ${failures.join(', ')}.`)
+      } else if (contractIssues.length > 0) {
+        const contractError = new Error(`Some alert data was malformed and was ignored: ${contractIssues.join(', ')}.`)
+        logTenantDetailIssue('alerts-contract', contractError, { issues: contractIssues })
+        setAlertsError(contractError.message)
       } else {
-        clearTenantIssues('alerts', 'alerts-partial')
+        clearTenantIssues('alerts', 'alerts-partial', 'alerts-contract')
       }
     } catch (err: any) {
       if (seq !== alertsFetchSeq.current) return
@@ -876,6 +1005,18 @@ export default function TenantDetail() {
               {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {!triageNotice && latestIssue && (error || notifError || alertsError || analyticsError) ? (
+        <div className="warn-banner warn-banner-subtle mb-16">
+          <div className="warn-banner-header">
+            <div className="warn-banner-title">Latest diagnostics</div>
+            <CopyIconButton text={tenantDiagnostics} label="Tenant diagnostics" disabled={!tenantDiagnostics} />
+          </div>
+          <div className="warn-banner-meta">
+            <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
+            {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+          </div>
         </div>
       ) : null}
 

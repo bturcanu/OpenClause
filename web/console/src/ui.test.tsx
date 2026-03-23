@@ -36,6 +36,10 @@ describe('ui helpers', () => {
     expect(buildQuery({ page: 0, risk_min: 0, tenant_id: ' tenant-1 ', empty: '', missing: undefined, none: null })).toBe('?page=0&risk_min=0&tenant_id=tenant-1')
   })
 
+  it('drops non-finite numeric query values instead of serializing NaN and Infinity', () => {
+    expect(buildQuery({ page: Number.NaN, risk_min: Number.POSITIVE_INFINITY, risk_max: Number.NEGATIVE_INFINITY, tenant_id: 'tenant-1' })).toBe('?tenant_id=tenant-1')
+  })
+
   it('round-trips encoded query-builder values through URLSearchParams', () => {
     const query = buildQuery({
       decision: 'approve',

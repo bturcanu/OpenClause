@@ -95,11 +95,41 @@ function normalizeSessionSummary(payload: unknown): SessionSummary | null {
   return isSessionSummary(payload) ? payload : null
 }
 
-function normalizeTimelineEvents(payload: unknown): SessionTimelineEvent[] | null {
-  if (Array.isArray(payload)) return payload as SessionTimelineEvent[]
+function isSessionTimelineEvent(value: unknown): value is SessionTimelineEvent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Partial<SessionTimelineEvent>
+  return (
+    typeof candidate.event_id === 'string' &&
+    candidate.event_id.trim() !== '' &&
+    typeof candidate.tenant_id === 'string' &&
+    candidate.tenant_id.trim() !== '' &&
+    typeof candidate.agent_id === 'string' &&
+    candidate.agent_id.trim() !== '' &&
+    typeof candidate.tool === 'string' &&
+    candidate.tool.trim() !== '' &&
+    typeof candidate.action === 'string' &&
+    candidate.action.trim() !== '' &&
+    typeof candidate.risk_score === 'number' &&
+    typeof candidate.decision === 'string' &&
+    candidate.decision.trim() !== '' &&
+    typeof candidate.session_id === 'string' &&
+    candidate.session_id.trim() !== '' &&
+    typeof candidate.received_at === 'string' &&
+    candidate.received_at.trim() !== '' &&
+    typeof candidate.explain === 'string'
+  )
+}
+
+function normalizeTimelineEvents(payload: unknown): { events: SessionTimelineEvent[]; dropped: number } | null {
+  if (Array.isArray(payload)) {
+    const events = payload.filter(isSessionTimelineEvent)
+    return { events, dropped: payload.length - events.length }
+  }
   if (!payload || typeof payload !== 'object') return null
   const wrapped = (payload as { events?: unknown }).events
-  return Array.isArray(wrapped) ? (wrapped as SessionTimelineEvent[]) : null
+  if (!Array.isArray(wrapped)) return null
+  const events = wrapped.filter(isSessionTimelineEvent)
+  return { events, dropped: wrapped.length - events.length }
 }
 
 export default function SessionTimeline() {
@@ -236,9 +266,23 @@ export default function SessionTimeline() {
           logSessionDetailIssue('timeline-contract', malformedTimelineError)
           setError(malformedTimelineError.message)
         } else {
-          setEvents(normalizedTimeline)
-          setError('')
-          clearSessionIssues('summary', 'summary-contract', 'timeline', 'timeline-contract', 'fetch')
+          if (normalizedTimeline.events.length === 0 && normalizedTimeline.dropped > 0) {
+            const malformedRowsError = new Error('The session summary loaded, but every timeline row was malformed.')
+            setEvents([])
+            setTimelineLoadFailed(true)
+            logSessionDetailIssue('timeline-contract', malformedRowsError, { droppedRows: normalizedTimeline.dropped })
+            setError(malformedRowsError.message)
+          } else {
+            setEvents(normalizedTimeline.events)
+            if (normalizedTimeline.dropped > 0) {
+              const partialTimelineError = new Error('Some timeline rows were malformed and were ignored.')
+              logSessionDetailIssue('timeline-contract', partialTimelineError, { droppedRows: normalizedTimeline.dropped })
+              setError(partialTimelineError.message)
+            } else {
+              setError('')
+              clearSessionIssues('summary', 'summary-contract', 'timeline', 'timeline-contract', 'fetch')
+            }
+          }
         }
       } else {
         setEvents([])
@@ -372,6 +416,18 @@ export default function SessionTimeline() {
       />
 
       {copyStatus ? <div className="success-msg mb-16">{copyStatus}</div> : null}
+      {!triageNotice && latestIssue && (error || timelineLoadFailed) ? (
+        <div className="warn-banner warn-banner-subtle mb-16">
+          <div className="warn-banner-header">
+            <div className="warn-banner-title">Latest diagnostics</div>
+            <CopyIconButton text={sessionDiagnostics} label="Session diagnostics" disabled={!sessionDiagnostics} />
+          </div>
+          <div className="warn-banner-meta">
+            <span>Latest stage: <code className="mono">{latestIssue.stage}</code></span>
+            {latestIssue.requestId ? <span>Request ID: <code className="mono">{latestIssue.requestId}</code></span> : null}
+          </div>
+        </div>
+      ) : null}
       {triageNotice ? (
         <div className="warn-banner mb-16">
           <div className="warn-banner-header">

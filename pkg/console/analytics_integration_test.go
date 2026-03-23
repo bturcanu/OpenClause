@@ -274,3 +274,51 @@ func TestStoreGetDecisionTimeseriesSupportsSmallerBucketIntervalsWithoutLosingTo
 		t.Fatalf("expected half-hour buckets to preserve 10 total events, got %d", totalEvents)
 	}
 }
+
+func TestStoreGetDecisionTimeseriesSupportsLargerBucketIntervalsWithoutLosingTotals(t *testing.T) {
+	fx := newAnalyticsFixture(t)
+
+	series, err := fx.store.GetDecisionTimeseries(fx.ctx, fx.tenantID, fx.since, 120)
+	if err != nil {
+		t.Fatalf("GetDecisionTimeseries(120m): %v", err)
+	}
+
+	expected := []struct {
+		bucket       time.Time
+		total        int64
+		allowCount   int64
+		denyCount    int64
+		approveCount int64
+	}{
+		{bucket: fx.since, total: 5, allowCount: 2, denyCount: 2, approveCount: 1},
+		{bucket: fx.since.Add(2 * time.Hour), total: 5, allowCount: 2, denyCount: 1, approveCount: 2},
+	}
+
+	if len(series) != len(expected) {
+		t.Fatalf("expected %d two-hour buckets, got %+v", len(expected), series)
+	}
+
+	var totalEvents int64
+	for i, want := range expected {
+		got := series[i]
+		bucket, ok := got["bucket"].(time.Time)
+		if !ok {
+			t.Fatalf("bucket %d was not a time.Time: %#v", i, got["bucket"])
+		}
+		if !bucket.Equal(want.bucket) {
+			t.Fatalf("bucket %d: expected %s, got %s", i, want.bucket, bucket)
+		}
+		if got["total"] != want.total || got["allow_count"] != want.allowCount || got["deny_count"] != want.denyCount || got["approve_count"] != want.approveCount {
+			t.Fatalf("bucket %d: expected totals %+v, got %+v", i, want, got)
+		}
+		total, ok := got["total"].(int64)
+		if !ok {
+			t.Fatalf("bucket %d total was not int64: %#v", i, got["total"])
+		}
+		totalEvents += total
+	}
+
+	if totalEvents != 10 {
+		t.Fatalf("expected two-hour buckets to preserve 10 total events, got %d", totalEvents)
+	}
+}
