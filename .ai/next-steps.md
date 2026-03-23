@@ -10,6 +10,10 @@
 
 This file started as the verified backlog for the `product/next-steps` branch. Later branches have already completed several items that were still open in this snapshot:
 
+- Active bug-minimization/source-of-truth trackers now live in:
+  - `.ai/bug-minimization-roadmap.md`
+  - `.ai/console-ui-test-tracker.md`
+
 - Completed since the original draft:
   - NS-01 connector registry endpoint via `GET /admin/connectors`
   - NS-02 Java Gradle wrapper and `./gradlew test`

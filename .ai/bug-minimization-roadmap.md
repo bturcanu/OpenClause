@@ -26,7 +26,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 - Strong backend coverage exists across console/auth/store/evidence/approvals/alerts/gateway/SDKs.
 - Console UI now has a `Vitest + React Testing Library` harness with focused integration coverage.
-- `web/console` currently passes `17` test files / `80` tests locally on this branch.
+- `web/console` currently passes `17` test files / `81` tests locally on this branch.
 - Known recent UI bugs found by tests:
   - Auth/setup/reset/invite labels were not properly bound to inputs.
   - Tenant search/create labels were not properly bound to inputs.
@@ -34,6 +34,8 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
   - Users page dropped valid array-form `/admin/users` and `/admin/auth-sessions` payloads because it only trusted wrapped objects.
   - Tenant detail had brittle contract handling for approvers and tenant alert subresources when payloads arrived in array-vs-wrapped variants.
   - Alerts, Policies, Connectors, and Session detail still had visible labels that were not actually bound to their controls, weakening keyboard and screen-reader flows until the latest sweep.
+  - Tenant detail could keep showing stale notification-routing state after a later refetch failed, instead of honestly dropping back to the unavailable state.
+  - Events, Sessions, Users, Approvals, and Policies still had visible high-traffic filter/form labels that were not actually bound to their controls until the newest operator-label sweep.
 
 ## Workstreams
 
@@ -48,12 +50,13 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 ## Completed In This Branch
 
-- Added a `Vitest + React Testing Library` harness for `web/console` and expanded it to `80` deterministic tests.
+- Added a `Vitest + React Testing Library` harness for `web/console` and expanded it to `81` deterministic tests.
 - Converted high-value console pages from mostly smoke coverage to action-level integration coverage.
 - Hardened multiple UI/API boundaries against array-vs-wrapped payload drift for users, sessions, analytics, and tenant detail subresources.
 - Added export-contract, query-builder, copy-helper, and datetime edge tests in the console layer.
 - Surfaced request/correlation IDs in `APIClientError` messages so failing console requests are easier to triage from the UI.
 - Bound the remaining high-traffic console form labels to their controls and added label-driven tests so those accessibility regressions now break CI.
+- Fixed stale notification-config state in tenant detail so failed refetches no longer leave misleading routing values on screen.
 
 ## Findings
 
@@ -62,6 +65,8 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Fixed: [`web/console/src/api.ts`](../web/console/src/api.ts) did not preserve `x-request-id` / `x-correlation-id` values from failed responses, which made console-side bug reports harder to trace.
 - Fixed: [`web/console/src/pages/Alerts.tsx`](../web/console/src/pages/Alerts.tsx), [`web/console/src/pages/Policies.tsx`](../web/console/src/pages/Policies.tsx), [`web/console/src/pages/Connectors.tsx`](../web/console/src/pages/Connectors.tsx), and [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) exposed labels visually without binding them to their controls, which made keyboard-first operator flows weaker and masked regressions in tests.
 - Fixed: [`web/console/src/pages/Policies.tsx`](../web/console/src/pages/Policies.tsx) previously dropped wrapped `{ versions: [...] }` payloads, and [`web/console/src/pages/Connectors.tsx`](../web/console/src/pages/Connectors.tsx) trusted malformed connector `actions` payloads too much.
+- Fixed: [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) could preserve stale notification-config UI after a later refetch lost that subresource, which made the page look healthier than the current data really was.
+- Fixed: [`web/console/src/pages/Events.tsx`](../web/console/src/pages/Events.tsx), [`web/console/src/pages/Sessions.tsx`](../web/console/src/pages/Sessions.tsx), [`web/console/src/pages/Users.tsx`](../web/console/src/pages/Users.tsx), [`web/console/src/pages/Approvals.tsx`](../web/console/src/pages/Approvals.tsx), and [`web/console/src/pages/Policies.tsx`](../web/console/src/pages/Policies.tsx) still showed visible operator labels without real control bindings, which weakened keyboard navigation and let tests rely on DOM-neighbor helpers instead of true labels.
 - Corrected tracker drift: the approvals notifier malformed-webhook-row fail-closed coverage already exists, and Python SDK metadata now declares `requires-python >=3.9`.
 
 ## Phase Plan
@@ -176,8 +181,8 @@ Definition of done:
 
 ### P0
 
-- Finish the remaining thin contract fixtures for session detail and tenant detail partial-failure branches beyond the now-covered policies/connectors/request-id cases.
-- Deepen the most stateful tenant-detail and session-detail branches that still rely on broad smoke-plus-one-action coverage.
+- Finish the remaining thin contract fixtures for session detail partial-failure branches beyond the now-covered request-id, policies/connectors, and tenant-notification cases.
+- Deepen the most stateful tenant-detail and session-detail branches that still rely on broad smoke-plus-one-action coverage after the latest tenant-detail and operator-label sweeps.
 - Add regression tests whenever local/manual console verification finds a mismatch.
 
 ### P1
@@ -190,6 +195,11 @@ Definition of done:
 
 - Expand observability and local reproduction tooling beyond request IDs, especially around repeated API failures and failing export/session paths.
 - Add richer failure-triage docs once the core coverage stabilizes.
+
+## Source Of Truth
+
+- Active backlog/source of truth: this roadmap plus [`.ai/console-ui-test-tracker.md`](.ai/console-ui-test-tracker.md)
+- Historical snapshots/reference only: [`.ai/bug-sweep.md`](.ai/bug-sweep.md) and [`.ai/next-steps.md`](.ai/next-steps.md)
 
 ## Bug Intake Rule
 
