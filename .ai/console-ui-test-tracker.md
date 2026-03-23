@@ -38,11 +38,13 @@ Add a maintainable `Vitest + React Testing Library` harness for `web/console`, t
 | Alerts | `pages/Alerts.tsx` | page integration | Done |
 | Policies | `pages/Policies.tsx` | page integration | Done |
 | Connectors | `pages/Connectors.tsx` | page integration | Done |
+| Browser smoke | `e2e/console-smoke.spec.ts` | Playwright e2e smoke | Done (CI-oriented) |
 
 ## Verification
 
 - `npm --prefix web/console run build`
 - `npm --prefix web/console run test`
+- `npm --prefix web/console run test:e2e` after `./scripts/dev.sh` + `./scripts/demo.sh`
 
 ## Implemented Tests
 
@@ -63,13 +65,15 @@ Add a maintainable `Vitest + React Testing Library` harness for `web/console`, t
 - `src/pages/Policies.test.tsx`
 - `src/pages/Connectors.test.tsx`
 - `src/pages/operator-pages-smoke.test.tsx`
+- `e2e/console-smoke.spec.ts`
 
 ## Notes
 
 - Prefer deterministic mocked API responses over browser/network-heavy tests.
 - Avoid broad snapshots; every new test should assert visible behavior or an invariant.
-- `npm --prefix web/console run test` currently covers 17 files / 81 tests.
+- `npm --prefix web/console run test` currently covers 17 files / 90 tests.
 - The expected jsdom warning `Not implemented: navigation to another Document` comes from the `apiFetch` 401 redirect test path and does not fail the suite.
+- `npm --prefix web/console run test:e2e` is intentionally separate from Vitest. [`web/console/vite.config.ts`](/Users/bogdan/dev/personal/OpenClause/web/console/vite.config.ts) now explicitly scopes unit/integration tests to `src/**/*.test.{ts,tsx}` so Playwright specs do not break the normal console test command.
 - One real UI bug was found and fixed while adding coverage: [`web/console/src/pages/Tenants.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Tenants.tsx) now correctly binds the Search and Create Tenant labels to their inputs for keyboard/accessibility-safe `getByLabelText` behavior.
 - Another accessibility bug was found and fixed in the auth flows: [`web/console/src/pages/Login.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Login.tsx), [`web/console/src/pages/SetupWizard.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/SetupWizard.tsx), [`web/console/src/pages/InviteAccept.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/InviteAccept.tsx), and [`web/console/src/pages/PasswordReset.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/PasswordReset.tsx) now bind visible labels to their controls so label-based navigation and testing work correctly.
 - A partial-failure dashboard bug was found and fixed in [`web/console/src/pages/Overview.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Overview.tsx): when the timeseries API failed, the UI incorrectly showed the “Not enough activity yet” empty-state. The page now keeps the inline error honest instead of implying there was simply no data.
@@ -82,3 +86,7 @@ Add a maintainable `Vitest + React Testing Library` harness for `web/console`, t
 - The newest contract pass hardened [`web/console/src/pages/Policies.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Policies.tsx) against wrapped version-history payloads and made [`web/console/src/pages/Connectors.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Connectors.tsx) normalize malformed single-string action payloads instead of crashing the catalog.
 - The current sweep fixed a real stale-state bug in [`web/console/src/pages/TenantDetail.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/TenantDetail.tsx): if notification config loaded once and a later refetch failed, the page could keep showing the old routing values instead of dropping back to the unavailable state. [`web/console/src/pages/TenantDetail.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/TenantDetail.test.tsx) now locks that regression down.
 - The same sweep bound the remaining high-traffic operator labels in [`web/console/src/pages/Events.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Events.tsx), [`web/console/src/pages/Sessions.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Sessions.tsx), [`web/console/src/pages/Users.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Users.tsx), [`web/console/src/pages/Approvals.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Approvals.tsx), and [`web/console/src/pages/Policies.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/Policies.tsx); the affected tests now use true `getByLabelText` queries instead of helper fallbacks.
+- The latest backlog slice added CI-oriented browser smokes for login/overview, tenant detail create flows, audit-trail drill-in, and session-detail execution linkage in [`web/console/e2e/console-smoke.spec.ts`](/Users/bogdan/dev/personal/OpenClause/web/console/e2e/console-smoke.spec.ts). Local execution on this macOS host is still blocked by a Chromium MachPort permission error, so the canonical verifier is the `browser-smoke` CI job.
+- Session-detail coverage now fails closed on malformed wrapped summary payloads in [`web/console/src/pages/SessionTimeline.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/SessionTimeline.test.tsx), which caught and fixed a real contract bug in [`web/console/src/pages/SessionTimeline.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/SessionTimeline.tsx).
+- Tenant-detail coverage now proves stale alert responses cannot overwrite a fresher refetch, complementing the earlier analytics stale-response coverage in [`web/console/src/pages/TenantDetail.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/pages/TenantDetail.test.tsx).
+- Shared helper coverage in [`web/console/src/api.test.ts`](/Users/bogdan/dev/personal/OpenClause/web/console/src/api.test.ts) and [`web/console/src/ui.test.tsx`](/Users/bogdan/dev/personal/OpenClause/web/console/src/ui.test.tsx) now includes repeated-failure telemetry, broader datetime round-trips, and extra query-builder edge cases.

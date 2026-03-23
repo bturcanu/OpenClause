@@ -1184,12 +1184,14 @@ go test -race ./...       # With race detector
 opa test policy/bundles/v0/ policy/tests/ -v   # Policy tests
 npm --prefix web/console run test              # Console UI tests
 npm --prefix web/console run build             # Console UI build
+npm --prefix web/console run test:e2e          # Browser smoke pack (after ./scripts/dev.sh + ./scripts/demo.sh)
 npm --prefix sdk/typescript run build          # TypeScript SDK build
 (cd sdk/java && ./gradlew test)                # Java SDK tests
 PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -v   # Python SDK tests
 ```
 
 Core Python SDK import/tests should run on Python 3.9+. Run any LangChain-specific checks in an environment where the `openclause[langchain]` extra is installed.
+The browser smoke pack is designed for CI/Linux and for local stacks that can launch Playwright Chromium. If a locked-down macOS host blocks the bundled browser process, rely on the `browser-smoke` CI job as the canonical verifier.
 
 The frontend test inventory and remaining UI follow-ups live in [`.ai/console-ui-test-tracker.md`](.ai/console-ui-test-tracker.md).
 

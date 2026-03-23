@@ -17,13 +17,13 @@ This file started as the verified backlog for the `product/next-steps` branch. L
 - Completed since the original draft:
   - NS-01 connector registry endpoint via `GET /admin/connectors`
   - NS-02 Java Gradle wrapper and `./gradlew test`
-  - NS-03 core Python SDK support for Python 3.9+, with LangChain moved behind an optional extra
+  - NS-03 core Python SDK support for Python 3.9+, with LangChain moved behind an optional extra and an explicit Python 3.9 install/import CI job
+  - NS-05/NS-06 CI release gates + browser smoke coverage via `.github/workflows/ci.yml`
   - NS-10 console login-session visibility and revocation, implemented from the Users surface via `GET /admin/auth-sessions` and `POST /admin/auth-sessions/{session_id}/revoke`
   - invite email delivery with `accept_url` + `email_status`
   - operator-grade Sessions explorer and broader console UI polish
 - Still genuinely open/high-value:
   - NS-04 Windows `demo.ps1`
-  - NS-05/NS-06 CI release gates + e2e demo job
   - NS-07 docs golden path consolidation
   - NS-08 broader mock connector coverage
   - NS-09 alerts folded into the main demo flow
@@ -47,7 +47,7 @@ This file started as the verified backlog for the `product/next-steps` branch. L
 | `web/console npm run build` | ✅ 58 modules, clean |
 | `sdk/typescript npm run build` | ✅ Clean compile |
 | Java SDK `gradle test` (Docker) | ✅ 3 tasks, BUILD SUCCESSFUL |
-| Python SDK `pip install -e .` | ✅ Core SDK metadata/tests now target Python 3.9+; remaining gap is a CI matrix job proving 3.9 install/import end-to-end |
+| Python SDK `pip install -e .` | ✅ Core SDK metadata/tests target Python 3.9+ and CI now runs an explicit 3.9 install/import check |
 
 ### Happy Path Demo (scripts/demo.sh — all 14 steps pass)
 
@@ -110,7 +110,7 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 |---|-----|--------|--------|
 | G-001 | Console-API `/v1/connectors` returned event-based data (observed tools), not the connector registry | Fixed later: console-api now proxies the full gateway connector registry via `/admin/connectors` | M |
 | G-002 | Overview page endpoints (`/admin/analytics/overview`, `/admin/analytics/timeseries`) existed but weren't routed — now fixed | Overview showed zeros before fix | Fixed ✅ |
-| G-003 | Python SDK 3.9 installability matrix is not yet enforced in CI | Metadata and tests now target 3.9+, but CI still lacks an explicit install/import job | S |
+| G-003 | Python SDK 3.9 installability matrix was not yet enforced in CI | Fixed later: CI now runs an explicit Python 3.9 install/import job | S |
 | G-004 | No Gradle wrapper in Java SDK | Fixed later: repo now includes `sdk/java/gradlew` and wrapper assets | S |
 | G-005 | No `scripts/demo.ps1` for Windows PowerShell | Windows developers can't run demo script | S |
 
@@ -178,8 +178,7 @@ All TB-001..TB-010 and U-001..U-012 fixes are merged (tracked in `.ai/usability-
 - **Docs:** Update sdk/java/README.md
 
 #### NS-03: Python 3.9 support — Completed later
-- **Status:** Core SDK metadata now declares `requires-python >=3.9`, core imports/tests run without LangChain installed, and LangChain moved behind the `openclause[langchain]` extra.
-- **Remaining gap:** add an explicit CI job that installs/imports the SDK under Python 3.9.
+- **Status:** Core SDK metadata now declares `requires-python >=3.9`, core imports/tests run without LangChain installed, LangChain moved behind the `openclause[langchain]` extra, and CI now installs/imports the SDK under Python 3.9.
 
 #### NS-04: Windows demo script (demo.ps1)
 - **Impact:** Windows developers can run the demo
@@ -253,7 +252,7 @@ Before merging `product/next-steps` to main:
 - [x] `scripts/demo.sh` passes all 14 steps on fresh DB
 - [x] No stray binaries committed
 - [x] `.ai/bug-sweep.md` has per-bug evidence for all 43 bugs
-- [ ] Python SDK install/import matrix explicitly runs on Python 3.9 in CI
+- [x] Python SDK install/import matrix explicitly runs on Python 3.9 in CI
 
 ---
 

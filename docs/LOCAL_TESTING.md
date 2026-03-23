@@ -9,6 +9,7 @@ Use [readme.md](/Users/bogdan/dev/personal/OpenClause/readme.md) as the canonica
 - Docker Desktop running
 - `curl` (or any HTTP client)
 - Go 1.25+ (for `go test`)
+- Node.js 20+ and npm (for console UI tests and browser smokes)
 - Java 11+ (for `sdk/java/gradlew test`)
 - Python 3.9+ with recent `pip`/`setuptools`/`wheel` if you want to validate the core `sdk/python` install/import path
 - If you want to exercise the LangChain helper too, install the optional `openclause[langchain]` extra in that environment
@@ -83,6 +84,25 @@ On Windows PowerShell, pipe the SQL through docker directly:
 ```powershell
 Get-Content docs\seed_dev.sql | docker compose -f deploy/docker-compose.yml exec -T postgres psql -U openclause -d openclause
 ```
+
+## 2a. Run Console Browser Smokes (optional)
+
+Once the stack is up and seeded, you can run the small Playwright smoke pack that mirrors the highest-value operator paths:
+
+```bash
+./scripts/dev.sh
+./scripts/demo.sh
+npm --prefix web/console run test:e2e
+```
+
+Coverage:
+
+- login -> overview
+- tenant create -> agent create -> API key create
+- audit trail filter -> event detail
+- sessions -> session detail execution linkage
+
+If a locked-down local macOS host blocks the bundled Chromium process with a MachPort permission error, treat the `browser-smoke` CI job as the canonical verifier and keep using `npm --prefix web/console run test` locally for deterministic UI coverage.
 
 ## 3. Console Login
 
