@@ -26,7 +26,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 - Strong backend coverage exists across console/auth/store/evidence/approvals/alerts/gateway/SDKs.
 - Console UI now has a `Vitest + React Testing Library` harness with focused integration coverage.
-- `web/console` currently passes `17` test files / `78` tests locally on this branch.
+- `web/console` currently passes `17` test files / `80` tests locally on this branch.
 - Known recent UI bugs found by tests:
   - Auth/setup/reset/invite labels were not properly bound to inputs.
   - Tenant search/create labels were not properly bound to inputs.
@@ -48,7 +48,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 ## Completed In This Branch
 
-- Added a `Vitest + React Testing Library` harness for `web/console` and expanded it to `76` deterministic tests.
+- Added a `Vitest + React Testing Library` harness for `web/console` and expanded it to `80` deterministic tests.
 - Converted high-value console pages from mostly smoke coverage to action-level integration coverage.
 - Hardened multiple UI/API boundaries against array-vs-wrapped payload drift for users, sessions, analytics, and tenant detail subresources.
 - Added export-contract, query-builder, copy-helper, and datetime edge tests in the console layer.
@@ -61,6 +61,7 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 - Fixed: [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) was too strict about approver and tenant alert payload shapes at the API boundary.
 - Fixed: [`web/console/src/api.ts`](../web/console/src/api.ts) did not preserve `x-request-id` / `x-correlation-id` values from failed responses, which made console-side bug reports harder to trace.
 - Fixed: [`web/console/src/pages/Alerts.tsx`](../web/console/src/pages/Alerts.tsx), [`web/console/src/pages/Policies.tsx`](../web/console/src/pages/Policies.tsx), [`web/console/src/pages/Connectors.tsx`](../web/console/src/pages/Connectors.tsx), and [`web/console/src/pages/SessionTimeline.tsx`](../web/console/src/pages/SessionTimeline.tsx) exposed labels visually without binding them to their controls, which made keyboard-first operator flows weaker and masked regressions in tests.
+- Fixed: [`web/console/src/pages/Policies.tsx`](../web/console/src/pages/Policies.tsx) previously dropped wrapped `{ versions: [...] }` payloads, and [`web/console/src/pages/Connectors.tsx`](../web/console/src/pages/Connectors.tsx) trusted malformed connector `actions` payloads too much.
 - Corrected tracker drift: the approvals notifier malformed-webhook-row fail-closed coverage already exists, and Python SDK metadata now declares `requires-python >=3.9`.
 
 ## Phase Plan
@@ -175,7 +176,7 @@ Definition of done:
 
 ### P0
 
-- Finish the remaining thin contract fixtures for policies/connectors/session detail partial-failure branches beyond the now-covered label and request-id cases.
+- Finish the remaining thin contract fixtures for session detail and tenant detail partial-failure branches beyond the now-covered policies/connectors/request-id cases.
 - Deepen the most stateful tenant-detail and session-detail branches that still rely on broad smoke-plus-one-action coverage.
 - Add regression tests whenever local/manual console verification finds a mismatch.
 

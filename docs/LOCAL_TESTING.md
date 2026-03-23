@@ -10,7 +10,8 @@ Use [readme.md](/Users/bogdan/dev/personal/OpenClause/readme.md) as the canonica
 - `curl` (or any HTTP client)
 - Go 1.25+ (for `go test`)
 - Java 11+ (for `sdk/java/gradlew test`)
-- Python 3.10+ with recent `pip`/`setuptools`/`wheel` if you want to validate `sdk/python` editable installs
+- Python 3.9+ with recent `pip`/`setuptools`/`wheel` if you want to validate the core `sdk/python` install/import path
+- If you want to exercise the LangChain helper too, install the optional `openclause[langchain]` extra in that environment
 
 ## 1. Start the Stack
 
