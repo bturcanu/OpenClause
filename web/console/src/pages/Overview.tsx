@@ -42,7 +42,8 @@ export default function Overview() {
   const [events, setEvents] = useState<Event[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [inspectedBucketIndex, setInspectedBucketIndex] = useState<number | null>(null)
+  const [hoveredBucketIndex, setHoveredBucketIndex] = useState<number | null>(null)
+  const [pinnedBucketIndex, setPinnedBucketIndex] = useState<number | null>(null)
 
   async function fetchOverview() {
     setLoading(true)
@@ -68,8 +69,12 @@ export default function Overview() {
         ? (timeseriesResult.value as TimeseriesBucket[])
         : ((timeseriesResult.value as { buckets?: TimeseriesBucket[] })?.buckets || [])
       setTimeseries(nextTimeseries)
+      setHoveredBucketIndex(null)
+      setPinnedBucketIndex(null)
     } else {
       setTimeseries([])
+      setHoveredBucketIndex(null)
+      setPinnedBucketIndex(null)
       failures.push('event volume chart')
     }
 
@@ -97,8 +102,9 @@ export default function Overview() {
   const maxCount = Math.max(...timeseries.map(bucket => bucket.total || 0), 1)
   const activeBucketIndex = timeseries.length === 0
     ? null
-    : Math.min(inspectedBucketIndex ?? (timeseries.length - 1), timeseries.length - 1)
+    : Math.min(pinnedBucketIndex ?? hoveredBucketIndex ?? (timeseries.length - 1), timeseries.length - 1)
   const activeBucket = activeBucketIndex == null ? null : timeseries[activeBucketIndex]
+  const pinnedBucket = pinnedBucketIndex == null ? null : timeseries[Math.min(pinnedBucketIndex, timeseries.length - 1)]
   const scaleTicks = Array.from(new Set([maxCount, Math.ceil(maxCount / 2), 0])).sort((a, b) => b - a)
   const midpointBucket = timeseries.length > 2 ? timeseries[Math.floor((timeseries.length - 1) / 2)] : null
 
@@ -124,7 +130,7 @@ export default function Overview() {
         <div className="detail-panel event-volume-panel">
           <h3>Event Volume</h3>
           <div className="event-volume-header">
-            <div className="table-subtext">Hover or focus a bar to inspect a bucket count.</div>
+            <div className="table-subtext">Hover to inspect a bucket, then click or press Enter/Space to pin it.</div>
             {activeBucket ? (
               <div className="event-volume-summary">
                 <span className="event-volume-total">{activeBucket.total}</span>
@@ -145,13 +151,20 @@ export default function Overview() {
                 <button
                   key={`${bucket.bucket}-${index}`}
                   type="button"
-                  className={`event-volume-bar ${index === activeBucketIndex ? 'is-active' : ''}`}
+                  className={[
+                    'event-volume-bar',
+                    index === activeBucketIndex ? 'is-active' : '',
+                    index === hoveredBucketIndex ? 'is-hovered' : '',
+                    index === pinnedBucketIndex ? 'is-pinned' : '',
+                  ].filter(Boolean).join(' ')}
                   title={`${formatDate(bucket.bucket, 'date')}: ${bucket.total} events`}
                   aria-label={`${bucket.total} events on ${formatDate(bucket.bucket, 'date')}`}
-                  onMouseEnter={() => setInspectedBucketIndex(index)}
-                  onMouseLeave={() => setInspectedBucketIndex(null)}
-                  onFocus={() => setInspectedBucketIndex(index)}
-                  onBlur={() => setInspectedBucketIndex(null)}
+                  aria-pressed={index === pinnedBucketIndex}
+                  onClick={() => setPinnedBucketIndex(index)}
+                  onMouseEnter={() => setHoveredBucketIndex(index)}
+                  onMouseLeave={() => setHoveredBucketIndex(null)}
+                  onFocus={() => setHoveredBucketIndex(index)}
+                  onBlur={() => setHoveredBucketIndex(null)}
                   style={{
                     height: `${((bucket.total || 0) / maxCount) * 100}%`,
                     minHeight: 6,
@@ -165,6 +178,19 @@ export default function Overview() {
             {midpointBucket ? <span>{formatDate(midpointBucket.bucket, 'date')}</span> : null}
             <span>{formatDate(timeseries[timeseries.length - 1].bucket, 'date')}</span>
           </div>
+          {pinnedBucket ? (
+            <div className="event-volume-selected">
+              <div>
+                <div className="event-volume-selected-label">Selected</div>
+                <div className="event-volume-selected-value">
+                  {formatDate(pinnedBucket.bucket, 'date')} — {pinnedBucket.total} {pinnedBucket.total === 1 ? 'event' : 'events'}
+                </div>
+              </div>
+              <button className="btn btn-outline btn-sm" type="button" onClick={() => setPinnedBucketIndex(null)}>
+                Clear selection
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : !loading ? (
         <div className="detail-panel">
