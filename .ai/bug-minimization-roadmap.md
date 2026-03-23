@@ -26,10 +26,13 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 
 - Strong backend coverage exists across console/auth/store/evidence/approvals/alerts/gateway/SDKs.
 - Console UI now has a `Vitest + React Testing Library` harness with focused integration coverage.
+- `web/console` currently passes `17` test files / `76` tests locally on this branch.
 - Known recent UI bugs found by tests:
   - Auth/setup/reset/invite labels were not properly bound to inputs.
   - Tenant search/create labels were not properly bound to inputs.
   - Overview showed a misleading "no activity" empty state on timeseries partial failure.
+  - Users page dropped valid array-form `/admin/users` and `/admin/auth-sessions` payloads because it only trusted wrapped objects.
+  - Tenant detail had brittle contract handling for approvers and tenant alert subresources when payloads arrived in array-vs-wrapped variants.
 
 ## Workstreams
 
@@ -37,10 +40,25 @@ This is not a claim of "zero bugs." It is a tracker for systematically shrinking
 | --- | --- | --- | --- |
 | Backend invariants | Lock down auth, scope, approval, evidence, export, analytics invariants | P0 | In progress |
 | Console UI actions | Cover operator actions and error/partial states | P0 | In progress |
-| API/UI contracts | Detect drift between console expectations and API payloads | P0 | Planned |
+| API/UI contracts | Detect drift between console expectations and API payloads | P0 | In progress |
 | Critical e2e smokes | Prove a few full cross-service flows in CI | P1 | Partial |
-| Property/fuzz tests | Find edge classes in date, filter, analytics, export, and parsing logic | P1 | Planned |
-| Observability | Catch and triage escaped bugs fast in dev/prod | P1 | Planned |
+| Property/fuzz tests | Find edge classes in date, filter, analytics, export, and parsing logic | P1 | In progress |
+| Observability | Catch and triage escaped bugs fast in dev/prod | P1 | In progress |
+
+## Completed In This Branch
+
+- Added a `Vitest + React Testing Library` harness for `web/console` and expanded it to `76` deterministic tests.
+- Converted high-value console pages from mostly smoke coverage to action-level integration coverage.
+- Hardened multiple UI/API boundaries against array-vs-wrapped payload drift for users, sessions, analytics, and tenant detail subresources.
+- Added export-contract, query-builder, copy-helper, and datetime edge tests in the console layer.
+- Surfaced request/correlation IDs in `APIClientError` messages so failing console requests are easier to triage from the UI.
+
+## Findings
+
+- Fixed: [`web/console/src/pages/Users.tsx`](../web/console/src/pages/Users.tsx) incorrectly treated valid array-form `/admin/users` and `/admin/auth-sessions` payloads as empty data.
+- Fixed: [`web/console/src/pages/TenantDetail.tsx`](../web/console/src/pages/TenantDetail.tsx) was too strict about approver and tenant alert payload shapes at the API boundary.
+- Fixed: [`web/console/src/api.ts`](../web/console/src/api.ts) did not preserve `x-request-id` / `x-correlation-id` values from failed responses, which made console-side bug reports harder to trace.
+- Corrected tracker drift: the approvals notifier malformed-webhook-row fail-closed coverage already exists, and Python SDK metadata now declares `requires-python >=3.9`.
 
 ## Phase Plan
 
@@ -154,19 +172,19 @@ Definition of done:
 
 ### P0
 
-- Add API/UI contract fixtures for console analytics, sessions, approvals, and users.
-- Finish remaining thin console action coverage in the most stateful branches of tenant detail and session detail.
+- Finish the remaining thin contract fixtures for alerts, policies, connectors, and session detail error metadata.
+- Deepen the most stateful tenant-detail and session-detail branches that still rely on broad smoke-plus-one-action coverage.
 - Add regression tests whenever local/manual console verification finds a mismatch.
 
 ### P1
 
 - Add a tiny Playwright smoke pack for the 3-4 most valuable flows.
-- Add property/fuzz coverage for date filters, query builders, and analytics buckets.
+- Expand the current deterministic edge matrices into property/fuzz coverage for date filters, query builders, and analytics buckets.
 - Add CI reporting that highlights which critical workstreams failed.
 
 ### P2
 
-- Expand observability and local reproduction tooling for UI/API contract failures.
+- Expand observability and local reproduction tooling beyond request IDs, especially around repeated API failures and failing export/session paths.
 - Add richer failure-triage docs once the core coverage stabilizes.
 
 ## Bug Intake Rule

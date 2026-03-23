@@ -36,7 +36,7 @@ Legend:
 | Item | Status | Tests | Notes |
 | --- | --- | --- | --- |
 | 10. Approvals store | `COVERED` | `pkg/approvals/store_test.go`; `pkg/approvals/store_integration_test.go`; `pkg/approvals/handlers_slack_test.go` | Covers create request, list pending ordering, approve/deny transitions, one-time grant consumption, approve/approve race, approve/deny race, expiry exclusion from pending, and concurrent outbox claiming. |
-| 11. Slack + webhook notifier | `PARTIAL` | `pkg/approvals/notifier_test.go`; `pkg/approvals/handlers_slack_test.go` | Covers CloudEvent payload, HMAC signature header, retry-then-success flow, slack delivery, and backoff schedule behavior. Remaining gap: no fail-closed runtime test for malformed/legacy outbox rows with missing `secret_ref`. |
+| 11. Slack + webhook notifier | `COVERED` | `pkg/approvals/notifier_test.go`; `pkg/approvals/handlers_slack_test.go` | Covers CloudEvent payload, HMAC signature header, retry-then-success flow, slack delivery, backoff schedule behavior, and fail-closed runtime handling for malformed webhook outbox rows with empty or unknown `secret_ref`. |
 
 ## E. Notification Routing
 
@@ -76,7 +76,7 @@ Legend:
 | Item | Status | Tests | Notes |
 | --- | --- | --- | --- |
 | 20. TypeScript SDK | `COVERED` | `sdk/typescript/tests/client.test.ts`; `sdk/typescript/tests/mcp.test.ts` | Covers request construction, auth/timeout error mapping, wait-for-approval polling, execution-result mapping, and MCP output mapping. |
-| 21. Python SDK | `PARTIAL` | `sdk/python/tests/test_client.py` | Covers request serialization, risk validation, request building with trace header, timeout/auth/API error mapping, body-size guard, and wait-for-approval polling. Remaining backlog: no automated packaging/installability matrix beyond current `requires-python >=3.10` declaration, so Python 3.9 compatibility remains an explicit backlog item. |
+| 21. Python SDK | `PARTIAL` | `sdk/python/tests/test_client.py` | Covers request serialization, risk validation, request building with trace header, timeout/auth/API error mapping, body-size guard, wait-for-approval polling, core imports without LangChain extras, and helpful `openclause[langchain]` import guidance. Remaining backlog: no automated Python 3.9 installability matrix despite current metadata declaring `requires-python >=3.9`. |
 | 22. Java SDK | `COVERED` | `sdk/java/src/test/java/dev/openclause/sdk/OpenClauseClientTest.java` | Covers model serialization/deserialization, request construction against a local HTTP server, and `401`/`500` error mapping to `APIException`. |
 | 23. Go SDK | `COVERED` | `pkg/sdk/client/client_test.go` | Covers submit request construction + auto-generated identifiers, execute structured error mapping, and wait-for-approval retry vs permanent-conflict behavior. |
 
@@ -88,4 +88,4 @@ Legend:
 
 ## True Backlog
 
-- Python 3.9 installability: `sdk/python/pyproject.toml` still declares `requires-python >=3.10`; that compatibility gap remains product backlog, not a missing unit test.
+- Python 3.9 installability matrix: `sdk/python/pyproject.toml` now declares `requires-python >=3.9`, but CI does not yet run an actual Python 3.9 install/import job.
