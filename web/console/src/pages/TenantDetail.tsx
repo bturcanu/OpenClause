@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent, useRef } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
-import { EmptyState, InlineErrorState } from '../ui'
+import { CopyIconButton, EmptyState, InlineErrorState } from '../ui'
 
 interface Tenant {
   id: string
@@ -654,7 +654,12 @@ export default function TenantDetail() {
         <h3>Tenant Info</h3>
         <div className="detail-row">
           <div className="detail-label">ID</div>
-          <div className="detail-value">{tenant.id}</div>
+          <div className="detail-value">
+            <div className="inline-value-copy">
+              <code className="mono" title={tenant.id}>{tenant.id}</code>
+              <CopyIconButton text={tenant.id} label="Tenant ID" />
+            </div>
+          </div>
         </div>
         {tenant.config?.org_name && (
           <div className="detail-row">

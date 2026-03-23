@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type MouseEvent, type ReactNode } from 'react'
 
 type PageHeaderProps = {
   title: string
@@ -23,6 +23,13 @@ type StatCardProps = {
   value: ReactNode
   tone?: 'default' | 'green' | 'red' | 'yellow' | 'blue'
   hint?: string
+}
+
+type CopyIconButtonProps = {
+  text?: string | null
+  label: string
+  className?: string
+  disabled?: boolean
 }
 
 export function PageHeaderBlock({ title, description, actions }: PageHeaderProps) {
@@ -72,6 +79,37 @@ export function StatCard({ label, value, tone = 'default', hint }: StatCardProps
       <div className={`stat-value ${tone !== 'default' ? `tone-${tone}` : ''}`}>{value}</div>
       {hint ? <div className="stat-hint">{hint}</div> : null}
     </div>
+  )
+}
+
+export function CopyIconButton({ text, label, className = '', disabled = false }: CopyIconButtonProps) {
+  const [copied, setCopied] = useState(false)
+  const canCopy = !!(text || '').trim() && !disabled
+
+  async function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!canCopy) return
+    try {
+      await copyText(text || '')
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <button
+      className={`btn btn-outline btn-sm copy-icon-button ${className}`.trim()}
+      type="button"
+      onClick={(event) => void handleClick(event)}
+      disabled={!canCopy}
+      title={copied ? `${label} copied` : `Copy ${label}`}
+      aria-label={copied ? `${label} copied` : `Copy ${label}`}
+    >
+      {copied ? '✓' : '⧉'}
+    </button>
   )
 }
 

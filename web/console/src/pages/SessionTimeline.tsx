@@ -320,7 +320,7 @@ export default function SessionTimeline() {
             <div className="identity-card">
               <span className="meta-label">Session</span>
               <div className="identity-copy-row">
-                <code className="mono">{noneText(session.id)}</code>
+                <code className="mono" title={noneText(session.id)}>{noneText(session.id)}</code>
                 <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Session ID', session.id)}>
                   Copy
                 </button>
@@ -329,7 +329,7 @@ export default function SessionTimeline() {
             <div className="identity-card">
               <span className="meta-label">Tenant</span>
               <div className="identity-copy-row">
-                <code className="mono">{noneText(session.tenant_id)}</code>
+                <code className="mono" title={noneText(session.tenant_id)}>{noneText(session.tenant_id)}</code>
                 <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Tenant ID', session.tenant_id)}>
                   Copy
                 </button>
@@ -338,7 +338,7 @@ export default function SessionTimeline() {
             <div className="identity-card">
               <span className="meta-label">Agent</span>
               <div className="identity-copy-row">
-                <code className="mono">{noneText(session.agent_id)}</code>
+                <code className="mono" title={noneText(session.agent_id)}>{noneText(session.agent_id)}</code>
                 <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Agent ID', session.agent_id)}>
                   Copy
                 </button>
@@ -356,7 +356,7 @@ export default function SessionTimeline() {
             <div className="identity-card">
               <span className="meta-label">Trace</span>
               <div className="identity-copy-row">
-                <code className="mono">{noneText(session.trace_id)}</code>
+                <code className="mono" title={noneText(session.trace_id)}>{noneText(session.trace_id)}</code>
                 <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleCopyValue('Trace ID', noneText(session.trace_id))} disabled={!session.trace_id}>
                   Copy
                 </button>

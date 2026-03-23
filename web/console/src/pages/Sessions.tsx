@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, formatDate, toQueryTimestamp } from '../api'
-import { TableSkeleton, EmptyState, InlineErrorState, PageHeaderBlock, StatCard, buildQuery, decisionTone, formatRequester, noneText, shortID } from '../ui'
+import { TableSkeleton, EmptyState, InlineErrorState, PageHeaderBlock, StatCard, CopyIconButton, buildQuery, decisionTone, formatRequester, noneText, shortID } from '../ui'
 
 type Session = {
   id: string
@@ -235,7 +235,7 @@ export default function Sessions() {
               <th>Last event</th>
               <th>Decision mix</th>
               <th>Last action</th>
-              <th></th>
+              <th className="session-open-header"></th>
             </tr>
           </thead>
           <tbody>
@@ -260,8 +260,15 @@ export default function Sessions() {
               sessions.map(session => (
                 <tr key={`${session.tenant_id}:${session.id}`}>
                   <td>
-                    <div className="table-primary">
-                      <Link to={`/sessions/${encodeURIComponent(session.id)}${buildQuery({ tenant_id: session.tenant_id })}`}>{shortID(session.id, 14)}</Link>
+                    <div className="inline-value-copy">
+                      <Link
+                        to={`/sessions/${encodeURIComponent(session.id)}${buildQuery({ tenant_id: session.tenant_id })}`}
+                        className="table-primary"
+                        title={session.id}
+                      >
+                        {shortID(session.id, 14)}
+                      </Link>
+                      <CopyIconButton text={session.id} label="Session ID" />
                     </div>
                     <div className="table-subtext">{session.event_count} events</div>
                   </td>
@@ -270,10 +277,18 @@ export default function Sessions() {
                     <div className="table-subtext">Agent {noneText(session.agent_id)}</div>
                   </td>
                   <td>
-                    <code>{shortID(session.tenant_id, 12)}</code>
+                    <div className="inline-value-copy">
+                      <code title={session.tenant_id}>{shortID(session.tenant_id, 12)}</code>
+                      <CopyIconButton text={session.tenant_id} label="Tenant ID" />
+                    </div>
                   </td>
                   <td>
-                    <div className="table-primary">{noneText(shortID(session.trace_id, 12))}</div>
+                    <div className="inline-value-copy">
+                      <div className="table-primary" title={noneText(session.trace_id)}>
+                        {noneText(shortID(session.trace_id, 12))}
+                      </div>
+                      {session.trace_id ? <CopyIconButton text={session.trace_id} label="Trace ID" /> : null}
+                    </div>
                   </td>
                   <td>{formatDate(session.started_at)}</td>
                   <td>{formatDate(session.last_event_at)}</td>
