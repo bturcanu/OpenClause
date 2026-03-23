@@ -61,8 +61,8 @@ export default function Connectors() {
         description="Browse the live connector catalog the gateway can execute today, including supported actions for demo planning and operator troubleshooting."
         actions={
           <div className="form-group connectors-search">
-            <label>Search</label>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Find a connector or action" />
+            <label htmlFor="connectors-search-input">Search</label>
+            <input id="connectors-search-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Find a connector or action" />
           </div>
         }
       />

@@ -206,8 +206,9 @@ export default function Alerts() {
           <form onSubmit={handleCreate}>
             {(isPlatformAdmin || !scopedTenantID) && (
               <div className="form-group">
-                <label>Tenant ID</label>
+                <label htmlFor="alert-rule-tenant-id">Tenant ID</label>
                 <input
+                  id="alert-rule-tenant-id"
                   value={form.tenantId}
                   onChange={event => setForm(current => ({ ...current, tenantId: event.target.value }))}
                   placeholder="tenant-id"
@@ -216,8 +217,9 @@ export default function Alerts() {
               </div>
             )}
             <div className="form-group">
-              <label>Rule Name</label>
+              <label htmlFor="alert-rule-name">Rule Name</label>
               <input
+                id="alert-rule-name"
                 value={form.name}
                 onChange={event => setForm(current => ({ ...current, name: event.target.value }))}
                 placeholder="e.g., High-risk deny spike"
@@ -226,8 +228,9 @@ export default function Alerts() {
             </div>
             <div className="form-grid alert-rule-form-grid">
               <div className="form-group">
-                <label>N (deny count threshold)</label>
+                <label htmlFor="alert-rule-threshold">N (deny count threshold)</label>
                 <input
+                  id="alert-rule-threshold"
                   type="number"
                   min={1}
                   value={form.n}
@@ -236,8 +239,9 @@ export default function Alerts() {
                 />
               </div>
               <div className="form-group">
-                <label>M (window minutes)</label>
+                <label htmlFor="alert-rule-window">M (window minutes)</label>
                 <input
+                  id="alert-rule-window"
                   type="number"
                   min={1}
                   value={form.mMinutes}
@@ -249,6 +253,7 @@ export default function Alerts() {
                 <label>Activation</label>
                 <label className="toggle-field toggle-field-boxed">
                   <input
+                    id="alert-rule-enabled"
                     type="checkbox"
                     checked={form.enabled}
                     onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))}

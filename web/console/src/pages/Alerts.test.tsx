@@ -10,13 +10,6 @@ function makeToken(payload: Record<string, unknown>) {
   return `header.${encoded}.signature`
 }
 
-function getFieldIn(container: HTMLElement, labelText: RegExp | string) {
-  const label = within(container).getByText(labelText, { selector: 'label' })
-  const control = label.parentElement?.querySelector('input, select, textarea')
-  if (!control) throw new Error(`No form control found for ${String(labelText)}`)
-  return control as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
-}
-
 describe('Alerts page', () => {
   it('keeps successful event data visible when rules fail to load', async () => {
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
@@ -64,8 +57,8 @@ describe('Alerts page', () => {
     ]
 
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
-      if (path === '/admin/alerts/rules') return { rules }
-      if (path === '/admin/alerts/events') return { events: [] }
+      if (path === '/admin/alerts/rules') return rules
+      if (path === '/admin/alerts/events') return []
       throw new Error(`Unhandled api.get call for ${path}`)
     })
 
@@ -101,10 +94,10 @@ describe('Alerts page', () => {
 
     const createCard = screen.getByRole('heading', { name: /create alert rule/i }).closest('.form-card') as HTMLElement | null
     expect(createCard).not.toBeNull()
-    await user.type(getFieldIn(createCard!, /^tenant id$/i), 'tenant-42')
-    await user.type(getFieldIn(createCard!, /^rule name$/i), 'Retry burst')
-    fireEvent.change(getFieldIn(createCard!, /^n \(deny count threshold\)$/i), { target: { value: '7' } })
-    fireEvent.change(getFieldIn(createCard!, /^m \(window minutes\)$/i), { target: { value: '15' } })
+    await user.type(within(createCard!).getByLabelText(/^tenant id$/i), 'tenant-42')
+    await user.type(within(createCard!).getByLabelText(/^rule name$/i), 'Retry burst')
+    fireEvent.change(within(createCard!).getByLabelText(/^n \(deny count threshold\)$/i), { target: { value: '7' } })
+    fireEvent.change(within(createCard!).getByLabelText(/^m \(window minutes\)$/i), { target: { value: '15' } })
     await user.click(screen.getByRole('checkbox', { name: /enabled immediately/i }))
     await user.click(within(createCard!).getByRole('button', { name: /create rule/i }))
 

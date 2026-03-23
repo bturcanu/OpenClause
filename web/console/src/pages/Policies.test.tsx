@@ -5,13 +5,6 @@ import { api } from '../api'
 import Policies from './Policies'
 import { renderRoute } from '../test/render'
 
-function getFieldIn(container: HTMLElement, labelText: RegExp | string) {
-  const label = within(container).getByText(labelText, { selector: 'label' })
-  const control = label.parentElement?.querySelector('input, select, textarea')
-  if (!control) throw new Error(`No form control found for ${String(labelText)}`)
-  return control as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
-}
-
 describe('Policies page', () => {
   it('accepts array tenant responses and honors the tenant_id query param', async () => {
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
@@ -48,7 +41,7 @@ describe('Policies page', () => {
 
     const tenantCard = screen.getByRole('heading', { name: /^tenant$/i }).closest('.form-card') as HTMLElement | null
     expect(tenantCard).not.toBeNull()
-    await waitFor(() => expect(getFieldIn(tenantCard!, /^selected tenant$/i)).toHaveValue('tenant-2'))
+    await waitFor(() => expect(within(tenantCard!).getByLabelText(/^selected tenant$/i)).toHaveValue('tenant-2'))
     expect(await screen.findByRole('button', { name: /^selected$/i })).toBeInTheDocument()
   })
 
@@ -146,9 +139,9 @@ describe('Policies page', () => {
 
     const builderCard = screen.getByRole('heading', { name: /rule builder/i }).closest('.form-card') as HTMLElement | null
     expect(builderCard).not.toBeNull()
-    await user.clear(getFieldIn(builderCard!, /^read allowlist actions \(comma separated\)$/i))
+    await user.clear(within(builderCard!).getByLabelText(/^read allowlist actions \(comma separated\)$/i))
     await user.type(
-      getFieldIn(builderCard!, /^read allowlist actions \(comma separated\)$/i),
+      within(builderCard!).getByLabelText(/^read allowlist actions \(comma separated\)$/i),
       'JIRA.ISSUE.READ, slack.msg.post',
     )
 
@@ -159,8 +152,8 @@ describe('Policies page', () => {
 
     const createVersionCard = screen.getByRole('heading', { name: /create version/i }).closest('.form-card') as HTMLElement | null
     expect(createVersionCard).not.toBeNull()
-    await user.type(getFieldIn(createVersionCard!, /^version$/i), 'v3')
-    await user.type(getFieldIn(createVersionCard!, /^notes$/i), 'Previewable snapshot')
+    await user.type(within(createVersionCard!).getByLabelText(/^version$/i), 'v3')
+    await user.type(within(createVersionCard!).getByLabelText(/^notes$/i), 'Previewable snapshot')
     await user.click(within(createVersionCard!).getByRole('button', { name: /create version snapshot/i }))
 
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/policy/versions', expect.any(Object)))

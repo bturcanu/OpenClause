@@ -276,8 +276,8 @@ export default function SessionTimeline() {
           </p>
             <div className="form-inline mt-16">
             <div className="form-group session-tenant-picker">
-              <label>Tenant</label>
-              <select value={selectedTenantCandidate} onChange={e => handleTenantCandidateChange(e.target.value)}>
+              <label htmlFor="session-tenant-candidate">Tenant</label>
+              <select id="session-tenant-candidate" value={selectedTenantCandidate} onChange={e => handleTenantCandidateChange(e.target.value)}>
                 <option value="">Choose a tenant</option>
                 {tenantCandidates.map(candidate => (
                   <option key={candidate} value={candidate}>{candidate}</option>
@@ -350,8 +350,8 @@ export default function SessionTimeline() {
           <div className="filters-panel-note">Timeline filters use your local browser time.</div>
           <div className="filters-bar filters-bar-dense">
             <div className="form-group">
-              <label>Decision</label>
-              <select value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
+              <label htmlFor="session-filter-decision">Decision</label>
+              <select id="session-filter-decision" value={filters.decision} onChange={e => updateFilter('decision', e.target.value)}>
                 <option value="">Any</option>
                 <option value="allow">Allow</option>
                 <option value="deny">Deny</option>
@@ -359,28 +359,28 @@ export default function SessionTimeline() {
               </select>
             </div>
             <div className="form-group">
-              <label>Tool</label>
-              <input value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
+              <label htmlFor="session-filter-tool">Tool</label>
+              <input id="session-filter-tool" value={filters.tool} onChange={e => updateFilter('tool', e.target.value)} placeholder="slack" />
             </div>
             <div className="form-group">
-              <label>Action</label>
-              <input value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
+              <label htmlFor="session-filter-action">Action</label>
+              <input id="session-filter-action" value={filters.action} onChange={e => updateFilter('action', e.target.value)} placeholder="msg.post" />
             </div>
             <div className="form-group form-group-small">
-              <label>Risk min</label>
-              <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
+              <label htmlFor="session-filter-risk-min">Risk min</label>
+              <input id="session-filter-risk-min" type="number" min={0} max={10} inputMode="numeric" value={filters.risk_min} onChange={e => updateFilter('risk_min', e.target.value)} placeholder="0" />
             </div>
             <div className="form-group form-group-small">
-              <label>Risk max</label>
-              <input type="number" min={0} max={10} inputMode="numeric" value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
+              <label htmlFor="session-filter-risk-max">Risk max</label>
+              <input id="session-filter-risk-max" type="number" min={0} max={10} inputMode="numeric" value={filters.risk_max} onChange={e => updateFilter('risk_max', e.target.value)} placeholder="10" />
             </div>
             <div className="form-group">
-              <label>Since (local time)</label>
-              <input value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
+              <label htmlFor="session-filter-since">Since (local time)</label>
+              <input id="session-filter-since" value={filters.since} onChange={e => updateFilter('since', e.target.value)} type="datetime-local" />
             </div>
             <div className="form-group">
-              <label>Until (local time)</label>
-              <input value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
+              <label htmlFor="session-filter-until">Until (local time)</label>
+              <input id="session-filter-until" value={filters.until} onChange={e => updateFilter('until', e.target.value)} type="datetime-local" />
             </div>
             <div className="form-group">
               <label>&nbsp;</label>

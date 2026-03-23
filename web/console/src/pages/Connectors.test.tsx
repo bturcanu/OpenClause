@@ -42,7 +42,7 @@ describe('Connectors page', () => {
     renderRoute(<Connectors />, { path: '/connectors', route: '/connectors' })
 
     expect(await screen.findByText('slack')).toBeInTheDocument()
-    await user.type(screen.getByPlaceholderText(/find a connector or action/i), 'jira')
+    await user.type(screen.getByLabelText(/^search$/i), 'jira')
     expect(screen.getByText(/no connectors match this search/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /clear search/i }))
     expect(await screen.findByText('slack')).toBeInTheDocument()

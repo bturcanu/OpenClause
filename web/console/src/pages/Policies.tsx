@@ -291,8 +291,8 @@ export default function Policies() {
       <div className="form-card">
         <h3>Tenant</h3>
         <div className="form-group policy-tenant-field">
-          <label>Selected tenant</label>
-          <select value={selectedTenantID} onChange={e => setSelectedTenantID(e.target.value)}>
+          <label htmlFor="policy-selected-tenant">Selected tenant</label>
+          <select id="policy-selected-tenant" value={selectedTenantID} onChange={e => setSelectedTenantID(e.target.value)}>
             {tenants.map(t => (
               <option key={t.id} value={t.id}>{t.name} ({t.id})</option>
             ))}
@@ -305,8 +305,9 @@ export default function Policies() {
         <form onSubmit={handleSaveConfig}>
           <div className="form-grid policy-builder-grid">
             <div className="form-group">
-              <label>Max risk auto-approve</label>
+              <label htmlFor="policy-max-risk-auto-approve">Max risk auto-approve</label>
               <input
+                id="policy-max-risk-auto-approve"
                 type="number"
                 min={0}
                 max={10}
@@ -328,16 +329,16 @@ export default function Policies() {
           </div>
 
           <div className="form-group">
-            <label>Read allowlist actions (comma separated)</label>
-            <textarea rows={3} value={readActionsText} onChange={e => setReadActionsText(e.target.value)} />
+            <label htmlFor="policy-read-actions">Read allowlist actions (comma separated)</label>
+            <textarea id="policy-read-actions" rows={3} value={readActionsText} onChange={e => setReadActionsText(e.target.value)} />
           </div>
           <div className="form-group">
-            <label>Write allowlist actions (comma separated)</label>
-            <textarea rows={3} value={writeActionsText} onChange={e => setWriteActionsText(e.target.value)} />
+            <label htmlFor="policy-write-actions">Write allowlist actions (comma separated)</label>
+            <textarea id="policy-write-actions" rows={3} value={writeActionsText} onChange={e => setWriteActionsText(e.target.value)} />
           </div>
           <div className="form-group">
-            <label>Destructive actions (comma separated)</label>
-            <textarea rows={3} value={destructiveActionsText} onChange={e => setDestructiveActionsText(e.target.value)} />
+            <label htmlFor="policy-destructive-actions">Destructive actions (comma separated)</label>
+            <textarea id="policy-destructive-actions" rows={3} value={destructiveActionsText} onChange={e => setDestructiveActionsText(e.target.value)} />
           </div>
 
           <button className="btn btn-primary" disabled={savingConfig || loading}>
@@ -351,12 +352,12 @@ export default function Policies() {
         <form onSubmit={handleCreateVersion}>
           <div className="form-grid policy-version-grid">
             <div className="form-group">
-              <label>Version</label>
-              <input value={versionForm.version} onChange={e => setVersionForm(prev => ({ ...prev, version: e.target.value }))} required />
+              <label htmlFor="policy-version-name">Version</label>
+              <input id="policy-version-name" value={versionForm.version} onChange={e => setVersionForm(prev => ({ ...prev, version: e.target.value }))} required />
             </div>
             <div className="form-group">
-              <label>Notes</label>
-              <input value={versionForm.notes} onChange={e => setVersionForm(prev => ({ ...prev, notes: e.target.value }))} />
+              <label htmlFor="policy-version-notes">Notes</label>
+              <input id="policy-version-notes" value={versionForm.notes} onChange={e => setVersionForm(prev => ({ ...prev, notes: e.target.value }))} />
             </div>
             <div className="form-actions-row form-actions-row-end policy-version-actions">
               <button className="btn btn-primary" disabled={creatingVersion || loading}>
@@ -459,24 +460,25 @@ export default function Policies() {
         <form onSubmit={handleSimulate}>
           <div className="form-grid policy-simulator-grid">
             <div className="form-group">
-              <label>Agent ID</label>
-              <input value={simForm.agent_id} onChange={e => setSimForm(prev => ({ ...prev, agent_id: e.target.value }))} required />
+              <label htmlFor="policy-sim-agent-id">Agent ID</label>
+              <input id="policy-sim-agent-id" value={simForm.agent_id} onChange={e => setSimForm(prev => ({ ...prev, agent_id: e.target.value }))} required />
             </div>
             <div className="form-group">
-              <label>Tool</label>
-              <input value={simForm.tool} onChange={e => setSimForm(prev => ({ ...prev, tool: e.target.value }))} required />
+              <label htmlFor="policy-sim-tool">Tool</label>
+              <input id="policy-sim-tool" value={simForm.tool} onChange={e => setSimForm(prev => ({ ...prev, tool: e.target.value }))} required />
             </div>
             <div className="form-group">
-              <label>Action</label>
-              <input value={simForm.action} onChange={e => setSimForm(prev => ({ ...prev, action: e.target.value }))} required />
+              <label htmlFor="policy-sim-action">Action</label>
+              <input id="policy-sim-action" value={simForm.action} onChange={e => setSimForm(prev => ({ ...prev, action: e.target.value }))} required />
             </div>
             <div className="form-group">
-              <label>Resource</label>
-              <input value={simForm.resource} onChange={e => setSimForm(prev => ({ ...prev, resource: e.target.value }))} />
+              <label htmlFor="policy-sim-resource">Resource</label>
+              <input id="policy-sim-resource" value={simForm.resource} onChange={e => setSimForm(prev => ({ ...prev, resource: e.target.value }))} />
             </div>
             <div className="form-group">
-              <label>Risk score</label>
+              <label htmlFor="policy-sim-risk-score">Risk score</label>
               <input
+                id="policy-sim-risk-score"
                 type="number"
                 min={0}
                 max={10}
