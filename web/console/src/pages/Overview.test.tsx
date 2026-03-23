@@ -128,4 +128,33 @@ describe('Overview', () => {
     expect(screen.getByText('jira.issue.create')).toBeInTheDocument()
     expect(screen.getByText('3')).toBeInTheDocument()
   })
+
+  it('falls back to a one-hour bucket window when only one chart bucket is available', async () => {
+    const user = userEvent.setup()
+    mockApiGet([
+      ['/admin/analytics/overview', {
+        total_events: 1,
+        allow_count: 1,
+        deny_count: 0,
+        approve_count: 0,
+        pending_approvals: 0,
+        active_tenants: 1,
+      }],
+      ['/admin/analytics/timeseries', {
+        buckets: [{ bucket: '2026-03-23T10:00:00Z', total: 1 }],
+      }],
+      ['/admin/events?limit=10', { events: [] }],
+    ])
+
+    renderRoute(<Overview />, { path: '/', route: '/' })
+
+    expect(await screen.findByRole('heading', { name: /event volume/i })).toBeInTheDocument()
+    const bars = Array.from(document.querySelectorAll<HTMLButtonElement>('.event-volume-bar'))
+    expect(bars).toHaveLength(1)
+
+    await user.click(bars[0])
+    expect(screen.getByRole('link', { name: /view events in audit trail/i }).getAttribute('href')).toContain(
+      '/events?since=2026-03-23T10%3A00%3A00.000Z&until=2026-03-23T11%3A00%3A00.000Z',
+    )
+  })
 })

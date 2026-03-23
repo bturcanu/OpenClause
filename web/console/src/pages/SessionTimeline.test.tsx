@@ -6,6 +6,16 @@ import { APIClientError, api } from '../api'
 import { renderRoute } from '../test/render'
 import { mockApiGet, stubMutableApi } from '../test/mockApi'
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 describe('Session detail page', () => {
   it('asks platform admins to disambiguate duplicate session ids by tenant', async () => {
     const user = userEvent.setup()
@@ -69,6 +79,7 @@ describe('Session detail page', () => {
   it('keeps the session summary visible when the timeline load fails and retries the session fetch', async () => {
     const user = userEvent.setup()
     stubMutableApi()
+    let timelineCalls = 0
     const getSpy = mockApiGet([
       [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
         id: 'demo',
@@ -86,7 +97,26 @@ describe('Session detail page', () => {
         approve_count: 0,
       }],
       [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', () => {
-        throw new Error('Timeline unavailable')
+        timelineCalls += 1
+        if (timelineCalls === 1) {
+          throw new Error('Timeline unavailable')
+        }
+        return {
+          events: [
+            {
+              event_id: 'event-retry',
+              tenant_id: 'tenant-a',
+              agent_id: 'agent-1',
+              tool: 'slack',
+              action: 'msg.post',
+              risk_score: 3,
+              decision: 'allow',
+              session_id: 'demo',
+              received_at: '2026-03-23T10:15:00Z',
+              explain: 'Recovered on retry',
+            },
+          ],
+        }
       }],
     ])
 
@@ -97,6 +127,8 @@ describe('Session detail page', () => {
 
     await user.click(screen.getByRole('button', { name: /^retry$/i }))
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/sessions/demo/timeline?tenant_id=tenant-a'))
+    expect(await screen.findByText('slack.msg.post')).toBeInTheDocument()
+    expect(screen.queryByText(/timeline unavailable/i)).not.toBeInTheDocument()
   })
 
   it('copies the shareable summary and exports the tenant-scoped session bundle', async () => {
@@ -259,5 +291,94 @@ describe('Session detail page', () => {
     await user.click(screen.getByRole('button', { name: /export csv/i }))
 
     expect(await screen.findByText(/req-session-9/i)).toBeInTheDocument()
+  })
+
+  it('fails closed when the session summary payload is malformed even if the request succeeds', async () => {
+    stubMutableApi()
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', { session: null }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', {
+        events: [
+          {
+            event_id: 'event-ghost',
+            tenant_id: 'tenant-a',
+            agent_id: 'agent-1',
+            tool: 'slack',
+            action: 'msg.post',
+            risk_score: 2,
+            decision: 'allow',
+            session_id: 'demo',
+            received_at: '2026-03-23T10:15:00Z',
+            explain: 'Should not render without a valid summary',
+          },
+        ],
+      }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByText(/session not found/i)).toBeInTheDocument()
+    expect(screen.queryByText(/run context/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/should not render without a valid summary/i)).not.toBeInTheDocument()
+  })
+
+  it('accepts wrapped summary payloads and still renders approval and execution sections', async () => {
+    stubMutableApi()
+    mockApiGet([
+      [(path) => path === '/admin/sessions/demo?tenant_id=tenant-a', {
+        session: {
+          id: 'demo',
+          tenant_id: 'tenant-a',
+          agent_id: 'agent-1',
+          user_id: 'user-1',
+          user_name: 'Ada Lovelace',
+          user_email: 'ada@example.com',
+          trace_id: 'trace-1',
+          started_at: '2026-03-23T10:00:00Z',
+          last_event_at: '2026-03-23T10:15:00Z',
+          event_count: 1,
+          allow_count: 0,
+          deny_count: 0,
+          approve_count: 1,
+        },
+      }],
+      [(path) => path === '/admin/sessions/demo/timeline?tenant_id=tenant-a', {
+        events: [
+          {
+            event_id: 'event-approve',
+            tenant_id: 'tenant-a',
+            agent_id: 'agent-1',
+            tool: 'slack',
+            action: 'msg.post',
+            risk_score: 8,
+            decision: 'approve',
+            session_id: 'demo',
+            received_at: '2026-03-23T10:15:00Z',
+            explain: 'Needs approval',
+            approval: {
+              id: 'approval-1',
+              status: 'approved',
+              reason: 'Looks safe',
+              created_at: '2026-03-23T10:14:00Z',
+              expires_at: '2026-03-23T10:20:00Z',
+            },
+            execution: {
+              event_id: 'event-execution-1',
+              received_at: '2026-03-23T10:16:00Z',
+              status: 'success',
+              duration_ms: 120,
+            },
+          },
+        ],
+      }],
+    ])
+
+    renderRoute(<SessionTimeline />, { path: '/sessions/:id', route: '/sessions/demo?tenant_id=tenant-a' })
+
+    expect(await screen.findByRole('heading', { name: /session detail/i })).toBeInTheDocument()
+    expect(screen.getByText(/approval/i, { selector: 'strong' })).toBeInTheDocument()
+    expect(screen.getByText(/execution/i, { selector: 'strong' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open approval/i })).toHaveAttribute('href', expect.stringContaining('approval_id=approval-1'))
+    expect(screen.getByRole('link', { name: /open execution event/i })).toHaveAttribute('href', '/events/event-execution-1')
   })
 })

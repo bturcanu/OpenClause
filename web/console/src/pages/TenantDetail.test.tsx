@@ -6,6 +6,16 @@ import TenantDetail from './TenantDetail'
 import { renderRoute } from '../test/render'
 import { mockApiGet } from '../test/mockApi'
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 type TenantDetailState = {
   tenant: {
     id: string
@@ -537,6 +547,194 @@ describe('Tenant detail page', () => {
     await waitFor(() => expect(screen.queryByText('Night shift deny spike')).not.toBeInTheDocument())
   })
 
+  it('keeps alert rules visible through partial alert-event failures and recovers on retry', async () => {
+    const user = userEvent.setup()
+    let eventsCalls = 0
+    const getSpy = mockApiGet([
+      ['/admin/tenants/tenant-1', {
+        id: 'tenant-1',
+        name: 'Tenant One',
+        status: 'active',
+        config: {},
+        created_at: '2026-03-20T12:00:00Z',
+      }],
+      [(path) => path === '/admin/tenants/tenant-1/agents?include_disabled=true', { agents: [] }],
+      ['/admin/tenants/tenant-1/apikeys', { api_keys: [] }],
+      ['/admin/tenants/tenant-1/approvers', { approvers: [] }],
+      ['/admin/tenants/tenant-1/notification-config', { approver_group: '', notify: [] }],
+      ['/admin/tenants/tenant-1/alerts/rules', {
+        rules: [
+          {
+            id: 'rule-1',
+            tenant_id: 'tenant-1',
+            name: 'Retry burst',
+            kind: 'deny_spike',
+            enabled: true,
+            config_json: { n: 4, m_minutes: 10 },
+            created_at: '2026-03-23T10:00:00Z',
+            updated_at: '2026-03-23T10:00:00Z',
+          },
+        ],
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), () => {
+        eventsCalls += 1
+        if (eventsCalls === 1) {
+          throw new Error('Alert events unavailable')
+        }
+        return {
+          events: [
+            {
+              id: 'alert-event-1',
+              rule_id: 'rule-1',
+              tenant_id: 'tenant-1',
+              severity: 'warning',
+              message: 'Recovered event',
+              status: 'pending',
+              created_at: '2026-03-23T11:00:00Z',
+            },
+          ],
+        }
+      }],
+      [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: false,
+          has_toolcall: false,
+          has_approval: false,
+          has_execution: false,
+        },
+      }],
+    ])
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=alerts' })
+
+    expect(await screen.findByText('Retry burst')).toBeInTheDocument()
+    expect(await screen.findByText(/some alert data could not be loaded: events/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/alerts/rules'))
+    expect(await screen.findByText('Recovered event')).toBeInTheDocument()
+    expect(screen.queryByText(/some alert data could not be loaded: events/i)).not.toBeInTheDocument()
+  })
+
+  it('ignores stale alert responses when the alerts tab refetches quickly', async () => {
+    const user = userEvent.setup()
+    const firstRules = deferred<any>()
+    const firstEvents = deferred<any>()
+    let rulesCalls = 0
+    let eventsCalls = 0
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/admin/tenants/tenant-1') {
+        return {
+          id: 'tenant-1',
+          name: 'Tenant One',
+          status: 'active',
+          config: {},
+          created_at: '2026-03-20T12:00:00Z',
+        }
+      }
+      if (path === '/admin/tenants/tenant-1/agents?include_disabled=true') return { agents: [] }
+      if (path === '/admin/tenants/tenant-1/apikeys') return { api_keys: [] }
+      if (path === '/admin/tenants/tenant-1/approvers') return { approvers: [] }
+      if (path === '/admin/tenants/tenant-1/notification-config') return { approver_group: '', notify: [] }
+      if (path === '/admin/tenants/tenant-1/alerts/rules') {
+        rulesCalls += 1
+        if (rulesCalls === 1) return firstRules.promise
+        return [
+          {
+            id: 'rule-fresh',
+            tenant_id: 'tenant-1',
+            name: 'Fresh rule',
+            kind: 'deny_spike',
+            enabled: true,
+            config_json: { n: 4, m_minutes: 10 },
+            created_at: '2026-03-23T12:00:00Z',
+            updated_at: '2026-03-23T12:00:00Z',
+          },
+        ]
+      }
+      if (path.startsWith('/admin/tenants/tenant-1/alerts/events?')) {
+        eventsCalls += 1
+        if (eventsCalls === 1) return firstEvents.promise
+        return [
+          {
+            id: 'alert-fresh',
+            rule_id: 'rule-fresh',
+            tenant_id: 'tenant-1',
+            severity: 'warning',
+            message: 'Fresh alert event',
+            status: 'pending',
+            created_at: '2026-03-23T12:15:00Z',
+          },
+        ]
+      }
+      if (path.startsWith('/admin/tenants/tenant-1/analytics/summary')) {
+        return {
+          range_start: '2026-03-22T12:00:00Z',
+          range_end: '2026-03-23T12:00:00Z',
+          totals: { total_events: 0, allow_count: 0, deny_count: 0, approve_count: 0 },
+          trend: [],
+          risk_heatmap: [],
+          per_agent: [],
+          onboarding_checklist: {
+            has_api_key: false,
+            has_approver: false,
+            has_toolcall: false,
+            has_approval: false,
+            has_execution: false,
+          },
+        }
+      }
+      throw new Error(`Unhandled api.get call for ${path}`)
+    })
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=alerts' })
+
+    expect(await screen.findByText(/^Alert Rules$/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /agents/i }))
+    await user.click(screen.getByRole('button', { name: /alerts/i }))
+
+    expect(await screen.findByText('Fresh rule')).toBeInTheDocument()
+    expect(screen.getByText('Fresh alert event')).toBeInTheDocument()
+
+    firstRules.resolve([
+      {
+        id: 'rule-stale',
+        tenant_id: 'tenant-1',
+        name: 'Stale rule',
+        kind: 'deny_spike',
+        enabled: true,
+        config_json: { n: 2, m_minutes: 5 },
+        created_at: '2026-03-23T11:00:00Z',
+        updated_at: '2026-03-23T11:00:00Z',
+      },
+    ])
+    firstEvents.resolve([
+      {
+        id: 'alert-stale',
+        rule_id: 'rule-stale',
+        tenant_id: 'tenant-1',
+        severity: 'warning',
+        message: 'Stale alert event',
+        status: 'pending',
+        created_at: '2026-03-23T11:05:00Z',
+      },
+    ])
+
+    await waitFor(() => expect(screen.queryByText('Stale rule')).not.toBeInTheDocument())
+    expect(screen.getByText('Fresh rule')).toBeInTheDocument()
+    expect(screen.queryByText('Stale alert event')).not.toBeInTheDocument()
+  })
+
   it('loads analytics for the selected tab and updates the range preset', async () => {
     const user = userEvent.setup()
     const { getSpy } = installTenantDetailApi()
@@ -553,6 +751,80 @@ describe('Tenant detail page', () => {
         '/admin/tenants/tenant-1/analytics/summary?range=48h&bucket_minutes=60&top_agents=5',
       ),
     )
+  })
+
+  it('ignores stale analytics responses when the range changes quickly', async () => {
+    const user = userEvent.setup()
+    const firstAnalytics = deferred<any>()
+    const secondAnalytics = deferred<any>()
+    const getSpy = vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/admin/tenants/tenant-1') {
+        return {
+          id: 'tenant-1',
+          name: 'Tenant One',
+          status: 'active',
+          config: {},
+          created_at: '2026-03-20T12:00:00Z',
+        }
+      }
+      if (path === '/admin/tenants/tenant-1/agents?include_disabled=true') return { agents: [] }
+      if (path === '/admin/tenants/tenant-1/apikeys') return { api_keys: [] }
+      if (path === '/admin/tenants/tenant-1/approvers') return { approvers: [] }
+      if (path === '/admin/tenants/tenant-1/notification-config') return { approver_group: '', notify: [] }
+      if (path === '/admin/tenants/tenant-1/analytics/summary?range=24h&bucket_minutes=60&top_agents=5') return firstAnalytics.promise
+      if (path === '/admin/tenants/tenant-1/analytics/summary?range=48h&bucket_minutes=60&top_agents=5') return secondAnalytics.promise
+      if (path === '/admin/tenants/tenant-1/alerts/rules') return []
+      if (path.startsWith('/admin/tenants/tenant-1/alerts/events?')) return []
+      throw new Error(`Unhandled api.get call for ${path}`)
+    })
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=analytics' })
+
+    expect(await screen.findByRole('heading', { name: /tenant analytics/i })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/analytics/summary?range=24h&bucket_minutes=60&top_agents=5'),
+    )
+
+    await user.selectOptions(screen.getByLabelText(/^range$/i), '48')
+    await waitFor(() =>
+      expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/analytics/summary?range=48h&bucket_minutes=60&top_agents=5'),
+    )
+
+    secondAnalytics.resolve({
+      range_start: '2026-03-21T12:00:00Z',
+      range_end: '2026-03-23T12:00:00Z',
+      totals: { total_events: 43, allow_count: 20, deny_count: 10, approve_count: 13 },
+      trend: [],
+      risk_heatmap: [],
+      per_agent: [],
+      onboarding_checklist: {
+        has_api_key: true,
+        has_approver: true,
+        has_toolcall: true,
+        has_approval: true,
+        has_execution: true,
+      },
+    })
+    expect(await screen.findByText('43')).toBeInTheDocument()
+
+    firstAnalytics.resolve({
+      range_start: '2026-03-22T12:00:00Z',
+      range_end: '2026-03-23T12:00:00Z',
+      totals: { total_events: 17, allow_count: 7, deny_count: 5, approve_count: 5 },
+      trend: [],
+      risk_heatmap: [],
+      per_agent: [],
+      onboarding_checklist: {
+        has_api_key: false,
+        has_approver: false,
+        has_toolcall: false,
+        has_approval: false,
+        has_execution: false,
+      },
+    })
+
+    await waitFor(() => expect(screen.queryByText('17')).not.toBeInTheDocument())
+    expect(screen.getByText('43')).toBeInTheDocument()
   })
 
   it('accepts array and wrapped payload variants for approvers and tenant alerts', async () => {

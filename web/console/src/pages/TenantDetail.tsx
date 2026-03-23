@@ -172,6 +172,8 @@ export default function TenantDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const fetchSeq = useRef(0)
+  const alertsFetchSeq = useRef(0)
+  const analyticsFetchSeq = useRef(0)
   const [hideDisabledAgents, setHideDisabledAgents] = useState(false)
 
   const [agentForm, setAgentForm] = useState({ name: '' })
@@ -360,6 +362,7 @@ export default function TenantDetail() {
   useEffect(() => { fetchAll() }, [id, hideDisabledAgents])
 
   async function fetchAlerts() {
+    const seq = ++alertsFetchSeq.current
     setAlertsLoading(true)
     setAlertsError('')
     try {
@@ -368,6 +371,7 @@ export default function TenantDetail() {
         api.get(`/admin/tenants/${id}/alerts/rules`),
         api.get(`/admin/tenants/${id}/alerts/events?limit=50&since=${encodeURIComponent(since)}`),
       ])
+      if (seq !== alertsFetchSeq.current) return
       const failures: string[] = []
       if (rulesResp.status === 'fulfilled') {
         const rulesData = rulesResp.value as AlertRule[] | { rules?: AlertRule[] }
@@ -387,9 +391,10 @@ export default function TenantDetail() {
         setAlertsError(`Some alert data could not be loaded: ${failures.join(', ')}.`)
       }
     } catch (err: any) {
+      if (seq !== alertsFetchSeq.current) return
       setAlertsError(err?.message || 'Failed to load alerts')
     } finally {
-      setAlertsLoading(false)
+      if (seq === alertsFetchSeq.current) setAlertsLoading(false)
     }
   }
 
@@ -398,6 +403,7 @@ export default function TenantDetail() {
   }, [activeTab, id])
 
   async function fetchTenantAnalytics() {
+    const seq = ++analyticsFetchSeq.current
     setAnalyticsLoading(true)
     setAnalyticsError('')
     try {
@@ -406,13 +412,15 @@ export default function TenantDetail() {
       const summary = await api.get(
         `/admin/tenants/${id}/analytics/summary?range=${rangeHours}h&bucket_minutes=${analyticsBucketMinutes}&top_agents=${analyticsTopAgents}`,
       )
+      if (seq !== analyticsFetchSeq.current) return
       setTenantAnalytics(summary as TenantAnalyticsSummary)
     } catch (err) {
+      if (seq !== analyticsFetchSeq.current) return
       if (err instanceof Error) setAnalyticsError(err.message)
       else setAnalyticsError('Failed to load analytics')
       setTenantAnalytics(null)
     } finally {
-      setAnalyticsLoading(false)
+      if (seq === analyticsFetchSeq.current) setAnalyticsLoading(false)
     }
   }
 

@@ -32,6 +32,10 @@ describe('ui helpers', () => {
     expect(formatRequester('', '', '', 'agent-9')).toBe('Requested via agent-9')
   })
 
+  it('keeps zero-like query values while dropping nullish and blank ones', () => {
+    expect(buildQuery({ page: 0, risk_min: 0, tenant_id: ' tenant-1 ', empty: '', missing: undefined, none: null })).toBe('?page=0&risk_min=0&tenant_id=tenant-1')
+  })
+
   it('compares text, numbers, dates, and applies sort direction', () => {
     expect(compareText('beta', 'Alpha')).toBeGreaterThan(0)
     expect(compareNumber(9, 3)).toBe(6)

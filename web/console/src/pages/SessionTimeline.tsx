@@ -75,6 +75,20 @@ const defaultFilters: TimelineFilters = {
   until: '',
 }
 
+function isSessionSummary(value: unknown): value is SessionSummary {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Partial<SessionSummary>
+  return typeof candidate.id === 'string' && candidate.id.trim() !== '' && typeof candidate.tenant_id === 'string' && candidate.tenant_id.trim() !== ''
+}
+
+function normalizeSessionSummary(payload: unknown): SessionSummary | null {
+  if (Array.isArray(payload)) return payload.find(isSessionSummary) || null
+  if (!payload || typeof payload !== 'object') return null
+  const wrapped = (payload as { session?: unknown }).session
+  if (isSessionSummary(wrapped)) return wrapped
+  return isSessionSummary(payload) ? payload : null
+}
+
 export default function SessionTimeline() {
   const { id = '' } = useParams<{ id: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -132,7 +146,7 @@ export default function SessionTimeline() {
         return
       }
 
-      setSession(summaryResult.value as SessionSummary)
+      setSession(normalizeSessionSummary(summaryResult.value))
 
       if (timelineResult.status === 'fulfilled') {
         const timeline = timelineResult.value

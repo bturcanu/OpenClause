@@ -7,6 +7,7 @@ import {
   getStoredAuthClaims,
   getStoredSessionID,
   readJSONResponse,
+  resetAPIFailureTrackingForTests,
   storeAuthSession,
   toLocalDateTimeInput,
   toQueryTimestamp,
@@ -18,6 +19,37 @@ function makeToken(payload: Record<string, unknown>) {
 }
 
 describe('api helpers', () => {
+  it('logs repeated API failures with request ids and resets after success', async () => {
+    resetAPIFailureTrackingForTests()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Boom' }), { status: 500, headers: { 'Content-Type': 'application/json', 'X-Request-Id': 'req-repeat' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Boom' }), { status: 500, headers: { 'Content-Type': 'application/json', 'X-Request-Id': 'req-repeat' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Boom' }), { status: 500, headers: { 'Content-Type': 'application/json', 'X-Request-Id': 'req-repeat' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Boom again' }), { status: 500, headers: { 'Content-Type': 'application/json', 'X-Request-Id': 'req-repeat-2' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (let index = 0; index < 3; index += 1) {
+      await expect(api.get('/admin/tenants')).rejects.toMatchObject({ status: 500 })
+    }
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[openclause-console] repeated api failures',
+      expect.objectContaining({
+        method: 'GET',
+        path: '/admin/tenants',
+        count: 3,
+        status: 500,
+        requestId: 'req-repeat',
+      }),
+    )
+
+    await expect(api.get('/admin/tenants')).resolves.toEqual({ ok: true })
+    await expect(api.get('/admin/tenants')).rejects.toMatchObject({ status: 500 })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('stores auth claims and falls back to sid from the token', () => {
     const token = makeToken({ sub: 'user-1', sid: 'session-123', email: 'admin@example.com', roles: ['platform_admin'] })
 
@@ -108,6 +140,22 @@ describe('api helpers', () => {
     expect(toQueryTimestamp('2026-03-23T12:34:56Z')).toBe('2026-03-23T12:34:56Z')
     expect(toLocalDateTimeInput('')).toBe('')
     expect(toLocalDateTimeInput('not-a-date')).toBe('not-a-date')
+  })
+
+  it('round-trips a matrix of local datetime inputs through query timestamps', () => {
+    const samples = [
+      '2026-01-01T00:00',
+      '2026-03-08T01:59',
+      '2026-03-08T03:01',
+      '2026-11-01T01:30',
+      '2026-12-31T23:59',
+    ]
+
+    for (const sample of samples) {
+      const iso = toQueryTimestamp(sample)
+      expect(iso).toMatch(/Z$/)
+      expect(toLocalDateTimeInput(iso)).toBe(sample)
+    }
   })
 
   it('formats dates defensively', () => {

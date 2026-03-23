@@ -1,4 +1,5 @@
 const API_BASE = '/api';
+const apiFailureCounts = new Map<string, number>()
 
 export class APIClientError extends Error {
   status: number
@@ -74,6 +75,31 @@ function extractRequestId(headers?: Headers): string | undefined {
   return trimmed || undefined
 }
 
+function failureKey(method: string, path: string) {
+  return `${method.toUpperCase()} ${path}`
+}
+
+function clearFailureCount(method: string, path: string) {
+  apiFailureCounts.delete(failureKey(method, path))
+}
+
+function recordFailure(method: string, path: string, message: string, status?: number, requestId?: string) {
+  const key = failureKey(method, path)
+  const count = (apiFailureCounts.get(key) || 0) + 1
+  apiFailureCounts.set(key, count)
+
+  if (count === 3 || count % 5 === 0) {
+    console.warn('[openclause-console] repeated api failures', {
+      method: method.toUpperCase(),
+      path,
+      count,
+      status: status ?? null,
+      requestId: requestId ?? null,
+      message,
+    })
+  }
+}
+
 function toAPIClientError(status: number, fallback: string, payload: any, headers?: Headers) {
   const requestId = extractRequestId(headers)
   const baseMessage = payload?.message || payload?.error || fallback
@@ -99,38 +125,59 @@ export async function readJSONResponse(res: Response) {
 }
 
 async function apiFetch(path: string, options?: RequestInit) {
+  const method = options?.method || 'GET'
   const token = localStorage.getItem('oc_token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { ...headers, ...(options?.headers as Record<string, string>) },
-  });
-  if (res.status === 401) {
-    clearStoredAuth();
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { ...headers, ...(options?.headers as Record<string, string>) },
+    });
+    if (res.status === 401) {
+      clearStoredAuth();
+      window.location.href = '/login';
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) {
+      const err = await readJSONResponse(res);
+      const apiError = toAPIClientError(res.status, res.statusText, err, res.headers)
+      recordFailure(method, path, apiError.message, apiError.status, apiError.requestId)
+      throw apiError
+    }
+    clearFailureCount(method, path)
+    return res;
+  } catch (error) {
+    if (!(error instanceof APIClientError)) {
+      recordFailure(method, path, error instanceof Error ? error.message : 'Network request failed')
+    }
+    throw error
   }
-  if (!res.ok) {
-    const err = await readJSONResponse(res);
-    throw toAPIClientError(res.status, res.statusText, err, res.headers);
-  }
-  return res;
 }
 
 async function unauthFetch(path: string, body: unknown) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await readJSONResponse(res);
-    throw toAPIClientError(res.status, res.statusText, err, res.headers);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await readJSONResponse(res);
+      const apiError = toAPIClientError(res.status, res.statusText, err, res.headers)
+      recordFailure('POST', path, apiError.message, apiError.status, apiError.requestId)
+      throw apiError
+    }
+    clearFailureCount('POST', path)
+    return readJSONResponse(res);
+  } catch (error) {
+    if (!(error instanceof APIClientError)) {
+      recordFailure('POST', path, error instanceof Error ? error.message : 'Network request failed')
+    }
+    throw error
   }
-  return readJSONResponse(res);
 }
 
 export const api = {
@@ -144,6 +191,10 @@ export const api = {
   getBlob: (path: string) => apiFetch(path).then(r => r.blob()),
   unauthPost: unauthFetch,
 };
+
+export function resetAPIFailureTrackingForTests() {
+  apiFailureCounts.clear()
+}
 
 export function toQueryTimestamp(value: string | undefined | null): string {
   const text = (value || '').trim()
