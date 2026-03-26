@@ -2105,7 +2105,6 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 	case err == nil:
 		pilotHealth.LastEvent = lastEvent
 	case errors.Is(err, pgx.ErrNoRows):
-		err = nil
 	default:
 		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary last event: %w", err)
 	}
@@ -2122,7 +2121,6 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 	case err == nil:
 		pilotHealth.LastSession = lastSession
 	case errors.Is(err, pgx.ErrNoRows):
-		err = nil
 	default:
 		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary last session: %w", err)
 	}
@@ -2160,7 +2158,6 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 		lastApproval.LatencyMS = latencyMS
 		pilotHealth.LastApproval = lastApproval
 	case errors.Is(err, pgx.ErrNoRows):
-		err = nil
 	default:
 		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary last approval: %w", err)
 	}

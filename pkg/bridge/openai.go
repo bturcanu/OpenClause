@@ -573,10 +573,6 @@ func (a *streamToolAccumulator) callsList() []openAIToolCall {
 	return out
 }
 
-func (s *Server) buildGovernedActionTool(profile *profileRuntime) openAITool {
-	return governedActionToolForProfile(profile)
-}
-
 func buildUpstreamTools(profile *profileRuntime, clientTools []openAITool) ([]openAITool, error) {
 	governed := profile.cfg.OpenAI.ToolName
 	tools := make([]openAITool, 0, len(clientTools)+1)
@@ -927,84 +923,6 @@ type openAIFunctionCallDelta struct {
 	Arguments string `json:"arguments,omitempty"`
 }
 
-func writeOpenAIChatStream(w http.ResponseWriter, resp *openAIChatResponse) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAPIError(w, types.ErrInternal("streaming is not supported by this HTTP server"))
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-
-	message := openAIChatMessage{}
-	if resp != nil && len(resp.Choices) > 0 {
-		message = resp.Choices[0].Message
-	}
-	content := assistantMessageText(message.Content)
-
-	writeStreamChunk := func(chunk openAIChatChunk) {
-		data, err := json.Marshal(chunk)
-		if err != nil {
-			return
-		}
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	writeStreamChunk(openAIChatChunk{
-		ID:      resp.ID,
-		Object:  "chat.completion.chunk",
-		Created: resp.Created,
-		Model:   resp.Model,
-		Choices: []openAIChunkChoice{{
-			Index: 0,
-			Delta: openAIChunkDelta{Role: "assistant"},
-		}},
-	})
-
-	for _, piece := range splitStreamContent(content, 80) {
-		writeStreamChunk(openAIChatChunk{
-			ID:      resp.ID,
-			Object:  "chat.completion.chunk",
-			Created: resp.Created,
-			Model:   resp.Model,
-			Choices: []openAIChunkChoice{{
-				Index: 0,
-				Delta: openAIChunkDelta{Content: piece},
-			}},
-		})
-	}
-	if resp.OpenClause != nil && len(resp.OpenClause.GovernedResults) > 0 {
-		writeStreamChunk(openAIChatChunk{
-			ID:      resp.ID,
-			Object:  "chat.completion.chunk",
-			Created: resp.Created,
-			Model:   resp.Model,
-			Choices: []openAIChunkChoice{{
-				Index: 0,
-				Delta: openAIChunkDelta{OpenClause: resp.OpenClause},
-			}},
-		})
-	}
-
-	writeStreamChunk(openAIChatChunk{
-		ID:      resp.ID,
-		Object:  "chat.completion.chunk",
-		Created: resp.Created,
-		Model:   resp.Model,
-		Choices: []openAIChunkChoice{{
-			Index:        0,
-			Delta:        openAIChunkDelta{},
-			FinishReason: streamFinishReason(message),
-		}},
-	})
-	_, _ = io.WriteString(w, "data: [DONE]\n\n")
-	flusher.Flush()
-}
-
 func writeOpenAIStreamChunk(w http.ResponseWriter, flusher http.Flusher, chunk openAIChatChunk) {
 	data, err := json.Marshal(chunk)
 	if err != nil {
@@ -1137,11 +1055,4 @@ func splitStreamContent(text string, chunkSize int) []string {
 		chunks = append(chunks, string(runes[start:end]))
 	}
 	return chunks
-}
-
-func streamFinishReason(message openAIChatMessage) string {
-	if len(message.ToolCalls) > 0 {
-		return "tool_calls"
-	}
-	return "stop"
 }

@@ -400,37 +400,6 @@ func sampleParamsLiteral(tool SelectedTool) string {
 	}
 }
 
-func openAILocalToolSchema(tool SelectedTool) string {
-	switch {
-	case tool.Tool == "postgres" && tool.Action == "query.readonly":
-		return `{
-            "type": "object",
-            "properties": {
-                "sql": {
-                    "type": "string",
-                    "description": "Readonly SQL query to run through OpenClause"
-                },
-                "params": {
-                    "type": "array",
-                    "description": "Ordered bind parameters for the SQL query",
-                    "items": {
-                        "type": ["string", "number", "boolean", "null"]
-                    }
-                }
-            },
-            "required": ["sql"]
-        }`
-	default:
-		return `{
-            "type": "object",
-            "properties": {
-                "example": {"type": "boolean"}
-            },
-            "required": ["example"]
-        }`
-	}
-}
-
 func openAILocalUserPrompt(tool SelectedTool) string {
 	switch {
 	case tool.Tool == "postgres" && tool.Action == "query.readonly":

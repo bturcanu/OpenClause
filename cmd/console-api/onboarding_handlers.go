@@ -1145,22 +1145,6 @@ func buildOnboardingStarterPolicy(existing *console.TenantPolicyConfig, tools []
 	return &cfg, true
 }
 
-func (api *ConsoleAPI) applyOnboardingStarterPolicy(ctx context.Context, tenantID string, tools []onboarding.SelectedTool, posture string) error {
-	existing, found, err := api.store.GetTenantPolicyConfig(ctx, tenantID)
-	if err != nil {
-		return err
-	}
-	var current *console.TenantPolicyConfig
-	if found {
-		current = existing
-	}
-	cfg, ok := buildOnboardingStarterPolicy(current, tools, posture)
-	if !ok || cfg == nil {
-		return nil
-	}
-	return api.store.SetTenantPolicyConfig(ctx, tenantID, *cfg)
-}
-
 func formatOnboardingToolSelection(tool onboarding.SelectedTool) string {
 	return fmt.Sprintf("%s:%s", strings.TrimSpace(tool.Tool), strings.TrimSpace(tool.Action))
 }

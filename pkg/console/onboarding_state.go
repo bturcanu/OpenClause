@@ -198,25 +198,6 @@ func createAgentWithLabelsQuerier(ctx context.Context, q onboardingQuerier, tena
 	return a, nil
 }
 
-func updateAgentLabelsForTenantWithQuerier(ctx context.Context, q onboardingQuerier, tenantID, agentID string, labels json.RawMessage) error {
-	if len(strings.TrimSpace(string(labels))) == 0 {
-		labels = json.RawMessage(`{}`)
-	}
-	res, err := q.Exec(ctx, `
-		UPDATE agents
-		SET labels = $3
-		WHERE tenant_id = $1 AND id = $2`,
-		tenantID, agentID, labels,
-	)
-	if err != nil {
-		return err
-	}
-	if res.RowsAffected() == 0 {
-		return fmt.Errorf("%w: %s", ErrAgentNotFound, agentID)
-	}
-	return nil
-}
-
 func createAPIKeyWithQuerier(ctx context.Context, q onboardingQuerier, tenantID, name string, expiresAt *time.Time) (*APIKeyCreateResult, error) {
 	raw, prefix, keyHash, err := generateAPIKey()
 	if err != nil {

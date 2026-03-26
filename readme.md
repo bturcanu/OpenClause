@@ -324,7 +324,7 @@ curl -s -X POST http://localhost:8090/admin/tenants/$TENANT_ID/apikeys \
 export RAW_KEY="<raw_key from response>"
 ```
 
-### 6. Send a test tool call
+### 7. Send a test tool call
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/toolcalls \
@@ -359,7 +359,7 @@ Expected response (mock mode):
 }
 ```
 
-### 7. Test a high-risk action (triggers approval)
+### 8. Test a high-risk action (triggers approval)
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/toolcalls \
@@ -404,7 +404,7 @@ curl -s -X POST "http://localhost:8080/v1/toolcalls/$EVENT_ID/execute" \
 
 You can also approve from the console UI at http://localhost:3000/approvals.
 
-### 8. Stop
+### 9. Stop
 
 ```bash
 make dev-down
@@ -929,6 +929,8 @@ INTERNAL_AUTH_TOKEN=your-shared-secret
 
 ## Connectors
 
+OpenClause governs the explicit connector actions that are registered in the catalog. It does not automatically expose every API inside Slack, Jira, GitHub, AWS, or any other application. If an action is not registered, the agent cannot use it through OpenClause yet.
+
 ### Remote Connectors (HTTP services)
 
 Each remote connector is a standalone HTTP service with a single `POST /exec` endpoint.
@@ -1379,8 +1381,6 @@ The repo has broad automated coverage across the main data flows and contracts:
 - SDK contract tests for Go, TypeScript, Python, and Java
 - Policy verification via `opa test policy/bundles/v0/ policy/tests/ -v`
 
-The detailed inventory lives in [`.ai/test-coverage-sweep.md`](.ai/test-coverage-sweep.md).
-
 ### Running tests
 
 ```bash
@@ -1401,8 +1401,6 @@ python3.9 -c "import openclause; import openclause.client; import openclause.mod
 
 Core Python SDK import/tests should run on Python 3.9+. Run any LangChain-specific checks in an environment where the `openclause[langchain]` extra is installed.
 For local browser smokes on macOS, `web/console/playwright.config.ts` prefers the installed Google Chrome channel outside CI so the suite can work around bundled-Chromium launch restrictions on locked-down hosts. The `browser-smoke` CI job remains the canonical Linux verifier and uploads Playwright artifacts for debugging.
-
-The frontend test inventory and remaining UI follow-ups live in [`.ai/console-ui-test-tracker.md`](.ai/console-ui-test-tracker.md).
 
 ### Console UI development
 
