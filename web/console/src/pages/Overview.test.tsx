@@ -6,6 +6,70 @@ import { renderRoute } from '../test/render'
 import { mockApiGet, stubMutableApi } from '../test/mockApi'
 
 describe('Overview', () => {
+  it('exposes a tiny onboarding CTA that routes into the existing tenants flow', async () => {
+    stubMutableApi()
+    mockApiGet([
+      ['/admin/analytics/overview', {
+        total_events: 0,
+        allow_count: 0,
+        deny_count: 0,
+        approve_count: 0,
+        pending_approvals: 0,
+        active_tenants: 0,
+      }],
+      ['/admin/analytics/timeseries', { buckets: [] }],
+      ['/admin/events?limit=10', { events: [] }],
+    ])
+
+    renderRoute(<Overview />, { path: '/', route: '/' })
+
+    const onboardingLink = await screen.findByRole('link', { name: /create agent integration/i })
+    expect(onboardingLink).toHaveAttribute('href', '/tenants?onboarding=1')
+    expect(screen.getByRole('link', { name: /view tenants/i })).toHaveAttribute('href', '/tenants')
+    expect(screen.getByText(/create one governed agent integration first/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /create integration/i })).toHaveAttribute('href', '/tenants?onboarding=1')
+  })
+
+  it('adapts the getting-started guidance once traffic and approvals exist', async () => {
+    mockApiGet([
+      ['/admin/analytics/overview', {
+        total_events: 12,
+        allow_count: 8,
+        deny_count: 1,
+        approve_count: 3,
+        pending_approvals: 2,
+        active_tenants: 1,
+      }],
+      ['/admin/analytics/timeseries', { buckets: [] }],
+      ['/admin/events?limit=10', { events: [] }],
+    ])
+
+    renderRoute(<Overview />, { path: '/', route: '/' })
+
+    expect(await screen.findByText(/traffic is flowing\. clear pending approvals/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open approvals/i })).toHaveAttribute('href', '/approvals')
+  })
+
+  it('does not claim the pilot is configured just because tenants exist without traffic', async () => {
+    mockApiGet([
+      ['/admin/analytics/overview', {
+        total_events: 0,
+        allow_count: 0,
+        deny_count: 0,
+        approve_count: 0,
+        pending_approvals: 0,
+        active_tenants: 1,
+      }],
+      ['/admin/analytics/timeseries', { buckets: [] }],
+      ['/admin/events?limit=10', { events: [] }],
+    ])
+
+    renderRoute(<Overview />, { path: '/', route: '/' })
+
+    expect(await screen.findByText(/create one governed agent integration first/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /create integration/i })).toHaveAttribute('href', '/tenants?onboarding=1')
+  })
+
   it('pins and unpins chart buckets and links to the audit trail window', async () => {
     const user = userEvent.setup()
     stubMutableApi()
@@ -55,7 +119,7 @@ describe('Overview', () => {
     await user.click(bars[1])
     await waitFor(() => expect(screen.queryByText(/selected/i)).not.toBeInTheDocument())
 
-    bars[0].focus()
+    await user.tab()
     await user.keyboard('[Space]')
     expect(await screen.findByText(/selected/i)).toBeInTheDocument()
   })

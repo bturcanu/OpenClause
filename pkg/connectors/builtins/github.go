@@ -3,6 +3,8 @@ package builtins
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 )
@@ -41,6 +43,15 @@ func (c *GithubConnector) issueCreate(req connectors.ExecRequest) connectors.Exe
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return connectors.ExecResponse{Status: "error", Error: "invalid params: " + err.Error()}
 	}
+	if strings.TrimSpace(p.Owner) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "owner is required"}
+	}
+	if strings.TrimSpace(p.Repo) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "repo is required"}
+	}
+	if strings.TrimSpace(p.Title) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "title is required"}
+	}
 	out, _ := json.Marshal(map[string]any{
 		"id":         42,
 		"number":     101,
@@ -63,9 +74,21 @@ func (c *GithubConnector) issueComment(req connectors.ExecRequest) connectors.Ex
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return connectors.ExecResponse{Status: "error", Error: "invalid params: " + err.Error()}
 	}
+	if strings.TrimSpace(p.Owner) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "owner is required"}
+	}
+	if strings.TrimSpace(p.Repo) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "repo is required"}
+	}
+	if p.IssueNumber <= 0 {
+		return connectors.ExecResponse{Status: "error", Error: "issue_number must be greater than zero"}
+	}
+	if strings.TrimSpace(p.Body) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "body is required"}
+	}
 	out, _ := json.Marshal(map[string]any{
 		"id":         9001,
-		"html_url":   "https://github.com/" + p.Owner + "/" + p.Repo + "/issues/101#issuecomment-9001",
+		"html_url":   "https://github.com/" + p.Owner + "/" + p.Repo + "/issues/" + fmt.Sprint(p.IssueNumber) + "#issuecomment-9001",
 		"body":       p.Body,
 		"created_at": "2026-01-15T11:00:00Z",
 		"mock":       true,
@@ -93,6 +116,12 @@ func (c *GithubConnector) repoReadme(req connectors.ExecRequest) connectors.Exec
 	}
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return connectors.ExecResponse{Status: "error", Error: "invalid params: " + err.Error()}
+	}
+	if strings.TrimSpace(p.Owner) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "owner is required"}
+	}
+	if strings.TrimSpace(p.Repo) == "" {
+		return connectors.ExecResponse{Status: "error", Error: "repo is required"}
 	}
 	out, _ := json.Marshal(map[string]any{
 		"name":     "README.md",

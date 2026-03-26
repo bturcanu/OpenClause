@@ -44,8 +44,9 @@ type Approval = {
 }
 
 export default function Approvals() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const approvalID = searchParams.get('approval_id') || ''
+  const tenantFilter = searchParams.get('tenant_id') || ''
   const [approvals, setApprovals] = useState<Approval[]>([])
   const [selected, setSelected] = useState<Approval | null>(null)
   const [loading, setLoading] = useState(true)
@@ -73,7 +74,7 @@ export default function Approvals() {
       setError('')
       if (approvalID) {
         const match = nextApprovals.find((approval: Approval) => approval.id === approvalID)
-        if (match) setSelected(match)
+        setSelected(match || null)
       }
     } catch (err: any) {
       if (seq === fetchSeq.current) setError(err?.message || (silent ? 'Approval queue refresh failed.' : 'Failed to load approvals'))
@@ -94,13 +95,6 @@ export default function Approvals() {
     setExecuteApiKey('')
     setCopyStatus('')
   }, [selected?.id])
-
-  useEffect(() => {
-    if (!selected) return
-    if (selected.status === 'approved') return
-    const stillPending = approvals.some(approval => approval.id === selected.id)
-    if (!stillPending) setSelected(null)
-  }, [approvals, selected])
 
   async function handleAction(id: string, action: 'approve' | 'deny') {
     setActionLoading(id)
@@ -123,12 +117,15 @@ export default function Approvals() {
     if (!selected?.event_id) return ''
     const apiKey = executeApiKey.trim()
     const header = apiKey ? `X-API-Key: ${apiKey}` : 'X-API-Key: <API_KEY>'
-    return `curl -s -X POST "http://localhost:8080/v1/toolcalls/${encodeURIComponent(selected.event_id)}/execute" -H "Content-Type: application/json" -H "${header}" -d '{}'`
+    return `OPENCLAUSE_BASE_URL="\${OPENCLAUSE_BASE_URL:-http://localhost:8080}" curl -fsS -X POST "$OPENCLAUSE_BASE_URL/v1/toolcalls/${encodeURIComponent(selected.event_id)}/execute" -H "Content-Type: application/json" -H "${header}" -d '{}'`
   })()
 
   const visibleApprovals = useMemo(() => {
-    if (!sortState.key) return approvals
-    return [...approvals].sort((left, right) => {
+    const filtered = tenantFilter
+      ? approvals.filter(approval => approval.tenant_id === tenantFilter)
+      : approvals
+    if (!sortState.key) return filtered
+    return [...filtered].sort((left, right) => {
       switch (sortState.key) {
         case 'risk_score':
           return applySort(compareNumber(left.risk_score, right.risk_score), sortState.dir)
@@ -142,7 +139,23 @@ export default function Approvals() {
           return 0
       }
     })
-  }, [approvals, sortState])
+  }, [approvals, sortState, tenantFilter])
+
+  useEffect(() => {
+    if (!selected) return
+    if (selected.status === 'approved') {
+      if (tenantFilter && selected.tenant_id !== tenantFilter) setSelected(null)
+      return
+    }
+    const stillVisible = visibleApprovals.some(approval => approval.id === selected.id)
+    if (!stillVisible) setSelected(null)
+  }, [selected, tenantFilter, visibleApprovals])
+
+  function clearTenantFilter() {
+    const next = new URLSearchParams(searchParams)
+    next.delete('tenant_id')
+    setSearchParams(next)
+  }
 
   return (
     <div>
@@ -161,7 +174,11 @@ export default function Approvals() {
       <ActiveFiltersBar
         resultCount={visibleApprovals.length}
         resultLabel={visibleApprovals.length === 1 ? 'request' : 'requests'}
-        chips={[]}
+        chips={tenantFilter ? [{
+          key: 'tenant_id',
+          label: `tenant id: ${tenantFilter}`,
+          onRemove: clearTenantFilter,
+        }] : []}
         note={sortState.key ? 'Sorted within the current page.' : 'Using backend order until you sort this page.'}
       />
 

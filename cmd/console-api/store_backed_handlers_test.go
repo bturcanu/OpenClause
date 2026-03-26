@@ -72,6 +72,32 @@ func mustCreateTenantDB(t *testing.T, store *console.Store, name string) *consol
 	return tenant
 }
 
+func installFailingUserInsertTrigger(t *testing.T, store *console.Store) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := store.Pool().Exec(ctx, `
+		CREATE OR REPLACE FUNCTION fail_setup_user_insert()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			RAISE EXCEPTION 'setup user insert failure';
+		END;
+	$$`); err != nil {
+		t.Fatalf("create fail_setup_user_insert function: %v", err)
+	}
+	if _, err := store.Pool().Exec(ctx, `DROP TRIGGER IF EXISTS fail_setup_user_insert ON users`); err != nil {
+		t.Fatalf("drop fail_setup_user_insert trigger: %v", err)
+	}
+	if _, err := store.Pool().Exec(ctx, `
+		CREATE TRIGGER fail_setup_user_insert
+		BEFORE INSERT ON users
+		FOR EACH ROW
+		EXECUTE FUNCTION fail_setup_user_insert()`); err != nil {
+		t.Fatalf("create fail_setup_user_insert trigger: %v", err)
+	}
+}
+
 func TestHandleSetupStatusReportsInitializedStateAndFailure(t *testing.T) {
 	t.Run("uninitialized then initialized", func(t *testing.T) {
 		fx := newDBAPIFixture(t)
@@ -176,6 +202,43 @@ func TestHandleSetupInitializeValidatesAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestHandleSetupInitializeRejectsWhitespaceOnlyPassword(t *testing.T) {
+	fx := newDBAPIFixture(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/setup/initialize", bytes.NewBufferString(`{"org_name":"Acme","email":"admin@example.com","password":"   ","first_tenant_name":"First Tenant"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	fx.api.handleSetupInitialize(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleSetupInitializeRollsBackTenantWhenAdminCreationFails(t *testing.T) {
+	fx := newDBAPIFixture(t)
+	installFailingUserInsertTrigger(t, fx.store)
+
+	req := httptest.NewRequest(http.MethodPost, "/setup/initialize", bytes.NewBufferString(`{"org_name":"Acme","email":"admin@example.com","password":"Admin123!","first_tenant_name":"First Tenant"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	fx.api.handleSetupInitialize(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	tenants, err := fx.store.ListTenants(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatalf("ListTenants after failed setup: %v", err)
+	}
+	if len(tenants) != 0 {
+		t.Fatalf("expected no tenants left behind after failed setup, got %+v", tenants)
+	}
+}
+
 func TestHandleResetConfirmSuccessAndMissingUserContract(t *testing.T) {
 	t.Run("success updates password", func(t *testing.T) {
 		fx := newDBAPIFixture(t)
@@ -208,6 +271,19 @@ func TestHandleResetConfirmSuccessAndMissingUserContract(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		rr := httptest.NewRecorder()
 		fx.api.handleResetConfirm(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("whitespace password is rejected early", func(t *testing.T) {
+		fx := newDBAPIFixture(t)
+		req := httptest.NewRequest(http.MethodPost, "/auth/reset/confirm", bytes.NewBufferString(`{"token":"reset-token","password":"   "}`))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+
+		fx.api.handleResetConfirm(rr, req)
+
 		if rr.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
 		}
@@ -313,6 +389,13 @@ func TestTenantAgentAndAPIKeyHandlersWithRealStore(t *testing.T) {
 	if createAgentRR.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", createAgentRR.Code, createAgentRR.Body.String())
 	}
+	var createdAgentPayload map[string]any
+	if err := json.Unmarshal(createAgentRR.Body.Bytes(), &createdAgentPayload); err != nil {
+		t.Fatalf("decode created agent payload: %v", err)
+	}
+	if _, exists := createdAgentPayload["labels"]; exists {
+		t.Fatalf("expected created agent payload to omit labels, got %+v", createdAgentPayload)
+	}
 
 	listAgentsReq := withRouteParams(
 		httptest.NewRequest(http.MethodGet, "/admin/tenants/"+secondTenant.ID+"/agents", nil),
@@ -329,6 +412,16 @@ func TestTenantAgentAndAPIKeyHandlersWithRealStore(t *testing.T) {
 	}
 	if len(agents) != 1 || agents[0].Name != "worker-1" {
 		t.Fatalf("unexpected agent list: %+v", agents)
+	}
+	var rawAgents []map[string]any
+	if err := json.Unmarshal(listAgentsRR.Body.Bytes(), &rawAgents); err != nil {
+		t.Fatalf("decode raw agent list: %v", err)
+	}
+	if len(rawAgents) != 1 {
+		t.Fatalf("expected one raw agent payload, got %+v", rawAgents)
+	}
+	if _, exists := rawAgents[0]["labels"]; exists {
+		t.Fatalf("expected listed agent payload to omit labels, got %+v", rawAgents[0])
 	}
 
 	createKeyReq := withRouteParams(
@@ -489,6 +582,9 @@ func TestEventHandlersFilterAndReturnPolicyAndHashFields(t *testing.T) {
 	}
 	if listed[0]["event_id"] != insideEnv.EventID || listed[0]["session_id"] != "sess-123" || listed[0]["trace_id"] != "trace-123" {
 		t.Fatalf("unexpected filtered event payload: %+v", listed[0])
+	}
+	if listed[0]["reason"] != "needs approval" {
+		t.Fatalf("expected policy reason in event list payload, got %+v", listed[0])
 	}
 
 	detailReq := withClaims(

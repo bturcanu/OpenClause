@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
+import { setUnauthorizedRedirectForTests } from '../api'
+import { setDownloadTriggerForTests } from '../ui'
 
 class ResizeObserverMock {
   observe() {}
@@ -32,6 +34,8 @@ const sessionStorageMock = createStorageMock()
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.useRealTimers()
+  setUnauthorizedRedirectForTests(() => {})
+  setDownloadTriggerForTests(() => {})
 
   Object.defineProperty(window, 'localStorage', {
     configurable: true,
@@ -84,5 +88,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  setUnauthorizedRedirectForTests(null)
+  setDownloadTriggerForTests(null)
   cleanup()
 })

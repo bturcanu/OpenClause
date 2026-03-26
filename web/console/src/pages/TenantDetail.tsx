@@ -1,7 +1,8 @@
 import { useState, useEffect, FormEvent, useMemo, useRef } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
-import { api, formatDate } from '../api'
-import { CopyIconButton, EmptyState, InlineErrorState, compareDate } from '../ui'
+import { APIClientError, api, formatDate } from '../api'
+import { CopyIconButton, EmptyState, InlineErrorState, compareDate, downloadBlob } from '../ui'
+import AgentOnboardingFlow from './AgentOnboardingFlow'
 
 interface Tenant {
   id: string
@@ -17,6 +18,35 @@ interface Agent {
   tenant_id: string
   status: 'active' | 'disabled'
   created_at: string
+}
+
+interface AgentIntegrationRecord {
+  id: string
+  tenant_id: string
+  agent_id: string
+  runtime: string
+  environment_label?: string
+  owner_name?: string
+  description?: string
+  approval_posture?: string
+  created_at: string
+  updated_at: string
+  tools?: Array<{ tool: string; action: string }>
+}
+
+interface AgentIntegrationRevision {
+  id: string
+  integration_id: string
+  tenant_id: string
+  agent_id: string
+  mode?: string
+  runtime: string
+  environment_label?: string
+  owner_name?: string
+  description?: string
+  approval_posture?: string
+  created_at: string
+  tools?: Array<{ tool: string; action: string }>
 }
 
 interface ApiKey {
@@ -125,6 +155,65 @@ interface TenantAnalyticsSummary {
   risk_heatmap: TenantRiskHeatmapRow[]
   per_agent: TenantAgentBreakdownRow[]
   onboarding_checklist: TenantOnboardingChecklist
+  pilot_health: {
+    status: string
+    status_reason: string
+    last_event?: {
+      event_id: string
+      agent_id: string
+      tool: string
+      action: string
+      decision: string
+      session_id: string
+      trace_id: string
+      received_at: string
+    }
+    last_session?: {
+      session_id: string
+      agent_id: string
+      last_event_id: string
+      last_event_at: string
+    }
+    last_approval?: {
+      request_id: string
+      event_id: string
+      tool: string
+      action: string
+      status: string
+      created_at: string
+      resolved_at?: string
+      latency_ms?: number
+    }
+    pending_approvals: number
+    oldest_pending_approval_at?: string
+    execution_success_count: number
+    execution_total: number
+    execution_success_rate: number
+    missing_session_count: number
+    missing_trace_count: number
+    missing_session_rate: number
+    missing_trace_rate: number
+    top_connector_failures: Array<{
+      tool: string
+      action: string
+      status: string
+      error_message: string
+      count: number
+      last_seen_at: string
+    }>
+    top_deny_reasons: Array<{
+      reason: string
+      count: number
+      last_seen_at: string
+    }>
+    next_actions: Array<{
+      id: string
+      title: string
+      description: string
+      path?: string
+      severity?: string
+    }>
+  }
 }
 
 type TenantIssueSummary = {
@@ -178,6 +267,72 @@ function approverLinkStatus(approver: Approver) {
   if (hasEmail && hasSlack) return { label: 'Both', tone: 'green' }
   if (hasSlack) return { label: 'Slack linked', tone: 'blue' }
   return { label: 'Email only', tone: 'gray' }
+}
+
+function runtimeLabel(runtime?: string) {
+  switch (runtime) {
+    case 'python':
+      return 'Python'
+    case 'typescript':
+      return 'TypeScript'
+    case 'langchain':
+      return 'LangChain'
+    case 'openai_local':
+      return 'Local OpenAI model'
+    default:
+      return runtime || 'Unspecified runtime'
+  }
+}
+
+function summarizeAgentIntegration(integration: AgentIntegrationRecord | null | undefined) {
+  if (integration === undefined) return 'Loading saved integration summary…'
+  if (!integration) return 'Bare agent record only. Generate an integration bundle to persist runtime, tool, and approval defaults.'
+  const parts = [runtimeLabel(integration.runtime)]
+  if (integration.environment_label) parts.push(integration.environment_label)
+  if (integration.tools && integration.tools.length > 0) {
+    parts.push(integration.tools.map(tool => `${tool.tool}:${tool.action}`).join(' · '))
+  }
+  return parts.join(' · ')
+}
+
+function summarizeIntegrationTools(tools?: Array<{ tool: string; action: string }>) {
+  if (!tools || tools.length === 0) return 'No governed tools saved'
+  return tools.map(tool => `${tool.tool}:${tool.action}`).join(' · ')
+}
+
+function integrationRevisionLabel(mode?: string) {
+  switch (mode) {
+    case 'created':
+      return 'Created'
+    case 'regenerated':
+      return 'Regenerated'
+    case 'regenerated_defaults':
+      return 'Regenerated with defaults'
+    default:
+      return 'Saved'
+  }
+}
+
+function bundleArchiveFilename(agentName: string, useDefaults: boolean) {
+  const slug = agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent'
+  return useDefaults ? `openclause-${slug}-defaults.zip` : `openclause-${slug}.zip`
+}
+
+function pilotStatusBadge(status: string) {
+  switch (status) {
+    case 'healthy':
+      return { label: 'Healthy pilot', className: 'badge badge-green' }
+    case 'needs_attention':
+      return { label: 'Needs attention', className: 'badge badge-yellow' }
+    case 'setup_required':
+      return { label: 'Setup required', className: 'badge badge-red' }
+    default:
+      return { label: 'Collecting baseline', className: 'badge badge-gray' }
+  }
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`
 }
 
 function normalizeTenantNotificationConfig(payload: unknown): { config: TenantNotificationConfig; dropped: number } | null {
@@ -286,6 +441,19 @@ function normalizeAlertEventsPayload(payload: unknown): { events: AlertEvent[]; 
   return { events, dropped: wrapped.length - events.length }
 }
 
+function integrationToOnboardingPreset(integration: AgentIntegrationRecord | null | undefined) {
+  if (!integration) return null
+  return {
+    runtime: integration.runtime,
+    environment_label: integration.environment_label,
+    owner_name: integration.owner_name,
+    description: integration.description,
+    approval_posture: integration.approval_posture,
+    updated_at: integration.updated_at,
+    tools: integration.tools || [],
+  }
+}
+
 function normalizeTenantAnalyticsSummary(payload: unknown): TenantAnalyticsSummary | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
   const candidate = payload as Partial<TenantAnalyticsSummary>
@@ -336,6 +504,41 @@ function normalizeTenantAnalyticsSummary(payload: unknown): TenantAnalyticsSumma
   const onboarding = candidate.onboarding_checklist && typeof candidate.onboarding_checklist === 'object'
     ? candidate.onboarding_checklist
     : {}
+  const pilotHealth = candidate.pilot_health && typeof candidate.pilot_health === 'object'
+    ? candidate.pilot_health as Partial<TenantAnalyticsSummary['pilot_health']>
+    : {}
+
+  const normalizeTopConnectorFailures = Array.isArray(pilotHealth.top_connector_failures)
+    ? pilotHealth.top_connector_failures.filter((row): row is TenantAnalyticsSummary['pilot_health']['top_connector_failures'][number] => (
+      !!row &&
+      typeof row.tool === 'string' &&
+      typeof row.action === 'string' &&
+      typeof row.status === 'string' &&
+      typeof row.error_message === 'string' &&
+      typeof row.count === 'number' &&
+      typeof row.last_seen_at === 'string'
+    ))
+    : []
+
+  const normalizeTopDenyReasons = Array.isArray(pilotHealth.top_deny_reasons)
+    ? pilotHealth.top_deny_reasons.filter((row): row is TenantAnalyticsSummary['pilot_health']['top_deny_reasons'][number] => (
+      !!row &&
+      typeof row.reason === 'string' &&
+      typeof row.count === 'number' &&
+      typeof row.last_seen_at === 'string'
+    ))
+    : []
+
+  const normalizeNextActions = Array.isArray(pilotHealth.next_actions)
+    ? pilotHealth.next_actions.filter((row): row is TenantAnalyticsSummary['pilot_health']['next_actions'][number] => (
+      !!row &&
+      typeof row.id === 'string' &&
+      typeof row.title === 'string' &&
+      typeof row.description === 'string' &&
+      (row.path === undefined || typeof row.path === 'string') &&
+      (row.severity === undefined || typeof row.severity === 'string')
+    ))
+    : []
 
   return {
     range_start: typeof candidate.range_start === 'string' ? candidate.range_start : '',
@@ -356,6 +559,49 @@ function normalizeTenantAnalyticsSummary(payload: unknown): TenantAnalyticsSumma
       has_approval: !!(onboarding as Partial<TenantOnboardingChecklist>).has_approval,
       has_execution: !!(onboarding as Partial<TenantOnboardingChecklist>).has_execution,
     },
+    pilot_health: {
+      status: typeof pilotHealth.status === 'string' ? pilotHealth.status : '',
+      status_reason: typeof pilotHealth.status_reason === 'string' ? pilotHealth.status_reason : '',
+      last_event: pilotHealth.last_event && typeof pilotHealth.last_event === 'object' && !Array.isArray(pilotHealth.last_event)
+        && typeof pilotHealth.last_event.event_id === 'string'
+        && typeof pilotHealth.last_event.agent_id === 'string'
+        && typeof pilotHealth.last_event.tool === 'string'
+        && typeof pilotHealth.last_event.action === 'string'
+        && typeof pilotHealth.last_event.decision === 'string'
+        && typeof pilotHealth.last_event.session_id === 'string'
+        && typeof pilotHealth.last_event.trace_id === 'string'
+        && typeof pilotHealth.last_event.received_at === 'string'
+        ? pilotHealth.last_event
+        : undefined,
+      last_session: pilotHealth.last_session && typeof pilotHealth.last_session === 'object' && !Array.isArray(pilotHealth.last_session)
+        && typeof pilotHealth.last_session.session_id === 'string'
+        && typeof pilotHealth.last_session.agent_id === 'string'
+        && typeof pilotHealth.last_session.last_event_id === 'string'
+        && typeof pilotHealth.last_session.last_event_at === 'string'
+        ? pilotHealth.last_session
+        : undefined,
+      last_approval: pilotHealth.last_approval && typeof pilotHealth.last_approval === 'object' && !Array.isArray(pilotHealth.last_approval)
+        && typeof pilotHealth.last_approval.request_id === 'string'
+        && typeof pilotHealth.last_approval.event_id === 'string'
+        && typeof pilotHealth.last_approval.tool === 'string'
+        && typeof pilotHealth.last_approval.action === 'string'
+        && typeof pilotHealth.last_approval.status === 'string'
+        && typeof pilotHealth.last_approval.created_at === 'string'
+        ? pilotHealth.last_approval
+        : undefined,
+      pending_approvals: typeof pilotHealth.pending_approvals === 'number' ? pilotHealth.pending_approvals : 0,
+      oldest_pending_approval_at: typeof pilotHealth.oldest_pending_approval_at === 'string' ? pilotHealth.oldest_pending_approval_at : undefined,
+      execution_success_count: typeof pilotHealth.execution_success_count === 'number' ? pilotHealth.execution_success_count : 0,
+      execution_total: typeof pilotHealth.execution_total === 'number' ? pilotHealth.execution_total : 0,
+      execution_success_rate: typeof pilotHealth.execution_success_rate === 'number' ? pilotHealth.execution_success_rate : 0,
+      missing_session_count: typeof pilotHealth.missing_session_count === 'number' ? pilotHealth.missing_session_count : 0,
+      missing_trace_count: typeof pilotHealth.missing_trace_count === 'number' ? pilotHealth.missing_trace_count : 0,
+      missing_session_rate: typeof pilotHealth.missing_session_rate === 'number' ? pilotHealth.missing_session_rate : 0,
+      missing_trace_rate: typeof pilotHealth.missing_trace_rate === 'number' ? pilotHealth.missing_trace_rate : 0,
+      top_connector_failures: normalizeTopConnectorFailures,
+      top_deny_reasons: normalizeTopDenyReasons,
+      next_actions: normalizeNextActions,
+    },
   }
 }
 
@@ -366,12 +612,22 @@ export default function TenantDetail() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
   const [approvers, setApprovers] = useState<Approver[]>([])
+  const [agentIntegrations, setAgentIntegrations] = useState<Record<string, AgentIntegrationRecord | null>>({})
+  const [agentIntegrationRevisions, setAgentIntegrationRevisions] = useState<Record<string, AgentIntegrationRevision[]>>({})
+  const [integrationHistoryErrorByAgent, setIntegrationHistoryErrorByAgent] = useState<Record<string, string>>({})
+  const [activeIntegrationAgentID, setActiveIntegrationAgentID] = useState<string | null>(null)
+  const [integrationLoadingByAgent, setIntegrationLoadingByAgent] = useState<Record<string, boolean>>({})
+  const [integrationDownloadByAgent, setIntegrationDownloadByAgent] = useState<Record<string, boolean>>({})
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [onboardingAgent, setOnboardingAgent] = useState<Agent | null>(null)
   const [notificationConfig, setNotificationConfig] = useState<TenantNotificationConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const fetchSeq = useRef(0)
   const alertsFetchSeq = useRef(0)
   const analyticsFetchSeq = useRef(0)
+  const onboardingTenantNameRef = useRef('')
+  const onboardingTenantStatusRef = useRef('')
   const [hideDisabledAgents, setHideDisabledAgents] = useState(false)
 
   const [agentForm, setAgentForm] = useState({ name: '' })
@@ -551,6 +807,14 @@ export default function TenantDetail() {
       }),
     [approvers],
   )
+  const onboardingPresetTenant = useMemo(() => {
+    if (!id) return null
+    return {
+      id,
+      name: tenant?.name || onboardingTenantNameRef.current || 'Current tenant',
+      status: tenant?.status || onboardingTenantStatusRef.current || 'active',
+    }
+  }, [id, tenant?.name, tenant?.status])
 
   useEffect(() => {
     const tab = searchParams.get('tab')
@@ -568,6 +832,28 @@ export default function TenantDetail() {
     setSearchParams(next)
   }
 
+  async function prefetchAgentIntegrations(agentList: Agent[]) {
+    if (!id || agentList.length === 0) return
+    const results = await Promise.all(agentList.map(async agent => {
+      try {
+        const integration = await api.get(`/admin/tenants/${id}/agents/${agent.id}/integration`) as AgentIntegrationRecord
+        return { agentID: agent.id, integration }
+      } catch (err) {
+        if (err instanceof APIClientError && err.status === 404) {
+          return { agentID: agent.id, integration: null }
+        }
+        return { agentID: agent.id, integration: undefined }
+      }
+    }))
+    setAgentIntegrations(current => {
+      const next = { ...current }
+      results.forEach(result => {
+        if (result.integration !== undefined) next[result.agentID] = result.integration
+      })
+      return next
+    })
+  }
+
   async function fetchAll() {
     const seq = ++fetchSeq.current
     setLoading(true)
@@ -576,6 +862,12 @@ export default function TenantDetail() {
     setAgents([])
     setApiKeys([])
     setApprovers([])
+    setAgentIntegrations({})
+    setAgentIntegrationRevisions({})
+    setIntegrationHistoryErrorByAgent({})
+    setActiveIntegrationAgentID(null)
+    setIntegrationLoadingByAgent({})
+    setIntegrationDownloadByAgent({})
     setNotificationConfig(null)
     setNotifError('')
     setAlertRules([])
@@ -614,7 +906,9 @@ export default function TenantDetail() {
 
       if (agentsResp.status === 'fulfilled') {
         const agentsData = agentsResp.value as Agent[] | { agents?: Agent[] }
-        setAgents(Array.isArray(agentsData) ? agentsData : agentsData?.agents || [])
+        const nextAgents = Array.isArray(agentsData) ? agentsData : agentsData?.agents || []
+        setAgents(nextAgents)
+        void prefetchAgentIntegrations(nextAgents)
       } else {
         partialFailures.push('agents')
       }
@@ -683,6 +977,118 @@ export default function TenantDetail() {
   }
 
   useEffect(() => { fetchAll() }, [id, hideDisabledAgents])
+
+  useEffect(() => {
+    if (!tenant) return
+    onboardingTenantNameRef.current = tenant.name
+    onboardingTenantStatusRef.current = tenant.status
+  }, [tenant])
+
+  async function openAgentIntegrationHistory(agent: Agent) {
+    if (!id) return
+    const isOpen = activeIntegrationAgentID === agent.id
+    setActiveIntegrationAgentID(isOpen ? null : agent.id)
+    if (isOpen) return
+
+    setIntegrationLoadingByAgent(current => ({ ...current, [agent.id]: true }))
+    setIntegrationHistoryErrorByAgent(current => {
+      if (!(agent.id in current)) return current
+      const next = { ...current }
+      delete next[agent.id]
+      return next
+    })
+    try {
+      const [integrationResp, revisionsResp] = await Promise.all([
+        api.get(`/admin/tenants/${id}/agents/${agent.id}/integration`),
+        api.get(`/admin/tenants/${id}/agents/${agent.id}/integration/revisions?limit=5`),
+      ])
+      setAgentIntegrations(current => ({
+        ...current,
+        [agent.id]: integrationResp as AgentIntegrationRecord,
+      }))
+      const revisionsPayload = revisionsResp as { revisions?: AgentIntegrationRevision[] } | AgentIntegrationRevision[]
+      setAgentIntegrationRevisions(current => ({
+        ...current,
+        [agent.id]: Array.isArray(revisionsPayload) ? revisionsPayload : revisionsPayload.revisions || [],
+      }))
+      clearTenantIssues('integration-history')
+    } catch (err) {
+      if (err instanceof APIClientError && err.status === 404) {
+        setAgentIntegrations(current => ({
+          ...current,
+          [agent.id]: null,
+        }))
+        setAgentIntegrationRevisions(current => ({
+          ...current,
+          [agent.id]: [],
+        }))
+        setIntegrationHistoryErrorByAgent(current => {
+          if (!(agent.id in current)) return current
+          const next = { ...current }
+          delete next[agent.id]
+          return next
+        })
+        clearTenantIssues('integration-history')
+        return
+      }
+      logTenantDetailIssue('integration-history', err, { agentId: agent.id })
+      setIntegrationHistoryErrorByAgent(current => ({
+        ...current,
+        [agent.id]: err instanceof Error ? err.message : 'Failed to load integration history',
+      }))
+    } finally {
+      setIntegrationLoadingByAgent(current => ({ ...current, [agent.id]: false }))
+    }
+  }
+
+  async function openOnboardingForAgent(agent: Agent) {
+    if (id && !(agent.id in agentIntegrations)) {
+      setIntegrationLoadingByAgent(current => ({ ...current, [agent.id]: true }))
+      try {
+        await prefetchAgentIntegrations([agent])
+      } finally {
+        setIntegrationLoadingByAgent(current => ({ ...current, [agent.id]: false }))
+      }
+    }
+    setOnboardingAgent(agent)
+    setOnboardingOpen(true)
+  }
+
+  async function downloadAgentIntegrationBundle(agent: Agent, useDefaults: boolean) {
+    if (!id) return
+    setIntegrationDownloadByAgent(current => ({ ...current, [agent.id]: true }))
+    try {
+      const query = useDefaults ? '?defaults=true&archive=true' : '?archive=true'
+      const blob = await api.getBlob(`/admin/tenants/${id}/agents/${agent.id}/integration/bundle${query}`)
+      downloadBlob(blob, bundleArchiveFilename(agent.name, useDefaults))
+      clearTenantIssues('integration-bundle')
+    } catch (err) {
+      if (err instanceof APIClientError && err.status === 404) {
+        setAgentIntegrations(current => ({
+          ...current,
+          [agent.id]: null,
+        }))
+        setAgentIntegrationRevisions(current => ({
+          ...current,
+          [agent.id]: [],
+        }))
+        setIntegrationHistoryErrorByAgent(current => {
+          if (!(agent.id in current)) return current
+          const next = { ...current }
+          delete next[agent.id]
+          return next
+        })
+        const message = 'No saved integration bundle exists for this agent yet. Create or regenerate a bundle first.'
+        setError(message)
+        clearTenantIssues('integration-bundle')
+        return
+      }
+      logTenantDetailIssue('integration-bundle', err, { agentId: agent.id, useDefaults })
+      setError(err instanceof Error ? err.message : 'Failed to download saved integration bundle')
+    } finally {
+      setIntegrationDownloadByAgent(current => ({ ...current, [agent.id]: false }))
+    }
+  }
 
   async function fetchAlerts() {
     const seq = ++alertsFetchSeq.current
@@ -1210,9 +1616,17 @@ export default function TenantDetail() {
 
       {activeTab === 'agents' && (
         <>
-          <div className="section-title section-title-spacious">Agents</div>
+          <div className="section-title section-title-spacious section-title-with-action">
+            <span>Agents</span>
+            <button className="btn btn-outline btn-sm" type="button" onClick={() => setOnboardingOpen(true)}>
+              Create Agent Integration
+            </button>
+          </div>
           <div className="form-card">
             <h3>Register Agent</h3>
+            <div className="form-helper-text" style={{ marginBottom: 12 }}>
+              Need a full starter bundle instead of a bare agent record? Use <strong>Create Agent Integration</strong> to create the agent, issue an API key, and generate a golden-path snippet.
+            </div>
             <form onSubmit={createAgent}>
               <div className="form-inline">
                 <div className="form-group">
@@ -1249,7 +1663,10 @@ export default function TenantDetail() {
                 {visibleAgents.length === 0 ? (
                   <tr><td colSpan={5} className="table-empty-copy-cell">No agents</td></tr>
                 ) : (
-                  visibleAgents.map(a => (
+                  visibleAgents.map(a => {
+                    const missingSavedIntegration = agentIntegrations[a.id] === null
+                    const integrationSummary = agentIntegrations[a.id]
+                    return (
                     <tr key={a.id}>
                       <td>
                         <div className="inline-value-copy">
@@ -1257,7 +1674,12 @@ export default function TenantDetail() {
                           <CopyIconButton text={a.id} label="Agent ID" />
                         </div>
                       </td>
-                      <td>{a.name}</td>
+                      <td>
+                        <div className="table-primary-cell">
+                          <div className="table-primary">{a.name}</div>
+                          <div className="table-subtext">{summarizeAgentIntegration(integrationSummary)}</div>
+                        </div>
+                      </td>
                       <td>
                         <span className={`badge ${a.status === 'active' ? 'badge-green' : 'badge-red'}`}>{a.status}</span>
                       </td>
@@ -1270,15 +1692,146 @@ export default function TenantDetail() {
                         >
                           {a.status === 'active' ? 'Disable' : 'Enable'}
                         </button>
+                        <button
+                          className="btn btn-sm btn-outline"
+                          type="button"
+                          disabled={!!integrationDownloadByAgent[a.id] || missingSavedIntegration}
+                          onClick={() => { void downloadAgentIntegrationBundle(a, false) }}
+                        >
+                          {integrationDownloadByAgent[a.id] ? 'Downloading…' : (missingSavedIntegration ? 'No saved bundle yet' : 'Download latest bundle')}
+                        </button>
+                        <button
+                          className="btn btn-sm btn-outline"
+                          type="button"
+                          onClick={() => {
+                            void openOnboardingForAgent(a)
+                          }}
+                        >
+                          Regenerate bundle
+                        </button>
+                        <button
+                          className="btn btn-sm btn-outline"
+                          type="button"
+                          onClick={() => { void openAgentIntegrationHistory(a) }}
+                        >
+                          {activeIntegrationAgentID === a.id ? 'Hide history' : 'View history'}
+                        </button>
                       </td>
                     </tr>
-                  ))
+                  )})
                 )}
               </tbody>
             </table>
           </div>
+
+          {activeIntegrationAgentID ? (
+            <div className="detail-panel mt-16">
+              <div className="section-title section-title-with-action">
+                <h3>Saved Integration</h3>
+                {(() => {
+                  const agent = agents.find(candidate => candidate.id === activeIntegrationAgentID)
+                  const missingSavedIntegration = agent ? agentIntegrations[agent.id] === null : false
+                  return agent ? (
+                    <div className="btn-group">
+                      <button
+                        className="btn btn-outline btn-sm"
+                        type="button"
+                        disabled={!!integrationDownloadByAgent[agent.id] || missingSavedIntegration}
+                        onClick={() => { void downloadAgentIntegrationBundle(agent, false) }}
+                      >
+                        {integrationDownloadByAgent[agent.id] ? 'Downloading…' : (missingSavedIntegration ? 'No saved bundle yet' : 'Download saved bundle')}
+                      </button>
+                      <button
+                        className="btn btn-outline btn-sm"
+                        type="button"
+                        disabled={!!integrationDownloadByAgent[agent.id] || missingSavedIntegration}
+                        onClick={() => { void downloadAgentIntegrationBundle(agent, true) }}
+                      >
+                        {missingSavedIntegration ? 'No defaults bundle yet' : 'Download defaults bundle'}
+                      </button>
+                    </div>
+                  ) : null
+                })()}
+              </div>
+              {integrationLoadingByAgent[activeIntegrationAgentID] ? (
+                <div className="table-subtext">Loading the latest saved bundle details…</div>
+              ) : (() => {
+                const integration = agentIntegrations[activeIntegrationAgentID]
+                const revisions = agentIntegrationRevisions[activeIntegrationAgentID] || []
+                const integrationError = integrationHistoryErrorByAgent[activeIntegrationAgentID]
+                if (integrationError) {
+                  return <InlineErrorState message={integrationError} />
+                }
+                if (!integration) {
+                  return <div className="table-subtext">No saved integration record exists for this agent yet. Create or regenerate a bundle first.</div>
+                }
+                return (
+                  <>
+                    <div className="table-subtext">
+                      {runtimeLabel(integration.runtime)} · {integration.environment_label || 'unlabeled environment'} · {integration.approval_posture || 'tenant default posture'}
+                    </div>
+                    <div className="table-subtext mt-8">{summarizeIntegrationTools(integration.tools)}</div>
+                    {integration.description ? <div className="table-subtext mt-8">{integration.description}</div> : null}
+                    <div className="stats-grid mt-16">
+                      <div className="stat-card">
+                        <div className="stat-label">Owner</div>
+                        <div className="stat-value">{integration.owner_name || '—'}</div>
+                      </div>
+                      <div className="stat-card">
+                        <div className="stat-label">Saved</div>
+                        <div className="stat-value">{formatDate(integration.updated_at)}</div>
+                      </div>
+                    </div>
+                    <div className="mt-16">
+                      <h3>Recent revisions</h3>
+                      {revisions.length === 0 ? (
+                        <div className="table-subtext">No saved revisions yet.</div>
+                      ) : (
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>When</th>
+                              <th>Mode</th>
+                              <th>Runtime</th>
+                              <th>Tools</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {revisions.map(revision => (
+                              <tr key={revision.id}>
+                                <td>{formatDate(revision.created_at)}</td>
+                                <td>{integrationRevisionLabel(revision.mode)}</td>
+                                <td>{runtimeLabel(revision.runtime)}</td>
+                                <td>{summarizeIntegrationTools(revision.tools)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </>
+                )
+              })()}
+            </div>
+          ) : null}
         </>
       )}
+
+      <AgentOnboardingFlow
+        open={onboardingOpen}
+        onClose={() => {
+          setOnboardingOpen(false)
+          setOnboardingAgent(null)
+        }}
+        presetTenant={onboardingPresetTenant}
+        presetAgent={onboardingAgent ? {
+          id: onboardingAgent.id,
+          name: onboardingAgent.name,
+          status: onboardingAgent.status,
+          onboarding: integrationToOnboardingPreset(agentIntegrations[onboardingAgent.id]),
+        } : null}
+        onCreated={() => { void fetchAll() }}
+      />
 
       {activeTab === 'api_keys' && (
         <>
@@ -1818,10 +2371,12 @@ export default function TenantDetail() {
             const riskHeatmap = tenantAnalytics.risk_heatmap
             const perAgent = tenantAnalytics.per_agent
             const onboarding = tenantAnalytics.onboarding_checklist
+            const pilotHealth = tenantAnalytics.pilot_health
 
             const maxDecision = Math.max(...trend.flatMap(b => [b.allow_count, b.deny_count, b.approve_count]), 1)
             const riskMaxTotal = Math.max(...riskHeatmap.map(r => r.total), 1)
             const hasMeaningfulTrendData = trend.length >= 2 && trend.some(bucket => bucket.total > 0)
+            const pilotStatus = pilotStatusBadge(pilotHealth.status)
 
             const badgeFor = (ok: boolean) => (ok ? <span className="badge badge-green">Done</span> : <span className="badge badge-gray">Pending</span>)
             const alphaFor = (count: number) => 0.08 + 0.92 * (riskMaxTotal > 0 ? count / riskMaxTotal : 0)
@@ -1845,6 +2400,141 @@ export default function TenantDetail() {
                     <div className="card-label">Approve</div>
                     <div className="card-value yellow">{totals.approve_count.toLocaleString()}</div>
                   </div>
+                </div>
+
+                <div className="detail-panel mt-16">
+                  <div className="flex-between" style={{ alignItems: 'center', gap: 12 }}>
+                    <div>
+                      <h3>Pilot cockpit</h3>
+                      <div className="table-subtext">A plain-English health check for whether this tenant can run a real pilot and how operators should respond next.</div>
+                    </div>
+                    <span className={pilotStatus.className}>{pilotStatus.label}</span>
+                  </div>
+                  <div className="form-helper-text mt-16">{pilotHealth.status_reason || 'No pilot summary available yet.'}</div>
+
+                  <div className="card-grid mt-16">
+                    <div className="card">
+                      <div className="card-label">Execution success</div>
+                      <div className="card-value">{pilotHealth.execution_total > 0 ? formatPercent(pilotHealth.execution_success_rate) : '—'}</div>
+                      <div className="stat-hint">{pilotHealth.execution_success_count} successful runs out of {pilotHealth.execution_total} results in this range</div>
+                    </div>
+                    <div className="card">
+                      <div className="card-label">Missing session_id</div>
+                      <div className="card-value">{pilotHealth.missing_session_count > 0 ? formatPercent(pilotHealth.missing_session_rate) : '0%'}</div>
+                      <div className="stat-hint">{pilotHealth.missing_session_count} events missing session context</div>
+                    </div>
+                    <div className="card">
+                      <div className="card-label">Missing trace_id</div>
+                      <div className="card-value">{pilotHealth.missing_trace_count > 0 ? formatPercent(pilotHealth.missing_trace_rate) : '0%'}</div>
+                      <div className="stat-hint">{pilotHealth.missing_trace_count} events missing trace context</div>
+                    </div>
+                    <div className="card">
+                      <div className="card-label">Pending approvals</div>
+                      <div className="card-value">{pilotHealth.pending_approvals.toLocaleString()}</div>
+                      <div className="stat-hint">
+                        {pilotHealth.oldest_pending_approval_at
+                          ? `Oldest pending approval: ${formatUTCDateTime(pilotHealth.oldest_pending_approval_at)}`
+                          : 'No pending approvals right now'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="form-card mt-16">
+                    <h3>What happened most recently</h3>
+                    <div style={{ display: 'grid', gap: 12 }}>
+                      <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                        <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>Last governed event</div>
+                        <div className="detail-value">
+                          {pilotHealth.last_event ? (
+                            <>
+                              <div><strong>{pilotHealth.last_event.tool}:{pilotHealth.last_event.action}</strong> · <span className={`badge ${pilotHealth.last_event.decision === 'allow' ? 'badge-green' : pilotHealth.last_event.decision === 'deny' ? 'badge-red' : 'badge-yellow'}`}>{pilotHealth.last_event.decision}</span></div>
+                              <div className="table-subtext">Agent {pilotHealth.last_event.agent_id} · {formatUTCDateTime(pilotHealth.last_event.received_at)}</div>
+                              <div className="table-subtext">session_id: <code className="mono">{pilotHealth.last_event.session_id || '(missing)'}</code> · trace_id: <code className="mono">{pilotHealth.last_event.trace_id || '(missing)'}</code></div>
+                            </>
+                          ) : 'No governed events in the selected range yet.'}
+                        </div>
+                      </div>
+                      <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                        <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>Last session seen</div>
+                        <div className="detail-value">
+                          {pilotHealth.last_session ? (
+                            <>
+                              <div><code className="mono">{pilotHealth.last_session.session_id}</code></div>
+                              <div className="table-subtext">Agent {pilotHealth.last_session.agent_id} · Last event at {formatUTCDateTime(pilotHealth.last_session.last_event_at)}</div>
+                            </>
+                          ) : 'No session_id has been observed yet. Run the smoke test and make sure your agent sends session_id on every governed call.'}
+                        </div>
+                      </div>
+                      <div className="detail-row" style={{ borderBottom: 'none', padding: 0 }}>
+                        <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>Last approval</div>
+                        <div className="detail-value">
+                          {pilotHealth.last_approval ? (
+                            <>
+                              <div><strong>{pilotHealth.last_approval.tool}:{pilotHealth.last_approval.action}</strong> · <span className={`badge ${pilotHealth.last_approval.status === 'approved' ? 'badge-green' : pilotHealth.last_approval.status === 'denied' ? 'badge-red' : 'badge-yellow'}`}>{pilotHealth.last_approval.status}</span></div>
+                              <div className="table-subtext">Created {formatUTCDateTime(pilotHealth.last_approval.created_at)}{pilotHealth.last_approval.resolved_at ? ` · Resolved ${formatUTCDateTime(pilotHealth.last_approval.resolved_at)}` : ''}</div>
+                              <div className="table-subtext">{pilotHealth.last_approval.latency_ms != null ? `Approval latency: ${Math.round(pilotHealth.last_approval.latency_ms / 1000)}s` : 'Approval is still waiting on action or did not record a latency yet.'}</div>
+                            </>
+                          ) : 'No approval requests in the selected range yet.'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="form-card mt-16">
+                    <h3>Next best actions</h3>
+                    <div style={{ display: 'grid', gap: 12 }}>
+                      {pilotHealth.next_actions.length === 0 ? (
+                        <div className="table-subtext">OpenClause does not see an immediate blocker right now.</div>
+                      ) : (
+                        pilotHealth.next_actions.map(action => (
+                          <div key={action.id} className="detail-row" style={{ borderBottom: 'none', padding: 0, alignItems: 'flex-start' }}>
+                            <div className="detail-label" style={{ minWidth: 240, color: '#64748b', fontWeight: 600 }}>
+                              <span className={`badge ${action.severity === 'high' ? 'badge-red' : action.severity === 'medium' ? 'badge-yellow' : 'badge-blue'}`}>{action.severity || 'info'}</span>
+                            </div>
+                            <div className="detail-value">
+                              <div><strong>{action.title}</strong></div>
+                              <div className="table-subtext">{action.description}</div>
+                              {action.path ? (
+                                <div className="mt-8">
+                                  <Link to={action.path} className="btn btn-outline btn-sm">Open</Link>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {(pilotHealth.top_connector_failures.length > 0 || pilotHealth.top_deny_reasons.length > 0) ? (
+                    <div className="form-card mt-16">
+                      <h3>Operator diagnostics</h3>
+                      {pilotHealth.top_connector_failures.length > 0 ? (
+                        <div style={{ marginBottom: pilotHealth.top_deny_reasons.length > 0 ? 16 : 0 }}>
+                          <div className="form-helper-text">Top connector failures in the selected range.</div>
+                          <ul className="onboarding-checklist mt-16">
+                            {pilotHealth.top_connector_failures.map(failure => (
+                              <li key={`${failure.tool}-${failure.action}-${failure.error_message}`}>
+                                <strong>{failure.tool}:{failure.action}</strong> failed {failure.count} times ({failure.status}). Latest: {failure.error_message}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {pilotHealth.top_deny_reasons.length > 0 ? (
+                        <div>
+                          <div className="form-helper-text">Top deny reasons in the selected range.</div>
+                          <ul className="onboarding-checklist mt-16">
+                            {pilotHealth.top_deny_reasons.map(reason => (
+                              <li key={reason.reason}>
+                                <strong>{reason.reason}</strong> · {reason.count} denies
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 {trend.length > 0 && (

@@ -1,5 +1,5 @@
-import { useState, useEffect, FormEvent, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect, FormEvent, useMemo, useRef } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import {
   CopyIconButton,
@@ -16,6 +16,7 @@ import {
   shortID,
   type SortState,
 } from '../ui'
+import AgentOnboardingFlow from './AgentOnboardingFlow'
 
 interface Tenant {
   id: string
@@ -25,6 +26,7 @@ interface Tenant {
 }
 
 export default function Tenants() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const searchFieldID = 'tenants-search'
   const createNameFieldID = 'tenant-create-name'
   const [tenants, setTenants] = useState<Tenant[]>([])
@@ -33,8 +35,12 @@ export default function Tenants() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '' })
   const [creating, setCreating] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [onboardingPresetTenant, setOnboardingPresetTenant] = useState<Tenant | null>(null)
   const [search, setSearch] = useState('')
   const [sortState, setSortState] = useState<SortState<'name' | 'status' | 'created_at'>>({ key: null, dir: 'asc' })
+  const onboardingRequested = searchParams.get('onboarding') === '1'
+  const consumedOnboardingQueryRef = useRef(false)
 
   async function fetchTenants() {
     setLoading(true)
@@ -50,6 +56,16 @@ export default function Tenants() {
   }
 
   useEffect(() => { fetchTenants() }, [])
+
+  useEffect(() => {
+    if (!onboardingRequested) {
+      consumedOnboardingQueryRef.current = false
+      return
+    }
+    if (onboardingOpen || loading || consumedOnboardingQueryRef.current) return
+    consumedOnboardingQueryRef.current = true
+    openOnboarding()
+  }, [loading, onboardingOpen, onboardingRequested])
 
   async function handleCreate(e: FormEvent) {
     e.preventDefault()
@@ -92,6 +108,21 @@ export default function Tenants() {
     })
   }, [search, sortState, tenants])
 
+  function openOnboarding(preset: Tenant | null = null) {
+    setOnboardingPresetTenant(preset)
+    setOnboardingOpen(true)
+  }
+
+  function closeOnboarding() {
+    setOnboardingOpen(false)
+    setOnboardingPresetTenant(null)
+    if (onboardingRequested) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('onboarding')
+      setSearchParams(next, { replace: true })
+    }
+  }
+
   return (
     <div>
       <PageHeaderBlock
@@ -108,6 +139,9 @@ export default function Tenants() {
             </button>
             <button className="btn btn-primary" type="button" onClick={() => setShowForm(f => !f)}>
               {showForm ? 'Cancel' : '+ New Tenant'}
+            </button>
+            <button className="btn btn-outline" type="button" onClick={() => openOnboarding()}>
+              Create Agent Integration
             </button>
           </div>
         }
@@ -193,7 +227,12 @@ export default function Tenants() {
                   </td>
                   <td className="col-time" title={created.title}>{created.label}</td>
                   <td className="table-action-cell">
-                    <Link to={`/tenants/${t.id}`} className="btn btn-outline btn-sm">Open tenant</Link>
+                    <div className="btn-group">
+                      <Link to={`/tenants/${t.id}`} className="btn btn-outline btn-sm">Open tenant</Link>
+                      <button className="btn btn-outline btn-sm" type="button" onClick={() => openOnboarding(t)}>
+                        Onboard agent
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )})
@@ -201,6 +240,14 @@ export default function Tenants() {
           </tbody>
         </table>
       </TableFrame>
+
+      <AgentOnboardingFlow
+        open={onboardingOpen}
+        onClose={closeOnboarding}
+        presetTenant={onboardingPresetTenant ? { id: onboardingPresetTenant.id, name: onboardingPresetTenant.name, status: onboardingPresetTenant.status } : null}
+        tenantOptions={tenants.map(tenant => ({ id: tenant.id, name: tenant.name, status: tenant.status }))}
+        onCreated={() => { void fetchTenants() }}
+      />
     </div>
   )
 }

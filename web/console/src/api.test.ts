@@ -8,6 +8,7 @@ import {
   getStoredSessionID,
   readJSONResponse,
   resetAPIFailureTrackingForTests,
+  setUnauthorizedRedirectForTests,
   storeAuthSession,
   toLocalDateTimeInput,
   toQueryTimestamp,
@@ -19,6 +20,10 @@ function makeToken(payload: Record<string, unknown>) {
 }
 
 describe('api helpers', () => {
+  afterEach(() => {
+    setUnauthorizedRedirectForTests(null)
+  })
+
   it('logs repeated API failures with request ids and resets after success', async () => {
     resetAPIFailureTrackingForTests()
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -120,11 +125,14 @@ describe('api helpers', () => {
   it('clears auth when the API returns 401', async () => {
     localStorage.setItem('oc_token', 'token')
     localStorage.setItem('oc_session_id', 'sid')
+    const redirectSpy = vi.fn()
+    setUnauthorizedRedirectForTests(redirectSpy)
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })))
 
     await expect(api.get('/admin/tenants')).rejects.toThrow('Unauthorized')
     expect(localStorage.getItem('oc_token')).toBeNull()
     expect(localStorage.getItem('oc_session_id')).toBeNull()
+    expect(redirectSpy).toHaveBeenCalledWith('/login')
   })
 
   it('converts local datetime inputs to API timestamps and back', () => {

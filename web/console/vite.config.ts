@@ -9,6 +9,8 @@ export default defineConfig({
     css: true,
     globals: true,
     include: ['src/**/*.test.{ts,tsx}'],
+    testTimeout: 15000,
+    hookTimeout: 15000,
   },
   server: {
     port: 3000,

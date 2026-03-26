@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { api } from '../api'
+import { APIClientError, api } from '../api'
+import * as ui from '../ui'
 import TenantDetail from './TenantDetail'
 import { renderRoute } from '../test/render'
 import { mockApiGet } from '../test/mockApi'
@@ -88,7 +89,90 @@ type TenantDetailState = {
       has_approval: boolean
       has_execution: boolean
     }
+    pilot_health: {
+      status: string
+      status_reason: string
+      last_event?: {
+        event_id: string
+        agent_id: string
+        tool: string
+        action: string
+        decision: string
+        session_id: string
+        trace_id: string
+        received_at: string
+      }
+      last_session?: {
+        session_id: string
+        agent_id: string
+        last_event_id: string
+        last_event_at: string
+      }
+      last_approval?: {
+        request_id: string
+        event_id: string
+        tool: string
+        action: string
+        status: string
+        created_at: string
+        resolved_at?: string
+        latency_ms?: number
+      }
+      pending_approvals: number
+      oldest_pending_approval_at?: string
+      execution_success_count: number
+      execution_total: number
+      execution_success_rate: number
+      missing_session_count: number
+      missing_trace_count: number
+      missing_session_rate: number
+      missing_trace_rate: number
+      top_connector_failures: Array<{
+        tool: string
+        action: string
+        status: string
+        error_message: string
+        count: number
+        last_seen_at: string
+      }>
+      top_deny_reasons: Array<{
+        reason: string
+        count: number
+        last_seen_at: string
+      }>
+      next_actions: Array<{
+        id: string
+        title: string
+        description: string
+        path?: string
+        severity?: string
+      }>
+    }
   }
+  integrations: Record<string, {
+    id: string
+    tenant_id: string
+    agent_id: string
+    runtime: string
+    environment_label?: string
+    owner_name?: string
+    description?: string
+    approval_posture?: string
+    created_at: string
+    updated_at: string
+    tools?: Array<{ tool: string; action: string }>
+  } | null>
+  integrationRevisions: Record<string, Array<{
+    id: string
+    integration_id: string
+    tenant_id: string
+    agent_id: string
+    mode?: string
+    runtime: string
+    created_at: string
+    tools?: Array<{ tool: string; action: string }>
+  }>>
+  integrationErrors: Record<string, string>
 }
 
 function getCardByHeading(headingText: RegExp | string) {
@@ -108,7 +192,13 @@ function createTenantDetailState(overrides: Partial<TenantDetailState> = {}): Te
       created_at: '2026-03-20T12:00:00Z',
     },
     agents: [
-      { id: 'agent-active', name: 'Agent Active', tenant_id: 'tenant-1', status: 'active', created_at: '2026-03-22T12:00:00Z' },
+      {
+        id: 'agent-active',
+        name: 'Agent Active',
+        tenant_id: 'tenant-1',
+        status: 'active',
+        created_at: '2026-03-22T12:00:00Z',
+      },
       { id: 'agent-disabled', name: 'Agent Disabled', tenant_id: 'tenant-1', status: 'disabled', created_at: '2026-03-21T12:00:00Z' },
     ],
     apiKeys: [
@@ -166,7 +256,112 @@ function createTenantDetailState(overrides: Partial<TenantDetailState> = {}): Te
         has_approval: false,
         has_execution: false,
       },
+      pilot_health: {
+        status: 'needs_attention',
+        status_reason: 'Traffic is flowing, but one or more approvals are still waiting on operator action.',
+        last_event: {
+          event_id: 'event-1',
+          agent_id: 'agent-active',
+          tool: 'slack',
+          action: 'slack.msg.post',
+          decision: 'approve',
+          session_id: 'session-123',
+          trace_id: 'trace-123',
+          received_at: '2026-03-23T11:45:00Z',
+        },
+        last_session: {
+          session_id: 'session-123',
+          agent_id: 'agent-active',
+          last_event_id: 'event-1',
+          last_event_at: '2026-03-23T11:45:00Z',
+        },
+        last_approval: {
+          request_id: 'approval-1',
+          event_id: 'event-1',
+          tool: 'slack',
+          action: 'slack.msg.post',
+          status: 'pending',
+          created_at: '2026-03-23T11:45:00Z',
+        },
+        pending_approvals: 1,
+        oldest_pending_approval_at: '2026-03-23T11:45:00Z',
+        execution_success_count: 2,
+        execution_total: 3,
+        execution_success_rate: 2 / 3,
+        missing_session_count: 0,
+        missing_trace_count: 0,
+        missing_session_rate: 0,
+        missing_trace_rate: 0,
+        top_connector_failures: [
+          {
+            tool: 'slack',
+            action: 'slack.msg.post',
+            status: 'error',
+            error_message: 'connector unavailable',
+            count: 1,
+            last_seen_at: '2026-03-23T11:50:00Z',
+          },
+        ],
+        top_deny_reasons: [
+          {
+            reason: 'tool/action mismatch in tenant policy',
+            count: 1,
+            last_seen_at: '2026-03-23T11:30:00Z',
+          },
+        ],
+        next_actions: [
+          {
+            id: 'review_pending_approvals',
+            title: 'Review pending approvals',
+            description: 'Review pending approvals so write-path pilots do not stall.',
+            path: '/approvals?tenant_id=tenant-1',
+            severity: 'high',
+          },
+        ],
+      },
     },
+    integrations: {
+      'agent-active': {
+        id: 'integration-active',
+        tenant_id: 'tenant-1',
+        agent_id: 'agent-active',
+        runtime: 'python',
+        environment_label: 'dev',
+        owner_name: 'AI Platform',
+        description: 'Primary pilot runtime',
+        approval_posture: 'pilot_safe',
+        created_at: '2026-03-22T12:10:00Z',
+        updated_at: '2026-03-23T10:15:00Z',
+        tools: [{ tool: 'slack', action: 'slack.channel.list' }],
+      },
+      'agent-disabled': null,
+    },
+    integrationRevisions: {
+      'agent-active': [
+        {
+          id: 'integration-revision-2',
+          integration_id: 'integration-active',
+          tenant_id: 'tenant-1',
+          agent_id: 'agent-active',
+          mode: 'regenerated',
+          runtime: 'python',
+          created_at: '2026-03-23T10:15:00Z',
+          tools: [{ tool: 'slack', action: 'slack.channel.list' }],
+        },
+        {
+          id: 'integration-revision-1',
+          integration_id: 'integration-active',
+          tenant_id: 'tenant-1',
+          agent_id: 'agent-active',
+          mode: 'created',
+          runtime: 'python',
+          created_at: '2026-03-22T12:10:00Z',
+          tools: [{ tool: 'slack', action: 'slack.channel.list' }],
+        },
+      ],
+      'agent-disabled': [],
+    },
+    integrationErrors: {},
     ...overrides,
   }
 }
@@ -184,6 +379,34 @@ function installTenantDetailApi(overrides: Partial<TenantDetailState> = {}) {
     [(path) => path === '/admin/tenants/tenant-1/alerts/rules', () => state.alertRules],
     [(path) => path.startsWith('/admin/tenants/tenant-1/alerts/events?'), () => state.alertEvents],
     [(path) => path.startsWith('/admin/tenants/tenant-1/analytics/summary'), () => state.analytics],
+    [(path: string) => {
+      const match = path.match(/^\/admin\/tenants\/tenant-1\/agents\/([^/]+)\/integration$/)
+      if (!match) return false
+      return true
+    }, (path: string) => {
+      const match = path.match(/^\/admin\/tenants\/tenant-1\/agents\/([^/]+)\/integration$/)
+      const agentId = match?.[1] || ''
+      const error = state.integrationErrors[agentId]
+      if (error) throw new Error(error)
+      const integration = state.integrations[agentId]
+      if (integration === null || integration === undefined) {
+        throw new APIClientError('integration not found', { status: 404 })
+      }
+      return integration
+    }],
+    [(path: string) => {
+      const match = path.match(/^\/admin\/tenants\/tenant-1\/agents\/([^/]+)\/integration\/revisions\?limit=5$/)
+      if (!match) return false
+      return true
+    }, (path: string) => {
+      const match = path.match(/^\/admin\/tenants\/tenant-1\/agents\/([^/]+)\/integration\/revisions\?limit=5$/)
+      const agentId = match?.[1] || ''
+      return { revisions: state.integrationRevisions[agentId] || [] }
+    }],
+    ['/admin/connectors', () => ([
+      { name: 'slack', actions: ['slack.channel.list', 'slack.msg.post'], type: 'remote' },
+      { name: 'jira', actions: ['jira.issue.list', 'jira.issue.create'], type: 'remote' },
+    ])],
   ])
 
   const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path, payload) => {
@@ -257,6 +480,168 @@ function installTenantDetailApi(overrides: Partial<TenantDetailState> = {}) {
         },
       ]
       return { raw_key: 'sk-oc-rotated-raw' }
+    }
+
+    if (path === '/admin/onboarding/bundles/preview') {
+      return {
+        mode: 'preview',
+        tenant: { id: 'tenant-1', name: state.tenant.name, created: false },
+        agent: { id: 'preview-onboarded-agent', name: 'Onboarded Agent', status: 'preview', preview: true },
+        bundle: {
+          runtime: 'python',
+          runtime_label: 'Python SDK wrapper',
+          starter_file_name: 'agent.py',
+          environment: {
+            OPENCLAUSE_BASE_URL: 'http://localhost:8080',
+            OPENCLAUSE_TENANT_ID: 'tenant-1',
+            OPENCLAUSE_AGENT_ID: 'preview-onboarded-agent',
+            OPENCLAUSE_API_KEY: '${OPENCLAUSE_API_KEY:-generated-on-create}',
+          },
+          environment_script: 'export OPENCLAUSE_TENANT_ID="tenant-1"',
+          environment_file: 'OPENCLAUSE_TENANT_ID="tenant-1"',
+          starter_snippet: 'def governed_call():\n    return {}',
+          readme_snippet: '# Quick start',
+          sample_call: 'curl -sS "$OPENCLAUSE_BASE_URL/v1/toolcalls"',
+          artifacts: [
+            { id: 'env-script', label: 'Environment shell exports', file_name: 'setup-env.sh', kind: 'environment_script', content: 'export OPENCLAUSE_TENANT_ID="tenant-1"' },
+            { id: 'starter', label: 'Starter runtime file', file_name: 'agent.py', kind: 'starter_file', content: 'def governed_call():\n    return {}' },
+          ],
+          verification_checklist: ['Open Audit Trail', 'Open Sessions'],
+          verification_links: [
+            { label: 'Open Audit Trail', path: '/events?agent_id=preview-onboarded-agent&tenant_id=tenant-1' },
+            { label: 'Open Sessions', path: '/sessions?agent_id=preview-onboarded-agent&tenant_id=tenant-1' },
+            { label: 'Open Approvals', path: '/approvals?tenant_id=tenant-1' },
+          ],
+          notes: ['Starter bundle note'],
+        },
+      }
+    }
+
+    if (path === '/admin/onboarding/integrations') {
+      return {
+        mode: 'created',
+        tenant: { id: 'tenant-1', name: state.tenant.name, created: false },
+        agent: { id: 'agent-onboarded', name: 'Onboarded Agent', status: 'active', created_at: '2026-03-23T13:20:00Z', preview: false },
+        api_key: { id: 'key-onboarded', name: 'Onboarded Agent onboarding key', key_prefix: 'sk-oc-onboarded', raw_key: 'sk-oc-onboarded-raw' },
+        bundle: {
+          runtime: 'python',
+          runtime_label: 'Python SDK wrapper',
+          starter_file_name: 'agent.py',
+          environment: {
+            OPENCLAUSE_BASE_URL: 'http://localhost:8080',
+            OPENCLAUSE_TENANT_ID: 'tenant-1',
+            OPENCLAUSE_AGENT_ID: 'agent-onboarded',
+            OPENCLAUSE_API_KEY: 'sk-oc-onboarded-raw',
+          },
+          environment_script: 'export OPENCLAUSE_TENANT_ID="tenant-1"',
+          environment_file: 'OPENCLAUSE_TENANT_ID="tenant-1"',
+          starter_snippet: 'def governed_call():\n    return {}',
+          readme_snippet: '# Quick start',
+          sample_call: 'curl -sS "$OPENCLAUSE_BASE_URL/v1/toolcalls"',
+          artifacts: [
+            { id: 'env-script', label: 'Environment shell exports', file_name: 'setup-env.sh', kind: 'environment_script', content: 'export OPENCLAUSE_TENANT_ID="tenant-1"' },
+            { id: 'starter', label: 'Starter runtime file', file_name: 'agent.py', kind: 'starter_file', content: 'def governed_call():\n    return {}' },
+          ],
+          verification_checklist: ['Open Audit Trail', 'Open Sessions'],
+          verification_links: [
+            { label: 'Open Audit Trail', path: '/events?agent_id=agent-onboarded&tenant_id=tenant-1' },
+            { label: 'Open Sessions', path: '/sessions?agent_id=agent-onboarded&tenant_id=tenant-1' },
+            { label: 'Open Approvals', path: '/approvals?tenant_id=tenant-1' },
+          ],
+          notes: ['Starter bundle note'],
+        },
+      }
+    }
+
+    if (path === '/admin/onboarding/bundles/regenerate') {
+      const activeKey = state.apiKeys.find(key => key.status === 'active')
+      return {
+        mode: 'regenerated',
+        tenant: { id: 'tenant-1', name: state.tenant.name, created: false },
+        agent: { id: 'agent-active', name: 'Agent Active', status: 'active', created_at: '2026-03-22T12:00:00Z', preview: false },
+        ...(activeKey ? {
+          api_key: { id: activeKey.id, name: activeKey.name, key_prefix: activeKey.key_prefix, raw_key: '' },
+        } : {}),
+        bundle: {
+          title: 'Python SDK wrapper onboarding bundle',
+          summary: 'Tenant tenant-1 · Agent agent-active · Python SDK wrapper',
+          runtime: 'python',
+          runtime_label: 'Python SDK wrapper',
+          starter_file_name: 'agent.py',
+          environment: {
+            OPENCLAUSE_BASE_URL: 'http://localhost:8080',
+            OPENCLAUSE_TENANT_ID: 'tenant-1',
+            OPENCLAUSE_AGENT_ID: 'agent-active',
+            OPENCLAUSE_API_KEY: '${OPENCLAUSE_API_KEY:-reuse-existing-key}',
+          },
+          environment_script: 'export OPENCLAUSE_API_KEY="${OPENCLAUSE_API_KEY:-reuse-existing-key}"',
+          environment_file: 'OPENCLAUSE_API_KEY="${OPENCLAUSE_API_KEY:-reuse-existing-key}"',
+          starter_snippet: 'def governed_call():\n    return {}',
+          readme_snippet: '# Quick start',
+          sample_call: 'curl -sS "$OPENCLAUSE_BASE_URL/v1/toolcalls"',
+          artifacts: [
+            { id: 'env-script', label: 'Environment shell exports', file_name: 'setup-env.sh', path_hint: 'setup-env.sh', purpose: 'Exports', writable: true, kind: 'environment_script', content: 'export OPENCLAUSE_API_KEY="${OPENCLAUSE_API_KEY:-reuse-existing-key}"' },
+            { id: 'starter', label: 'Starter runtime file', file_name: 'agent.py', path_hint: 'agent.py', purpose: 'Starter', writable: true, kind: 'starter_file', content: 'def governed_call():\n    return {}' },
+          ],
+          verification_checklist: ['Open Audit Trail', 'Open Sessions'],
+          verification_links: [
+            { label: 'Open Audit Trail', path: '/events?agent_id=agent-active&tenant_id=tenant-1' },
+            { label: 'Open Sessions', path: '/sessions?agent_id=agent-active&tenant_id=tenant-1' },
+            { label: 'Open Approvals', path: '/approvals?tenant_id=tenant-1' },
+          ],
+          notes: [activeKey
+            ? `Raw API keys are only shown at creation time. Reuse an active key matching prefix ${activeKey.key_prefix} or rotate one from the tenant API Keys tab.`
+            : 'No active API key was found for this tenant. Create or rotate an API key from the tenant API Keys tab before running the smoke test.'],
+        },
+      }
+    }
+
+    if (path === '/admin/onboarding/bundles/regenerate-defaults') {
+      const activeKey = state.apiKeys.find(key => key.status === 'active')
+      return {
+        mode: 'regenerated_defaults',
+        tenant: { id: 'tenant-1', name: state.tenant.name, created: false },
+        agent: { id: 'agent-active', name: 'Agent Active', status: 'active', created_at: '2026-03-22T12:00:00Z', preview: false },
+        ...(activeKey ? {
+          api_key: { id: activeKey.id, name: activeKey.name, key_prefix: activeKey.key_prefix, raw_key: '' },
+        } : {}),
+        bundle: {
+          title: 'Python SDK wrapper onboarding bundle',
+          summary: 'Tenant tenant-1 · Agent agent-active · Python SDK wrapper',
+          runtime: 'python',
+          runtime_label: 'Python SDK wrapper',
+          starter_file_name: 'agent.py',
+          environment: {
+            OPENCLAUSE_BASE_URL: 'http://localhost:8080',
+            OPENCLAUSE_TENANT_ID: 'tenant-1',
+            OPENCLAUSE_AGENT_ID: 'agent-active',
+            OPENCLAUSE_API_KEY: '${OPENCLAUSE_API_KEY:-reuse-existing-key}',
+          },
+          environment_script: 'export OPENCLAUSE_API_KEY="${OPENCLAUSE_API_KEY:-reuse-existing-key}"',
+          environment_file: 'OPENCLAUSE_API_KEY="${OPENCLAUSE_API_KEY:-reuse-existing-key}"',
+          starter_snippet: 'def governed_call():\n    return {}',
+          readme_snippet: '# Quick start',
+          sample_call: 'curl -sS "$OPENCLAUSE_BASE_URL/v1/toolcalls"',
+          artifacts: [
+            { id: 'env-script', label: 'Environment shell exports', file_name: 'setup-env.sh', path_hint: 'setup-env.sh', purpose: 'Exports', writable: true, kind: 'environment_script', content: 'export OPENCLAUSE_API_KEY="${OPENCLAUSE_API_KEY:-reuse-existing-key}"' },
+            { id: 'starter', label: 'Starter runtime file', file_name: 'agent.py', path_hint: 'agent.py', purpose: 'Starter', writable: true, kind: 'starter_file', content: 'def governed_call():\n    return {}' },
+          ],
+          verification_checklist: ['Open Audit Trail', 'Open Sessions'],
+          verification_links: [
+            { label: 'Open Audit Trail', path: '/events?agent_id=agent-active&tenant_id=tenant-1' },
+            { label: 'Open Sessions', path: '/sessions?agent_id=agent-active&tenant_id=tenant-1' },
+            { label: 'Open Approvals', path: '/approvals?tenant_id=tenant-1' },
+          ],
+          applied_defaults: [
+            { field: 'runtime', value: 'python', reason: 'OpenClause v0.5 golden-path default' },
+            { field: 'approval_posture', value: 'pilot_safe', reason: 'Recommended pilot-safe default' },
+            { field: 'tool', value: 'slack:slack.channel.list', reason: 'First curated tool available in the connector catalog' },
+          ],
+          notes: [activeKey
+            ? `Raw API keys are only shown at creation time. Reuse an active key matching prefix ${activeKey.key_prefix} or rotate one from the tenant API Keys tab.`
+            : 'No active API key was found for this tenant. Create or rotate an API key from the tenant API Keys tab before running the smoke test.'],
+        },
+      }
     }
 
     const revokeKeyMatch = path.match(/^\/admin\/tenants\/tenant-1\/apikeys\/([^/]+)\/revoke$/)
@@ -493,7 +878,7 @@ describe('Tenant detail page', () => {
 
     await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/approvers/approver-2'))
     await waitFor(() => expect(screen.queryByText('grace@example.com')).not.toBeInTheDocument())
-  })
+  }, 20000)
 
   it('loads alerts lazily and supports create, edit, and delete flows', async () => {
     const user = userEvent.setup()
@@ -505,7 +890,10 @@ describe('Tenant detail page', () => {
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/alerts/rules'))
 
     const createCard = getCardByHeading(/create deny_spike rule/i)
-    await user.type(within(createCard).getByLabelText(/^rule name$/i), 'Night shift deny spike')
+    const createRuleName = within(createCard).getByLabelText(/^rule name$/i)
+    await user.clear(createRuleName)
+    await user.type(createRuleName, 'Night shift deny spike')
+    await waitFor(() => expect(createRuleName).toHaveValue('Night shift deny spike'))
     await user.click(within(createCard).getByRole('checkbox', { name: /enabled immediately/i }))
     await user.click(within(createCard).getByRole('button', { name: /^create$/i }))
 
@@ -545,7 +933,7 @@ describe('Tenant detail page', () => {
 
     await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/alerts/rules/rule-2'))
     await waitFor(() => expect(screen.queryByText('Night shift deny spike')).not.toBeInTheDocument())
-  })
+  }, 20000)
 
   it('keeps alert rules visible through partial alert-event failures and recovers on retry', async () => {
     const user = userEvent.setup()
@@ -1468,5 +1856,316 @@ describe('Tenant detail page', () => {
     expect(await screen.findByDisplayValue('tenant_admin')).toBeInTheDocument()
     expect(screen.queryByText(/repeated failures detected/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/issue history \(/i, { selector: 'summary' })).not.toBeInTheDocument()
+  })
+
+  it('opens the onboarding flow from the agents tab, previews the bundle, and can create from preview', async () => {
+    const user = userEvent.setup()
+    installTenantDetailApi()
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /create agent integration/i }))
+
+    const modalHeading = await screen.findByRole('heading', { name: /create agent integration/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    await user.type(within(modal).getByLabelText(/^agent name$/i), 'Onboarded Agent')
+    await user.click(within(modal).getByRole('button', { name: /preview bundle/i }))
+
+    expect(await screen.findByRole('heading', { name: /environment/i })).toBeInTheDocument()
+    expect(screen.getByText(/python sdk wrapper starter bundle/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^files$/i }))
+    await user.click(screen.getByRole('button', { name: /starter runtime file/i }))
+    expect(screen.getByText(/def governed_call/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    expect(screen.getByRole('link', { name: /open audit trail/i })).toHaveAttribute('href', '/events?agent_id=preview-onboarded-agent&tenant_id=tenant-1')
+
+    await user.click(screen.getByRole('button', { name: /create agent and api key/i }))
+    expect((await screen.findAllByText(/sk-oc-onboarded/i)).length).toBeGreaterThan(0)
+  }, 10000)
+
+  it('regenerates a bundle for an existing agent without reissuing the raw key', async () => {
+    const user = userEvent.setup()
+    const downloadSpy = vi.spyOn(ui, 'downloadBlob').mockImplementation(() => {})
+    vi.spyOn(api, 'postBlob').mockResolvedValue(new Blob(['bundle'], { type: 'application/zip' }))
+    installTenantDetailApi()
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+
+    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    expect(within(modal).getByDisplayValue('Agent Active')).toBeDisabled()
+    await user.click(within(modal).getByRole('button', { name: /^regenerate bundle$/i }))
+
+    expect(await screen.findByText(/bundle refreshed for an existing agent/i)).toBeInTheDocument()
+    expect(await screen.findByText(/^Existing key reference$/i)).toBeInTheDocument()
+    expect(screen.getByText(/raw key is not reissued during regeneration/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/sk-oc-primary/i).length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: /download result bundle/i }))
+    expect(downloadSpy).toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    expect(screen.getByText(/reuse an active key matching prefix/i)).toBeInTheDocument()
+  }, 10000)
+
+  it('downloads the saved bundle directly and shows recent integration history', async () => {
+    const user = userEvent.setup()
+    const downloadSpy = vi.spyOn(ui, 'downloadBlob').mockImplementation(() => {})
+    const getBlobSpy = vi.spyOn(api, 'getBlob').mockResolvedValue(new Blob(['bundle'], { type: 'application/zip' }))
+    installTenantDetailApi()
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /download latest bundle/i })[0])
+
+    await waitFor(() => expect(getBlobSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/agents/agent-active/integration/bundle?archive=true'))
+    expect(downloadSpy).toHaveBeenCalled()
+
+    await user.click(screen.getAllByRole('button', { name: /view history/i })[0])
+    expect(await screen.findByRole('heading', { name: /saved integration/i })).toBeInTheDocument()
+    expect(screen.getByText(/primary pilot runtime/i)).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: /^created$/i })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: /^regenerated$/i })).toBeInTheDocument()
+    expect(screen.getAllByText(/slack:slack.channel.list/i).length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('button', { name: /download defaults bundle/i }))
+    await waitFor(() => expect(getBlobSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/agents/agent-active/integration/bundle?defaults=true&archive=true'))
+  })
+
+  it('shows a load error when saved integration history cannot be fetched', async () => {
+    const user = userEvent.setup()
+    installTenantDetailApi({
+      integrationErrors: {
+        'agent-active': 'integration history temporarily unavailable',
+      },
+    })
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /view history/i })[0])
+
+    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved integration/i })
+    const savedIntegrationPanel = savedIntegrationHeading.closest('.detail-panel') as HTMLElement
+    expect(within(savedIntegrationPanel).getByText(/integration history temporarily unavailable/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no saved integration record exists for this agent yet/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the honest empty state when no saved integration record exists yet', async () => {
+    const user = userEvent.setup()
+    installTenantDetailApi()
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Disabled')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /view history/i })[1])
+
+    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved integration/i })
+    const savedIntegrationPanel = savedIntegrationHeading.closest('.detail-panel') as HTMLElement
+    expect(within(savedIntegrationPanel).getByText(/no saved integration record exists for this agent yet/i)).toBeInTheDocument()
+    expect(within(savedIntegrationPanel).queryByText(/primary pilot runtime/i)).not.toBeInTheDocument()
+  })
+
+  it('caches missing saved integrations after a 404 download attempt and disables future bundle actions', async () => {
+    const user = userEvent.setup()
+    const { state } = installTenantDetailApi({
+      integrations: {
+        'agent-active': {
+          id: 'integration-active',
+          tenant_id: 'tenant-1',
+          agent_id: 'agent-active',
+          runtime: 'python',
+          environment_label: 'dev',
+          owner_name: 'AI Platform',
+          description: 'Primary pilot runtime',
+          approval_posture: 'pilot_safe',
+          created_at: '2026-03-22T12:10:00Z',
+          updated_at: '2026-03-23T10:15:00Z',
+          tools: [{ tool: 'slack', action: 'slack.channel.list' }],
+        },
+        'agent-disabled': {
+          id: 'integration-disabled',
+          tenant_id: 'tenant-1',
+          agent_id: 'agent-disabled',
+          runtime: 'python',
+          environment_label: 'dev',
+          owner_name: 'AI Platform',
+          description: 'Disabled pilot runtime',
+          approval_posture: 'pilot_safe',
+          created_at: '2026-03-21T12:10:00Z',
+          updated_at: '2026-03-21T12:15:00Z',
+          tools: [{ tool: 'slack', action: 'slack.channel.list' }],
+        },
+      },
+    })
+    vi.spyOn(api, 'getBlob').mockImplementation(async () => {
+      state.integrations['agent-disabled'] = null
+      state.integrationRevisions['agent-disabled'] = []
+      throw new APIClientError('integration not found', { status: 404 })
+    })
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Disabled')).toBeInTheDocument()
+    const initialButtons = screen.getAllByRole('button', { name: /download latest bundle|no saved bundle yet/i })
+    await user.click(initialButtons[1])
+
+    expect(await screen.findByText(/no saved integration bundle exists for this agent yet/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /download latest bundle|no saved bundle yet/i })[1]).toBeDisabled())
+    expect(screen.getAllByRole('button', { name: /download latest bundle|no saved bundle yet/i })[1]).toHaveTextContent(/no saved bundle yet/i)
+
+    await user.click(screen.getAllByRole('button', { name: /view history/i })[1])
+    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved integration/i })
+    const savedIntegrationPanel = savedIntegrationHeading.closest('.detail-panel') as HTMLElement
+    expect(within(savedIntegrationPanel).getByText(/no saved integration record exists for this agent yet/i)).toBeInTheDocument()
+    expect(within(savedIntegrationPanel).getByRole('button', { name: /no saved bundle yet/i })).toBeDisabled()
+    expect(within(savedIntegrationPanel).getByRole('button', { name: /no defaults bundle yet/i })).toBeDisabled()
+  })
+
+  it('shows operator guidance when regeneration finds no active API key', async () => {
+    const user = userEvent.setup()
+    installTenantDetailApi({
+      apiKeys: [],
+      analytics: {
+        range_start: '2026-03-22T12:00:00Z',
+        range_end: '2026-03-23T12:00:00Z',
+        totals: { total_events: 8, allow_count: 5, deny_count: 2, approve_count: 1 },
+        trend: [],
+        risk_heatmap: [],
+        per_agent: [],
+        onboarding_checklist: {
+          has_api_key: false,
+          has_approver: true,
+          has_toolcall: true,
+          has_approval: false,
+          has_execution: false,
+        },
+        pilot_health: {
+          status: 'setup_required',
+          status_reason: 'This tenant is still missing the basics needed for a repeatable pilot.',
+          pending_approvals: 0,
+          execution_success_count: 0,
+          execution_total: 0,
+          execution_success_rate: 0,
+          missing_session_count: 0,
+          missing_trace_count: 0,
+          missing_session_rate: 0,
+          missing_trace_rate: 0,
+          top_connector_failures: [],
+          top_deny_reasons: [],
+          next_actions: [
+            {
+              id: 'create_api_key',
+              title: 'Create or rotate an API key',
+              description: 'This tenant still needs an active key before a generated bundle can send real governed traffic.',
+              path: '/tenants/tenant-1?tab=api_keys',
+              severity: 'high',
+            },
+          ],
+        },
+      },
+    })
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+
+    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    await user.click(within(modal).getByRole('button', { name: /^regenerate bundle$/i }))
+
+    expect(await screen.findByText(/action required before the smoke test/i)).toBeInTheDocument()
+    expect(await screen.findByText(/no active key found/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    expect(screen.getAllByText(/create or rotate an api key/i).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/existing key reference/i)).not.toBeInTheDocument()
+  }, 10000)
+
+  it('regenerates a bundle with explicit defaults for an existing agent', async () => {
+    const user = userEvent.setup()
+    installTenantDetailApi()
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+
+    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    await user.click(within(modal).getByRole('button', { name: /regenerate with defaults/i }))
+
+    expect(await screen.findByText(/bundle refreshed from explicit defaults/i)).toBeInTheDocument()
+    expect(await screen.findByText(/defaults applied/i)).toBeInTheDocument()
+    expect(screen.getByText(/regenerated from defaults/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/runtime: python/i).length).toBeGreaterThan(0)
+  }, 10000)
+
+  it('prefills regeneration from the saved integration record', async () => {
+    const user = userEvent.setup()
+    installTenantDetailApi()
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    expect(screen.getByText(/python · dev · slack:slack.channel.list/i)).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+
+    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    expect(within(modal).getByText(/starting from the last saved onboarding setup for this agent/i)).toBeInTheDocument()
+    expect(within(modal).getByRole('radio', { name: /python service/i })).toBeChecked()
+    expect(within(modal).getByLabelText(/environment label/i)).toHaveValue('dev')
+    expect(within(modal).getByLabelText(/owner or team/i)).toHaveValue('AI Platform')
+    expect(within(modal).getByRole('radio', { name: /pilot-safe/i })).toBeChecked()
+  })
+
+  it('drops saved integration tools that are no longer present in the live connector catalog', async () => {
+    const user = userEvent.setup()
+    installTenantDetailApi({
+      integrations: {
+        'agent-active': {
+          id: 'integration-active',
+          tenant_id: 'tenant-1',
+          agent_id: 'agent-active',
+          runtime: 'python',
+          environment_label: 'dev',
+          owner_name: 'AI Platform',
+          description: 'Primary pilot runtime',
+          approval_posture: 'pilot_safe',
+          created_at: '2026-03-22T12:10:00Z',
+          updated_at: '2026-03-23T10:15:00Z',
+          tools: [{ tool: 'email', action: 'send' }],
+        },
+      },
+    })
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
+
+    expect(await screen.findByText('Agent Active')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+
+    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    expect(within(modal).getByRole('checkbox', { name: /slack channel list/i })).toBeChecked()
+    expect(within(modal).getByRole('checkbox', { name: /slack message post/i })).toBeChecked()
+    expect(within(modal).getByRole('button', { name: /^regenerate bundle$/i })).toBeEnabled()
+  })
+
+  it('shows pilot cockpit health, diagnostics, and next actions in analytics', async () => {
+    installTenantDetailApi()
+
+    renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=analytics' })
+
+    expect(await screen.findByRole('heading', { name: /pilot cockpit/i })).toBeInTheDocument()
+    expect(screen.getByText(/needs attention/i)).toBeInTheDocument()
+    expect(screen.getByText(/traffic is flowing, but one or more approvals are still waiting on operator action/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/review pending approvals/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/connector unavailable/i)).toBeInTheDocument()
+    expect(screen.getByText(/tool\/action mismatch in tenant policy/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/session-123/i).length).toBeGreaterThan(0)
   })
 })

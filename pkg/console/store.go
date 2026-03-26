@@ -27,15 +27,16 @@ import (
 )
 
 var (
-	ErrTenantNotFound        = errors.New("tenant not found")
-	ErrAgentNotFound         = errors.New("agent not found")
-	ErrAPIKeyNotFound        = errors.New("api key not found")
-	ErrAPIKeyAlreadyRevoked  = errors.New("api key already revoked")
-	ErrAlertRuleNotFound     = errors.New("alert rule not found")
-	ErrSessionTenantRequired = errors.New("tenant_id required for ambiguous session_id")
-	ErrInviteTokenInvalid    = errors.New("invalid or expired invite token")
-	ErrResetTokenInvalid     = errors.New("invalid or expired password reset token")
-	ErrResetUserNotFound     = errors.New("password reset token email does not map to a user")
+	ErrTenantNotFound           = errors.New("tenant not found")
+	ErrAgentNotFound            = errors.New("agent not found")
+	ErrAgentIntegrationNotFound = errors.New("agent integration not found")
+	ErrAPIKeyNotFound           = errors.New("api key not found")
+	ErrAPIKeyAlreadyRevoked     = errors.New("api key already revoked")
+	ErrAlertRuleNotFound        = errors.New("alert rule not found")
+	ErrSessionTenantRequired    = errors.New("tenant_id required for ambiguous session_id")
+	ErrInviteTokenInvalid       = errors.New("invalid or expired invite token")
+	ErrResetTokenInvalid        = errors.New("invalid or expired password reset token")
+	ErrResetUserNotFound        = errors.New("password reset token email does not map to a user")
 )
 
 type SessionTenantAmbiguityError struct {
@@ -111,7 +112,7 @@ type Agent struct {
 	TenantID  string          `json:"tenant_id"`
 	Name      string          `json:"name"`
 	Status    string          `json:"status"`
-	Labels    json.RawMessage `json:"labels,omitempty"`
+	Labels    json.RawMessage `json:"-"` // internal-only generic metadata; not part of the operator-facing agent contract
 	CreatedAt time.Time       `json:"created_at"`
 }
 
@@ -198,6 +199,78 @@ type OnboardingChecklist struct {
 	HasExecution bool `json:"has_execution"`
 }
 
+type PilotEventSummary struct {
+	EventID    string    `json:"event_id"`
+	AgentID    string    `json:"agent_id"`
+	Tool       string    `json:"tool"`
+	Action     string    `json:"action"`
+	Decision   string    `json:"decision"`
+	SessionID  string    `json:"session_id"`
+	TraceID    string    `json:"trace_id"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
+type PilotSessionSummary struct {
+	SessionID   string    `json:"session_id"`
+	AgentID     string    `json:"agent_id"`
+	LastEventID string    `json:"last_event_id"`
+	LastEventAt time.Time `json:"last_event_at"`
+}
+
+type PilotApprovalSummary struct {
+	RequestID  string     `json:"request_id"`
+	EventID    string     `json:"event_id"`
+	Tool       string     `json:"tool"`
+	Action     string     `json:"action"`
+	Status     string     `json:"status"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	LatencyMS  *int64     `json:"latency_ms,omitempty"`
+}
+
+type PilotConnectorFailure struct {
+	Tool         string    `json:"tool"`
+	Action       string    `json:"action"`
+	Status       string    `json:"status"`
+	ErrorMessage string    `json:"error_message"`
+	Count        int64     `json:"count"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
+type PilotDenyReason struct {
+	Reason     string    `json:"reason"`
+	Count      int64     `json:"count"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+type PilotAction struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Path        string `json:"path,omitempty"`
+	Severity    string `json:"severity,omitempty"`
+}
+
+type PilotHealthSummary struct {
+	Status                  string                  `json:"status"`
+	StatusReason            string                  `json:"status_reason"`
+	LastEvent               *PilotEventSummary      `json:"last_event,omitempty"`
+	LastSession             *PilotSessionSummary    `json:"last_session,omitempty"`
+	LastApproval            *PilotApprovalSummary   `json:"last_approval,omitempty"`
+	PendingApprovals        int64                   `json:"pending_approvals"`
+	OldestPendingApprovalAt *time.Time              `json:"oldest_pending_approval_at,omitempty"`
+	ExecutionSuccessCount   int64                   `json:"execution_success_count"`
+	ExecutionTotal          int64                   `json:"execution_total"`
+	ExecutionSuccessRate    float64                 `json:"execution_success_rate"`
+	MissingSessionCount     int64                   `json:"missing_session_count"`
+	MissingTraceCount       int64                   `json:"missing_trace_count"`
+	MissingSessionRate      float64                 `json:"missing_session_rate"`
+	MissingTraceRate        float64                 `json:"missing_trace_rate"`
+	TopConnectorFailures    []PilotConnectorFailure `json:"top_connector_failures"`
+	TopDenyReasons          []PilotDenyReason       `json:"top_deny_reasons"`
+	NextActions             []PilotAction           `json:"next_actions"`
+}
+
 type TenantAnalyticsSummary struct {
 	RangeStart          time.Time             `json:"range_start"`
 	RangeEnd            time.Time             `json:"range_end"`
@@ -206,6 +279,7 @@ type TenantAnalyticsSummary struct {
 	RiskHeatmap         []RiskHeatmapRow      `json:"risk_heatmap"`
 	PerAgent            []AgentBreakdownRow   `json:"per_agent"`
 	OnboardingChecklist OnboardingChecklist   `json:"onboarding_checklist"`
+	PilotHealth         PilotHealthSummary    `json:"pilot_health"`
 }
 
 type EventListItem struct {
@@ -220,6 +294,7 @@ type EventListItem struct {
 	Resource   string    `json:"resource"`
 	RiskScore  int       `json:"risk_score"`
 	Decision   string    `json:"decision"`
+	Reason     string    `json:"reason,omitempty"`
 	SessionID  string    `json:"session_id"`
 	TraceID    string    `json:"trace_id"`
 	ReceivedAt time.Time `json:"received_at"`
@@ -630,12 +705,19 @@ func (s *Store) UpdateTenantStatus(ctx context.Context, id, status string) error
 // ──────────────────────────────────────────────────────────────────────────────
 
 func (s *Store) CreateAgent(ctx context.Context, tenantID, name string) (*Agent, error) {
+	return s.CreateAgentWithLabels(ctx, tenantID, name, json.RawMessage(`{}`))
+}
+
+func (s *Store) CreateAgentWithLabels(ctx context.Context, tenantID, name string, labels json.RawMessage) (*Agent, error) {
+	if len(strings.TrimSpace(string(labels))) == 0 {
+		labels = json.RawMessage(`{}`)
+	}
 	a := &Agent{
 		ID:       uuid.NewString(),
 		TenantID: tenantID,
 		Name:     name,
 		Status:   "active",
-		Labels:   json.RawMessage(`{}`),
+		Labels:   labels,
 	}
 
 	err := s.pool.QueryRow(ctx, `
@@ -645,13 +727,30 @@ func (s *Store) CreateAgent(ctx context.Context, tenantID, name string) (*Agent,
 		a.ID, a.TenantID, a.Name, a.Status, a.Labels,
 	).Scan(&a.CreatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("console.CreateAgent: %w", err)
+		return nil, fmt.Errorf("console.CreateAgentWithLabels: %w", err)
 	}
 	return a, nil
 }
 
 func (s *Store) ListAgents(ctx context.Context, tenantID string, limit, offset int) ([]Agent, error) {
 	return s.ListAgentsFiltered(ctx, tenantID, true, limit, offset)
+}
+
+func (s *Store) GetAgentByTenantID(ctx context.Context, tenantID, agentID string) (*Agent, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, status, labels, created_at
+		FROM agents
+		WHERE tenant_id = $1 AND id = $2
+	`, strings.TrimSpace(tenantID), strings.TrimSpace(agentID))
+
+	var agent Agent
+	if err := row.Scan(&agent.ID, &agent.TenantID, &agent.Name, &agent.Status, &agent.Labels, &agent.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("console.GetAgentByTenantID: %w", ErrAgentNotFound)
+		}
+		return nil, fmt.Errorf("console.GetAgentByTenantID: %w", err)
+	}
+	return &agent, nil
 }
 
 func (s *Store) ListAgentsFiltered(ctx context.Context, tenantID string, includeDisabled bool, limit, offset int) ([]Agent, error) {
@@ -711,6 +810,25 @@ func (s *Store) UpdateAgentStatusForTenant(ctx context.Context, tenantID, agentI
 	}
 	if res.RowsAffected() == 0 {
 		return fmt.Errorf("console.UpdateAgentStatusForTenant: %w: %s", ErrAgentNotFound, agentID)
+	}
+	return nil
+}
+
+func (s *Store) UpdateAgentLabelsForTenant(ctx context.Context, tenantID, agentID string, labels json.RawMessage) error {
+	if len(strings.TrimSpace(string(labels))) == 0 {
+		labels = json.RawMessage(`{}`)
+	}
+	res, err := s.pool.Exec(ctx, `
+		UPDATE agents
+		SET labels = $3
+		WHERE tenant_id = $1 AND id = $2`,
+		tenantID, agentID, labels,
+	)
+	if err != nil {
+		return fmt.Errorf("console.UpdateAgentLabelsForTenant: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("console.UpdateAgentLabelsForTenant: %w: %s", ErrAgentNotFound, agentID)
 	}
 	return nil
 }
@@ -1961,14 +2079,192 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 			EXISTS(SELECT 1 FROM approval_requests WHERE tenant_id = $1 AND created_at >= $2) AS has_approval,
 			EXISTS(
 				SELECT 1
-				FROM tool_executions te
-				JOIN tool_events e ON e.event_id = te.execution_event_id
-				WHERE e.tenant_id = $1 AND e.received_at >= $2
+				FROM tool_results tr
+				WHERE tr.tenant_id = $1 AND tr.created_at >= $2
 			) AS has_execution`, tenantID, since,
 	).Scan(&onboarding.HasAPIKey, &onboarding.HasApprover, &onboarding.HasToolcall, &onboarding.HasApproval, &onboarding.HasExecution)
 	if err != nil {
 		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary onboarding: %w", err)
 	}
+
+	pilotHealth := PilotHealthSummary{
+		TopConnectorFailures: []PilotConnectorFailure{},
+		TopDenyReasons:       []PilotDenyReason{},
+		NextActions:          []PilotAction{},
+	}
+
+	lastEvent := &PilotEventSummary{}
+	err = s.pool.QueryRow(ctx, `
+		SELECT event_id, agent_id, tool, action, decision, COALESCE(session_id, ''), COALESCE(trace_id, ''), received_at
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2
+		ORDER BY received_at DESC, event_seq DESC
+		LIMIT 1`, tenantID, since,
+	).Scan(&lastEvent.EventID, &lastEvent.AgentID, &lastEvent.Tool, &lastEvent.Action, &lastEvent.Decision, &lastEvent.SessionID, &lastEvent.TraceID, &lastEvent.ReceivedAt)
+	switch {
+	case err == nil:
+		pilotHealth.LastEvent = lastEvent
+	case errors.Is(err, pgx.ErrNoRows):
+		err = nil
+	default:
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary last event: %w", err)
+	}
+
+	lastSession := &PilotSessionSummary{}
+	err = s.pool.QueryRow(ctx, `
+		SELECT session_id, agent_id, event_id, received_at
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2 AND session_id <> ''
+		ORDER BY received_at DESC, event_seq DESC
+		LIMIT 1`, tenantID, since,
+	).Scan(&lastSession.SessionID, &lastSession.AgentID, &lastSession.LastEventID, &lastSession.LastEventAt)
+	switch {
+	case err == nil:
+		pilotHealth.LastSession = lastSession
+	case errors.Is(err, pgx.ErrNoRows):
+		err = nil
+	default:
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary last session: %w", err)
+	}
+
+	lastApproval := &PilotApprovalSummary{}
+	var resolvedAt *time.Time
+	var latencyMS *int64
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			ar.id,
+			ar.event_id,
+			ar.tool,
+			ar.action,
+			ar.status,
+			ar.created_at,
+			CASE
+				WHEN ar.status = 'approved' AND ag.granted_at IS NOT NULL THEN ag.granted_at
+				WHEN ar.status IN ('denied', 'expired') AND ar.updated_at IS NOT NULL THEN ar.updated_at
+				ELSE NULL
+			END AS resolved_at,
+			CASE
+				WHEN ar.status = 'approved' AND ag.granted_at IS NOT NULL THEN (extract(epoch FROM (ag.granted_at - ar.created_at)) * 1000)::bigint
+				WHEN ar.status IN ('denied', 'expired') AND ar.updated_at IS NOT NULL THEN (extract(epoch FROM (ar.updated_at - ar.created_at)) * 1000)::bigint
+				ELSE NULL
+			END AS latency_ms
+		FROM approval_requests ar
+		LEFT JOIN approval_grants ag ON ag.request_id = ar.id
+		WHERE ar.tenant_id = $1 AND ar.created_at >= $2
+		ORDER BY ar.created_at DESC
+		LIMIT 1`, tenantID, since,
+	).Scan(&lastApproval.RequestID, &lastApproval.EventID, &lastApproval.Tool, &lastApproval.Action, &lastApproval.Status, &lastApproval.CreatedAt, &resolvedAt, &latencyMS)
+	switch {
+	case err == nil:
+		lastApproval.ResolvedAt = resolvedAt
+		lastApproval.LatencyMS = latencyMS
+		pilotHealth.LastApproval = lastApproval
+	case errors.Is(err, pgx.ErrNoRows):
+		err = nil
+	default:
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary last approval: %w", err)
+	}
+
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE status = 'pending') AS pending_approvals,
+			MIN(created_at) FILTER (WHERE status = 'pending') AS oldest_pending_approval_at
+		FROM approval_requests
+		WHERE tenant_id = $1`, tenantID,
+	).Scan(&pilotHealth.PendingApprovals, &pilotHealth.OldestPendingApprovalAt)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary pending approvals: %w", err)
+	}
+
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE status = 'success') AS success_count,
+			COUNT(*) AS total_count
+		FROM tool_results
+		WHERE tenant_id = $1 AND created_at >= $2`, tenantID, since,
+	).Scan(&pilotHealth.ExecutionSuccessCount, &pilotHealth.ExecutionTotal)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary execution totals: %w", err)
+	}
+	if pilotHealth.ExecutionTotal > 0 {
+		pilotHealth.ExecutionSuccessRate = float64(pilotHealth.ExecutionSuccessCount) / float64(pilotHealth.ExecutionTotal)
+	}
+
+	var totalEventsInRange int64
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE COALESCE(session_id, '') = '') AS missing_session_count,
+			COUNT(*) FILTER (WHERE COALESCE(trace_id, '') = '') AS missing_trace_count,
+			COUNT(*) AS total_count
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2`, tenantID, since,
+	).Scan(&pilotHealth.MissingSessionCount, &pilotHealth.MissingTraceCount, &totalEventsInRange)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary request context coverage: %w", err)
+	}
+	if totalEventsInRange > 0 {
+		pilotHealth.MissingSessionRate = float64(pilotHealth.MissingSessionCount) / float64(totalEventsInRange)
+		pilotHealth.MissingTraceRate = float64(pilotHealth.MissingTraceCount) / float64(totalEventsInRange)
+	}
+
+	failureRows, err := s.pool.Query(ctx, `
+		SELECT
+			e.tool,
+			e.action,
+			tr.status,
+			COALESCE(NULLIF(tr.error_msg, ''), 'connector execution failed') AS error_message,
+			COUNT(*) AS failure_count,
+			MAX(tr.created_at) AS last_seen_at
+		FROM tool_results tr
+		JOIN tool_events e ON e.event_id = tr.event_id
+		WHERE tr.tenant_id = $1 AND tr.created_at >= $2 AND tr.status <> 'success'
+		GROUP BY e.tool, e.action, tr.status, error_message
+		ORDER BY failure_count DESC, last_seen_at DESC
+		LIMIT 5`, tenantID, since,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary connector failures: %w", err)
+	}
+	defer failureRows.Close()
+	for failureRows.Next() {
+		var failure PilotConnectorFailure
+		if err := failureRows.Scan(&failure.Tool, &failure.Action, &failure.Status, &failure.ErrorMessage, &failure.Count, &failure.LastSeenAt); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary connector failures scan: %w", err)
+		}
+		pilotHealth.TopConnectorFailures = append(pilotHealth.TopConnectorFailures, failure)
+	}
+	if err := failureRows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary connector failures iteration: %w", err)
+	}
+
+	denyRows, err := s.pool.Query(ctx, `
+		SELECT
+			COALESCE(NULLIF(policy_result->>'reason', ''), 'policy denied') AS reason,
+			COUNT(*) AS deny_count,
+			MAX(received_at) AS last_seen_at
+		FROM tool_events
+		WHERE tenant_id = $1 AND received_at >= $2 AND decision = 'deny'
+		GROUP BY reason
+		ORDER BY deny_count DESC, last_seen_at DESC
+		LIMIT 5`, tenantID, since,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary deny reasons: %w", err)
+	}
+	defer denyRows.Close()
+	for denyRows.Next() {
+		var denyReason PilotDenyReason
+		if err := denyRows.Scan(&denyReason.Reason, &denyReason.Count, &denyReason.LastSeenAt); err != nil {
+			return nil, fmt.Errorf("console.GetTenantAnalyticsSummary deny reasons scan: %w", err)
+		}
+		pilotHealth.TopDenyReasons = append(pilotHealth.TopDenyReasons, denyReason)
+	}
+	if err := denyRows.Err(); err != nil {
+		return nil, fmt.Errorf("console.GetTenantAnalyticsSummary deny reasons iteration: %w", err)
+	}
+
+	pilotHealth.NextActions = buildPilotActions(tenantID, onboarding, pilotHealth)
+	pilotHealth.Status, pilotHealth.StatusReason = derivePilotHealthStatus(onboarding, pilotHealth)
 
 	return &TenantAnalyticsSummary{
 		RangeStart:          since,
@@ -1978,7 +2274,75 @@ func (s *Store) GetTenantAnalyticsSummary(ctx context.Context, tenantID string, 
 		RiskHeatmap:         riskHeatmap,
 		PerAgent:            perAgent,
 		OnboardingChecklist: onboarding,
+		PilotHealth:         pilotHealth,
 	}, nil
+}
+
+func derivePilotHealthStatus(onboarding OnboardingChecklist, health PilotHealthSummary) (string, string) {
+	switch {
+	case !onboarding.HasAPIKey || !onboarding.HasToolcall:
+		return "setup_required", "This tenant is still missing the basics needed for a repeatable pilot."
+	case health.PendingApprovals > 0:
+		return "needs_attention", "Traffic is flowing, but one or more approvals are still waiting on operator action."
+	case len(health.TopConnectorFailures) > 0:
+		return "needs_attention", "Recent executions are failing and need connector or environment triage."
+	case health.MissingSessionCount > 0 || health.MissingTraceCount > 0:
+		return "needs_attention", "Recent traffic is missing request context that operators need for tracing."
+	case health.ExecutionTotal == 0:
+		return "collecting_baseline", "The first governed traffic is arriving. Complete at least one approval or execution path next."
+	default:
+		return "healthy", "This tenant has the key ingredients for a real pilot and recent governed traffic."
+	}
+}
+
+func buildPilotActions(tenantID string, onboarding OnboardingChecklist, health PilotHealthSummary) []PilotAction {
+	actions := make([]PilotAction, 0, 6)
+	add := func(id, title, description, path, severity string) {
+		actions = append(actions, PilotAction{
+			ID:          id,
+			Title:       title,
+			Description: description,
+			Path:        path,
+			Severity:    severity,
+		})
+	}
+
+	if !onboarding.HasAPIKey {
+		add("create_api_key", "Create or rotate an API key", "This tenant still needs an active key before a generated bundle can send real governed traffic.", fmt.Sprintf("/tenants/%s?tab=api_keys", tenantID), "high")
+	}
+	if !onboarding.HasApprover {
+		add("add_approver", "Add an approver", "Route at least one write path through approval so operators can validate the human-in-the-loop flow.", fmt.Sprintf("/tenants/%s?tab=approvers", tenantID), "medium")
+	}
+	if !onboarding.HasToolcall {
+		add("run_smoke_test", "Run the first governed call", "Use the generated smoke test so you can see one event in Audit Trail and one run in Sessions.", fmt.Sprintf("/tenants/%s?tab=agents", tenantID), "high")
+	}
+	if health.PendingApprovals > 0 {
+		description := "Review pending approvals so write-path pilots do not stall."
+		if health.OldestPendingApprovalAt != nil {
+			description = fmt.Sprintf("Review pending approvals. The oldest request has been waiting since %s.", health.OldestPendingApprovalAt.UTC().Format(time.RFC3339))
+		}
+		add("review_pending_approvals", "Review pending approvals", description, fmt.Sprintf("/approvals?tenant_id=%s", tenantID), "high")
+	}
+	if health.MissingSessionCount > 0 {
+		add("fix_session_ids", "Fix session_id generation", "Recent events are missing session_id values, which weakens Sessions, exports, and operator triage.", fmt.Sprintf("/events?tenant_id=%s", tenantID), "medium")
+	}
+	if health.MissingTraceCount > 0 {
+		add("fix_trace_ids", "Fix trace_id generation", "Recent events are missing trace_id values, which makes it harder to follow related requests across systems.", fmt.Sprintf("/events?tenant_id=%s", tenantID), "medium")
+	}
+	if len(health.TopConnectorFailures) > 0 {
+		failure := health.TopConnectorFailures[0]
+		add("triage_connector_failures", "Triage connector failures", fmt.Sprintf("The loudest failure right now is %s:%s (%s). Start with the latest failed events and connector logs.", failure.Tool, failure.Action, failure.Status), fmt.Sprintf("/events?tenant_id=%s", tenantID), "high")
+	}
+	if len(health.TopDenyReasons) > 0 {
+		reason := strings.ToLower(health.TopDenyReasons[0].Reason)
+		if strings.Contains(reason, "unknown") || strings.Contains(reason, "mismatch") || strings.Contains(reason, "not allowed") {
+			add("review_tool_mapping", "Review tool and action mapping", fmt.Sprintf("Recent denies mention %q. Double-check the connector action name and tenant policy configuration.", health.TopDenyReasons[0].Reason), fmt.Sprintf("/tenants/%s?tab=analytics", tenantID), "medium")
+		}
+	}
+	if len(actions) == 0 {
+		add("review_first_run", "Review the first pilot results", "Audit Trail, Sessions, and Approvals all have the basics needed for a healthy pilot. Review the latest traffic with operators before widening scope.", fmt.Sprintf("/events?tenant_id=%s", tenantID), "low")
+	}
+	return actions
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2042,7 +2406,8 @@ func (s *Store) ListEvents(ctx context.Context, filters EventListFilters) ([]Eve
 		       COALESCE(e.payload_json->'labels'->>'user_email', ''),
 		       e.tool, e.action,
 		       COALESCE(e.payload_json->>'resource', ''), e.risk_score,
-		       e.decision, e.session_id, e.trace_id, e.received_at
+		       e.decision, COALESCE(e.policy_result->>'reason', ''),
+		       e.session_id, e.trace_id, e.received_at
 		FROM tool_events e
 		%s
 		ORDER BY e.received_at DESC, e.event_seq DESC
@@ -2062,7 +2427,7 @@ func (s *Store) ListEvents(ctx context.Context, filters EventListFilters) ([]Eve
 			&e.EventID, &e.TenantID, &e.AgentID,
 			&e.UserID, &e.UserName, &e.UserEmail,
 			&e.Tool, &e.Action, &e.Resource, &e.RiskScore,
-			&e.Decision, &e.SessionID, &e.TraceID, &e.ReceivedAt,
+			&e.Decision, &e.Reason, &e.SessionID, &e.TraceID, &e.ReceivedAt,
 		); err != nil {
 			return nil, fmt.Errorf("console.ListEvents scan: %w", err)
 		}
@@ -2099,7 +2464,7 @@ func (s *Store) ListEventsInRange(ctx context.Context, tenantID string, since, u
 		       COALESCE(payload_json->'labels'->>'user_email', ''),
 		       tool, action,
 		       COALESCE(payload_json->>'resource', ''), risk_score,
-		       decision, session_id, trace_id, received_at
+		       decision, COALESCE(policy_result->>'reason', ''), session_id, trace_id, received_at
 		FROM tool_events
 		WHERE tenant_id = $1 AND received_at >= $2 AND received_at <= $3
 		ORDER BY received_at ASC, event_seq ASC
@@ -2116,7 +2481,7 @@ func (s *Store) ListEventsInRange(ctx context.Context, tenantID string, since, u
 			&e.EventID, &e.TenantID, &e.AgentID,
 			&e.UserID, &e.UserName, &e.UserEmail,
 			&e.Tool, &e.Action, &e.Resource, &e.RiskScore,
-			&e.Decision, &e.SessionID, &e.TraceID, &e.ReceivedAt,
+			&e.Decision, &e.Reason, &e.SessionID, &e.TraceID, &e.ReceivedAt,
 		); err != nil {
 			return nil, fmt.Errorf("console.ListEventsInRange scan: %w", err)
 		}
@@ -2124,6 +2489,79 @@ func (s *Store) ListEventsInRange(ctx context.Context, tenantID string, since, u
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("console.ListEventsInRange iteration: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) ListEventDetailsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]EventDetail, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 10000
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.event_id, e.tenant_id, e.agent_id,
+		       COALESCE(e.user_id, ''),
+		       COALESCE(e.payload_json->'labels'->>'user_name', ''),
+		       COALESCE(e.payload_json->'labels'->>'user_email', ''),
+		       e.tool, e.action,
+		       COALESCE(e.payload_json->>'resource', ''), e.risk_score,
+		       e.decision, COALESCE(e.policy_result->>'reason', ''), e.session_id, e.trace_id, e.received_at,
+		       e.payload_json, e.policy_result, e.hash, e.prev_hash,
+		       r.status, r.output_json, r.error_msg, r.duration_ms
+		FROM tool_events e
+		LEFT JOIN LATERAL (
+			SELECT r.status, r.output_json, r.error_msg, r.duration_ms
+			FROM tool_results r
+			WHERE r.event_id = e.event_id
+			ORDER BY r.created_at DESC, r.id DESC
+			LIMIT 1
+		) r ON true
+		WHERE e.tenant_id = $1 AND e.received_at >= $2 AND e.received_at <= $3
+		ORDER BY e.received_at ASC, e.event_seq ASC
+		LIMIT $4`, tenantID, since, until, limit)
+	if err != nil {
+		return nil, fmt.Errorf("console.ListEventDetailsInRange: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]EventDetail, 0)
+	for rows.Next() {
+		var (
+			d              EventDetail
+			policyResult   []byte
+			resultStatus   *string
+			resultOutput   []byte
+			resultError    *string
+			resultDuration *int64
+		)
+		if err := rows.Scan(
+			&d.EventID, &d.TenantID, &d.AgentID,
+			&d.UserID, &d.UserName, &d.UserEmail,
+			&d.Tool, &d.Action, &d.Resource, &d.RiskScore,
+			&d.Decision, &d.Reason, &d.SessionID, &d.TraceID, &d.ReceivedAt,
+			&d.PayloadJSON, &policyResult, &d.Hash, &d.PrevHash,
+			&resultStatus, &resultOutput, &resultError, &resultDuration,
+		); err != nil {
+			return nil, fmt.Errorf("console.ListEventDetailsInRange scan: %w", err)
+		}
+		if len(policyResult) > 0 {
+			d.PolicyResult = policyResult
+		}
+		if resultStatus != nil {
+			d.Result = &EventResult{Status: *resultStatus}
+			if len(resultOutput) > 0 {
+				d.Result.OutputJSON = resultOutput
+			}
+			if resultError != nil {
+				d.Result.ErrorMsg = *resultError
+			}
+			if resultDuration != nil {
+				d.Result.DurationMS = *resultDuration
+			}
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("console.ListEventDetailsInRange iteration: %w", err)
 	}
 	return out, nil
 }

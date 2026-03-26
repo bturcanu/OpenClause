@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { api, toQueryTimestamp } from '../api'
 import {
   ActiveFiltersBar,
@@ -75,9 +76,28 @@ const defaultFilters: SessionFilters = {
   until: '',
 }
 
+function filtersFromSearchParams(searchParams: URLSearchParams): SessionFilters {
+  return {
+    ...defaultFilters,
+    tenant_id: searchParams.get('tenant_id') || '',
+    session_id: searchParams.get('session_id') || '',
+    user_id: searchParams.get('user_id') || '',
+    agent_id: searchParams.get('agent_id') || '',
+    trace_id: searchParams.get('trace_id') || '',
+    tool: searchParams.get('tool') || '',
+    action: searchParams.get('action') || '',
+    decision: searchParams.get('decision') || '',
+    risk_min: searchParams.get('risk_min') || '',
+    risk_max: searchParams.get('risk_max') || '',
+    since: searchParams.get('since') || '',
+    until: searchParams.get('until') || '',
+  }
+}
+
 export default function Sessions() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [sessions, setSessions] = useState<Session[]>([])
-  const [filters, setFilters] = useState<SessionFilters>(defaultFilters)
+  const [filters, setFilters] = useState<SessionFilters>(() => filtersFromSearchParams(searchParams))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [page, setPage] = useState(0)
@@ -114,13 +134,35 @@ export default function Sessions() {
     void fetchSessions()
   }, [fetchSessions])
 
+  useEffect(() => {
+    const nextFilters = filtersFromSearchParams(searchParams)
+    setFilters(current => {
+      const matches = (Object.keys(nextFilters) as Array<keyof SessionFilters>).every(key => current[key] === nextFilters[key])
+      return matches ? current : nextFilters
+    })
+    setPage(0)
+  }, [searchParams])
+
+  function syncFiltersToURL(nextFilters: SessionFilters) {
+    const next = new URLSearchParams()
+    ;(Object.entries(nextFilters) as Array<[keyof SessionFilters, string]>).forEach(([key, value]) => {
+      const trimmed = value.trim()
+      if (!trimmed) return
+      next.set(key, trimmed)
+    })
+    setSearchParams(next)
+  }
+
   function updateFilter(key: keyof SessionFilters, value: string) {
-    setFilters(current => ({ ...current, [key]: value }))
+    const nextFilters = { ...filters, [key]: value }
+    setFilters(nextFilters)
+    syncFiltersToURL(nextFilters)
     setPage(0)
   }
 
   function resetFilters() {
     setFilters({ ...defaultFilters })
+    setSearchParams(new URLSearchParams())
     setPage(0)
   }
 

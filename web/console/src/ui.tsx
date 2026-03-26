@@ -94,9 +94,11 @@ export function PageHeaderBlock({ title, description, actions }: PageHeaderProps
 export function EmptyState({ icon = '○', title, description, action }: EmptyStateProps) {
   return (
     <div className="empty-state">
-      <div className="empty-icon">{icon}</div>
-      <h3>{title}</h3>
-      <p>{description}</p>
+      <div className="empty-icon" aria-hidden="true">{icon}</div>
+      <div className="empty-state-copy">
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
       {action ? <div className="empty-actions">{action}</div> : null}
     </div>
   )
@@ -105,9 +107,12 @@ export function EmptyState({ icon = '○', title, description, action }: EmptySt
 export function InlineErrorState({ message, onRetry }: InlineErrorProps) {
   return (
     <div className="error-msg error-msg-rich">
-      <div>
+      <div className="error-msg-body">
+        <div className="error-msg-icon" aria-hidden="true">!</div>
+        <div>
         <strong>Something went wrong.</strong>
         <div>{message}</div>
+        </div>
       </div>
       {onRetry ? (
         <button className="btn btn-outline btn-sm" type="button" onClick={onRetry}>
@@ -419,12 +424,21 @@ export async function copyText(text: string) {
   }
 }
 
+let downloadTriggerForTests: ((link: HTMLAnchorElement) => void) | null = null
+
+export function setDownloadTriggerForTests(handler: ((link: HTMLAnchorElement) => void) | null) {
+  downloadTriggerForTests = handler
+}
+
 export function downloadBlob(blob: Blob, filename: string) {
   const objectUrl = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = objectUrl
   link.download = filename
-  link.click()
+  document.body.appendChild(link)
+  if (downloadTriggerForTests) downloadTriggerForTests(link)
+  else link.click()
+  document.body.removeChild(link)
   URL.revokeObjectURL(objectUrl)
 }
 

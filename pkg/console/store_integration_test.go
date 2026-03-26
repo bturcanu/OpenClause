@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/bturcanu/OpenClause/internal/testdb"
+	"github.com/bturcanu/OpenClause/pkg/evidence"
+	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
 func newIntegrationStore(t *testing.T) (*Store, context.Context) {
@@ -171,6 +173,50 @@ func TestStoreListTenantsPagingAndStatusTransitions(t *testing.T) {
 	}
 }
 
+func TestStoreListEventsInRangeIncludesPolicyReason(t *testing.T) {
+	store, ctx := newIntegrationStore(t)
+	tenant := mustCreateTenant(t, ctx, store, "Export Tenant")
+	eventTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	env := &types.ToolCallEnvelope{
+		EventID: "00000000-0000-0000-0000-000000000111",
+		Request: types.ToolCallRequest{
+			TenantID:       tenant.ID,
+			AgentID:        "agent-export",
+			Tool:           "slack",
+			Action:         "msg.post",
+			Resource:       "channels/general",
+			RiskScore:      4,
+			UserID:         "user-export",
+			SessionID:      "export-session",
+			TraceID:        "export-trace",
+			IdempotencyKey: "export-1",
+			RequestedAt:    eventTime,
+		},
+		PayloadJSON: []byte(`{"tenant_id":"` + tenant.ID + `","agent_id":"agent-export","tool":"slack","action":"msg.post","resource":"channels/general","session_id":"export-session","trace_id":"export-trace"}`),
+		ReceivedAt:  eventTime,
+		Decision:    types.DecisionAllow,
+		PolicyResult: &types.PolicyResult{
+			Decision: types.DecisionAllow,
+			Reason:   "export fixture reason",
+		},
+	}
+	if err := evidence.NewStore(store.Pool()).RecordEvent(ctx, env); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
+	events, err := store.ListEventsInRange(ctx, tenant.ID, eventTime.Add(-time.Hour), eventTime.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListEventsInRange: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 exported event, got %+v", events)
+	}
+	if events[0].Reason != "export fixture reason" {
+		t.Fatalf("expected exported policy reason, got %+v", events[0])
+	}
+}
+
 func TestStoreAgentsAndAPIKeysLifecycle(t *testing.T) {
 	store, ctx := newIntegrationStore(t)
 	tenant := mustCreateTenant(t, ctx, store, "Tenant With Agents")
@@ -304,6 +350,9 @@ func TestStoreGetTenantAnalyticsSummaryEmptyStateHasStableShape(t *testing.T) {
 	}
 	if summary.OnboardingChecklist.HasAPIKey || summary.OnboardingChecklist.HasApprover || summary.OnboardingChecklist.HasToolcall || summary.OnboardingChecklist.HasApproval || summary.OnboardingChecklist.HasExecution {
 		t.Fatalf("expected empty onboarding checklist, got %+v", summary.OnboardingChecklist)
+	}
+	if summary.PilotHealth.Status != "setup_required" || len(summary.PilotHealth.TopConnectorFailures) != 0 || len(summary.PilotHealth.TopDenyReasons) != 0 || len(summary.PilotHealth.NextActions) == 0 {
+		t.Fatalf("expected stable empty-state pilot health, got %+v", summary.PilotHealth)
 	}
 }
 

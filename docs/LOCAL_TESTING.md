@@ -4,6 +4,10 @@ End-to-end walkthrough: boot the stack, seed data, and exercise every major flow
 
 Use [readme.md](/Users/bogdan/dev/personal/OpenClause/readme.md) as the canonical quick-start and product overview. This guide is the deeper local/operator reference for curl recipes, smoke checks, and environment-specific notes.
 
+If you want a realistic first pilot instead of a broad local sweep, start with [PILOTS.md](/Users/bogdan/dev/personal/OpenClause/docs/PILOTS.md) and use `Tenant Detail -> Analytics` as the pilot cockpit after the first governed requests land.
+
+For a comprehensive endpoint-by-endpoint curl checklist, use [CURL_TEST_MATRIX.md](/Users/bogdan/dev/personal/OpenClause/docs/CURL_TEST_MATRIX.md).
+
 ## Prerequisites
 
 - Docker Desktop running
@@ -24,6 +28,20 @@ Use [readme.md](/Users/bogdan/dev/personal/OpenClause/readme.md) as the canonica
 ./scripts/dev.ps1
 ```
 
+The local compose stack now includes a one-shot `migrate` service, sets `PUBLIC_GATEWAY_URL=http://localhost:8080` for `console-api`, and the dev bootstrap scripts rewrite missing/placeholder local secrets before running a post-start smoke. That means a clean `./scripts/dev.sh` / `./scripts/dev.ps1` run should leave the schema ready, `.env` populated with strong local secrets, and downloaded onboarding bundles defaulting to a host-reachable gateway URL. If you ever see the migration service fail or stay incomplete, run `./scripts/migrate.sh` explicitly and inspect `docker compose logs migrate`.
+
+You can also run the preflight pieces independently:
+
+```bash
+./scripts/validate-env.sh --file .env
+make validate-env
+
+docker compose --env-file .env -f deploy/docker-compose.yml --profile smoke run --rm poststart-smoke
+make compose-smoke
+```
+
+`poststart-smoke` now lives behind the dedicated `smoke` compose profile, so a normal `docker compose up -d` or `./scripts/dev.sh` boot no longer leaves behind a failed one-shot smoke container. The smoke remains explicit and repeatable.
+
 Verify health:
 
 ```bash
@@ -32,6 +50,36 @@ curl http://localhost:8081/healthz   # Approvals
 curl http://localhost:8090/healthz   # Console API
 curl http://localhost:8181/health    # OPA
 ```
+
+Run the end-to-end onboarding/admin curl smoke after the stack is healthy:
+
+```bash
+bash ./scripts/curl-smoke-onboarding.sh
+```
+
+That smoke script exercises the shipped WS-00 onboarding lifecycle on the live stack:
+
+- preview
+- create with real one-time raw API key
+- bundle archive download
+- one governed gateway tool call
+- saved integration fetch
+- revisions
+- saved bundle rebuild + archive
+- regenerate
+- regenerate-defaults
+- events
+- sessions
+- analytics
+
+Run the backend/operator API smokes too:
+
+```bash
+bash ./scripts/curl-smoke-console-backend.sh
+bash ./scripts/backend-smoke-incontainer.sh
+```
+
+Those helpers now self-discover or bootstrap a usable tenant/agent instead of depending on hard-coded IDs, and they auto-run the first-run setup flow when `/setup/status` still reports `initialized=false`. That makes them safe against a completely fresh local database without manually creating the first admin first. `curl-smoke-onboarding.sh` also auto-discovers the preview tenant when `PREVIEW_TENANT_ID` is unset and accepts either a tenant id or tenant name override.
 
 ## 2. Seed Test Data
 
@@ -330,9 +378,12 @@ Expected: at least one alert event with:
 
 First, list pending approvals to get the approval request ID:
 
+Use the current value from `.env` after bootstrapping the stack:
+
 ```bash
+export INTERNAL_AUTH_TOKEN="$(grep '^INTERNAL_AUTH_TOKEN=' .env | cut -d= -f2-)"
 curl -s "http://localhost:8081/v1/approvals/pending?tenant_id=$TENANT_ID" \
-  -H "X-Internal-Token: dev-internal-token-change-me"
+  -H "X-Internal-Token: $INTERNAL_AUTH_TOKEN"
 ```
 
 Save the `id` of the pending request:
@@ -345,7 +396,7 @@ Approve it (you need the approver assigned as `role='approver'` for your `$TENAN
 
 ```bash
 curl -s "http://localhost:8081/v1/approvals/requests/$APPROVAL_ID/approve" \
-  -H "X-Internal-Token: dev-internal-token-change-me" \
+  -H "X-Internal-Token: $INTERNAL_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"approver":"<platform-admin-email>","max_uses":1}'
 ```
@@ -387,6 +438,13 @@ curl -s "http://localhost:8090/admin/events/export/csv?tenant_id=$TENANT_ID&sinc
 # If the requested range exceeds 10,000 events, the API returns 400 and you should narrow the time window.
 curl -s "http://localhost:8090/admin/reports/export/bundle?tenant_id=$TENANT_ID&since=2026-01-01T00:00:00Z&until=2026-01-02T00:00:00Z" \
   -H "Authorization: Bearer $TOKEN"
+
+# Verify the downloaded bundle signature and manifest hashes.
+# The verifier uses the embedded public key by default. Pin an expected signer with:
+#   --public-key-file ./openclause-evidence.pub
+#   --public-key "$EVIDENCE_BUNDLE_SIGNING_PUBLIC_KEY"
+#   --require-signing-key-id sha256:...
+go run ./cmd/verify --bundle ./bundle.json
 
 # List observed sessions (derived from tool_events.session_id)
 curl -s "http://localhost:8090/admin/sessions?tenant_id=$TENANT_ID" \

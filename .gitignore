@@ -8,6 +8,8 @@ bin/
 __debug_bin*
 __pycache__/
 *.pyc
+.venv/
+*.egg-info/
 node_modules/
 dist/
 playwright-report/
@@ -17,6 +19,7 @@ test-results/
 sdk/java/build/
 .git/COMMIT_MSG_NEW.txt
 .ai/
+openclause-test-ui-qwen-test/
 
 # Local API payload samples
 approve.json

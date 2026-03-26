@@ -29,6 +29,25 @@ const (
 	maxBackoff              = 5 * time.Minute
 )
 
+const knownInsecureInternalToken = "dev-internal-token-change-me"
+
+var alertLookupIPAddrs = func(ctx context.Context, host string) ([]net.IP, error) {
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, ip.IP)
+	}
+	return out, nil
+}
+
+var alertDialResolvedAddress = func(ctx context.Context, network, address string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	return dialer.DialContext(ctx, network, address)
+}
+
 type tenantNotificationConfigGetter interface {
 	GetTenantNotificationConfig(ctx context.Context, tenantID string) (*console.TenantNotificationConfig, bool, error)
 }
@@ -44,8 +63,8 @@ func main() {
 	batchSize := config.EnvOrInt("ALERT_WORKER_BATCH_SIZE", defaultBatchSize)
 
 	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
-	if internalToken == "" {
-		log.Error("INTERNAL_AUTH_TOKEN is required for slack connector calls")
+	if internalToken == "" || internalToken == knownInsecureInternalToken {
+		log.Error("INTERNAL_AUTH_TOKEN is required and must not use the default placeholder for slack connector calls")
 		os.Exit(1)
 	}
 
@@ -382,23 +401,38 @@ func postToWebhook(
 }
 
 func safeTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, fmt.Errorf("invalid address: %w", err)
 			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			ips, err := alertLookupIPAddrs(ctx, host)
 			if err != nil {
 				return nil, fmt.Errorf("dns resolve: %w", err)
 			}
-			for _, ip := range ips {
-				if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
-					return nil, fmt.Errorf("resolved IP %s is private/loopback — blocked", ip.IP)
-				}
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("dns resolve: no IPs for %q", host)
 			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+			allowed := make([]net.IP, 0, len(ips))
+			for _, ip := range ips {
+				if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+					return nil, fmt.Errorf("resolved IP %s is private/loopback — blocked", ip)
+				}
+				allowed = append(allowed, ip)
+			}
+			var lastErr error
+			for _, ip := range allowed {
+				conn, err := alertDialResolvedAddress(ctx, network, net.JoinHostPort(ip.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			if lastErr != nil {
+				return nil, fmt.Errorf("dial resolved ip: %w", lastErr)
+			}
+			return nil, fmt.Errorf("dial resolved ip: no connections succeeded")
 		},
 	}
 }

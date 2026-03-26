@@ -57,6 +57,10 @@ func newAnalyticsFixture(t *testing.T) *analyticsFixture {
 	}
 
 	for i, event := range events {
+		reason := "analytics fixture"
+		if event.decision == types.DecisionDeny {
+			reason = "tool/action mismatch in tenant policy"
+		}
 		req := types.ToolCallRequest{
 			TenantID:       tenant.ID,
 			AgentID:        event.agentID,
@@ -84,7 +88,7 @@ func newAnalyticsFixture(t *testing.T) *analyticsFixture {
 			PayloadJSON:  payloadJSON,
 			ReceivedAt:   event.at,
 			Decision:     event.decision,
-			PolicyResult: &types.PolicyResult{Decision: event.decision, Reason: "analytics fixture"},
+			PolicyResult: &types.PolicyResult{Decision: event.decision, Reason: reason},
 		}
 		if err := evStore.RecordEvent(ctx, env); err != nil {
 			t.Fatalf("RecordEvent(%s): %v", event.eventID, err)
@@ -218,6 +222,139 @@ func TestStoreGetTenantAnalyticsSummarySeededDataIsDeterministic(t *testing.T) {
 	}
 	if summary.OnboardingChecklist.HasAPIKey || summary.OnboardingChecklist.HasApprover || summary.OnboardingChecklist.HasApproval || summary.OnboardingChecklist.HasExecution {
 		t.Fatalf("expected only toolcall onboarding flag to be set, got %+v", summary.OnboardingChecklist)
+	}
+}
+
+func TestStoreGetTenantAnalyticsSummaryIncludesPilotHealthSignals(t *testing.T) {
+	fx := newAnalyticsFixture(t)
+
+	if _, err := fx.store.CreateAPIKey(fx.ctx, fx.tenantID, "pilot-key", nil); err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	if _, err := fx.store.Pool().Exec(fx.ctx, `
+		INSERT INTO users (id, email, name, status)
+		VALUES ('approver-1', 'approver@example.com', 'Approver One', 'active')`); err != nil {
+		t.Fatalf("insert approver user: %v", err)
+	}
+	if _, err := fx.store.Pool().Exec(fx.ctx, `
+		INSERT INTO user_roles (id, user_id, tenant_id, role)
+		VALUES ('role-1', 'approver-1', $1, 'approver')`, fx.tenantID); err != nil {
+		t.Fatalf("insert approver role: %v", err)
+	}
+
+	if _, err := fx.store.Pool().Exec(fx.ctx, `
+		INSERT INTO tool_results (event_id, tenant_id, status, output_json, error_msg, duration_ms)
+		VALUES
+			('00000000-0000-0000-0000-000000000001', $1, 'success', '{"ok":true}'::jsonb, '', 120),
+			('00000000-0000-0000-0000-000000000002', $1, 'error', NULL, 'connector unavailable', 350),
+			('00000000-0000-0000-0000-000000000004', $1, 'success', '{"ok":true}'::jsonb, '', 180)`, fx.tenantID); err != nil {
+		t.Fatalf("insert tool results: %v", err)
+	}
+
+	approvedCreatedAt := fx.since.Add(250 * time.Minute)
+	approvedResolvedAt := approvedCreatedAt.Add(2 * time.Minute)
+	if _, err := fx.store.Pool().Exec(fx.ctx, `
+		INSERT INTO approval_requests (id, event_id, tenant_id, agent_id, tool, action, resource, risk_score, reason, status, created_at, updated_at, expires_at)
+		VALUES
+			('approval-approved', '00000000-0000-0000-0000-000000000009', $1, 'agent-a', 'slack', 'msg.post', 'channels/general', 6, 'operator review', 'approved', $2, $3, $4),
+			('approval-pending', '00000000-0000-0000-0000-000000000006', $1, 'agent-b', 'slack', 'msg.post', 'channels/general', 6, 'pending follow-up', 'pending', $5, NULL, $6)`,
+		fx.tenantID,
+		approvedCreatedAt,
+		approvedResolvedAt,
+		approvedCreatedAt.Add(30*time.Minute),
+		fx.since.Add(110*time.Minute),
+		fx.since.Add(140*time.Minute),
+	); err != nil {
+		t.Fatalf("insert approval requests: %v", err)
+	}
+	if _, err := fx.store.Pool().Exec(fx.ctx, `
+		INSERT INTO approval_grants (
+			id, request_id, tenant_id, approver,
+			scope_tool, scope_action, scope_resource_pattern, scope_tenant_id, scope_agent_id,
+			max_uses, uses_left, expires_at, granted_at
+		)
+		VALUES ('grant-1', 'approval-approved', $1, 'approver@example.com', 'slack', 'msg.post', 'channels/general', $1, 'agent-a', 1, 1, $2, $3)`,
+		fx.tenantID,
+		approvedResolvedAt.Add(15*time.Minute),
+		approvedResolvedAt,
+	); err != nil {
+		t.Fatalf("insert approval grant: %v", err)
+	}
+
+	summary, err := fx.store.GetTenantAnalyticsSummary(fx.ctx, fx.tenantID, fx.since, 60, 5)
+	if err != nil {
+		t.Fatalf("GetTenantAnalyticsSummary: %v", err)
+	}
+
+	if !summary.OnboardingChecklist.HasAPIKey || !summary.OnboardingChecklist.HasApprover || !summary.OnboardingChecklist.HasApproval {
+		t.Fatalf("expected onboarding checklist to reflect pilot setup, got %+v", summary.OnboardingChecklist)
+	}
+	if !summary.OnboardingChecklist.HasExecution {
+		t.Fatalf("expected onboarding checklist to include execution activity, got %+v", summary.OnboardingChecklist)
+	}
+	if summary.PilotHealth.Status == "" || summary.PilotHealth.StatusReason == "" {
+		t.Fatalf("expected pilot health status and reason, got %+v", summary.PilotHealth)
+	}
+	if summary.PilotHealth.LastEvent == nil || summary.PilotHealth.LastEvent.EventID != "00000000-0000-0000-0000-000000000010" {
+		t.Fatalf("expected last event summary, got %+v", summary.PilotHealth.LastEvent)
+	}
+	if summary.PilotHealth.LastSession == nil || summary.PilotHealth.LastSession.SessionID != "analytics-session" {
+		t.Fatalf("expected last session summary, got %+v", summary.PilotHealth.LastSession)
+	}
+	if summary.PilotHealth.LastApproval == nil || summary.PilotHealth.LastApproval.RequestID != "approval-approved" {
+		t.Fatalf("expected latest approval summary, got %+v", summary.PilotHealth.LastApproval)
+	}
+	if summary.PilotHealth.LastApproval.LatencyMS == nil || *summary.PilotHealth.LastApproval.LatencyMS != int64(120000) {
+		t.Fatalf("expected approval latency, got %+v", summary.PilotHealth.LastApproval)
+	}
+	if summary.PilotHealth.PendingApprovals != 1 || summary.PilotHealth.OldestPendingApprovalAt == nil {
+		t.Fatalf("expected pending approval summary, got %+v", summary.PilotHealth)
+	}
+	if summary.PilotHealth.ExecutionSuccessCount != 2 || summary.PilotHealth.ExecutionTotal != 3 {
+		t.Fatalf("expected execution totals, got %+v", summary.PilotHealth)
+	}
+	if summary.PilotHealth.ExecutionSuccessRate < 0.66 || summary.PilotHealth.ExecutionSuccessRate > 0.67 {
+		t.Fatalf("expected execution success rate near 0.666, got %+v", summary.PilotHealth)
+	}
+	if summary.PilotHealth.MissingSessionCount != 0 || summary.PilotHealth.MissingTraceCount != 0 {
+		t.Fatalf("expected full request context coverage, got %+v", summary.PilotHealth)
+	}
+	if len(summary.PilotHealth.TopConnectorFailures) != 1 || summary.PilotHealth.TopConnectorFailures[0].ErrorMessage != "connector unavailable" {
+		t.Fatalf("expected connector failure summary, got %+v", summary.PilotHealth.TopConnectorFailures)
+	}
+	if len(summary.PilotHealth.TopDenyReasons) == 0 || summary.PilotHealth.TopDenyReasons[0].Reason != "tool/action mismatch in tenant policy" {
+		t.Fatalf("expected deny reason summary, got %+v", summary.PilotHealth.TopDenyReasons)
+	}
+	if len(summary.PilotHealth.NextActions) == 0 {
+		t.Fatalf("expected next actions, got %+v", summary.PilotHealth)
+	}
+}
+
+func TestStoreListEventsReturnsPolicyResultReason(t *testing.T) {
+	fx := newAnalyticsFixture(t)
+
+	events, err := fx.store.ListEvents(fx.ctx, EventListFilters{
+		TenantID: fx.tenantID,
+		Limit:    20,
+	})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 10 {
+		t.Fatalf("expected 10 events, got %d", len(events))
+	}
+
+	var found bool
+	for _, event := range events {
+		if event.EventID == "00000000-0000-0000-0000-000000000002" {
+			found = true
+			if event.Reason != "tool/action mismatch in tenant policy" {
+				t.Fatalf("expected policy reason to round-trip, got %+v", event)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected to find seeded denied event in event list, got %+v", events)
 	}
 }
 

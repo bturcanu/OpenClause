@@ -1,5 +1,6 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useSearchParams } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../api'
 import { mockApiGet } from '../test/mockApi'
@@ -94,7 +95,91 @@ describe('Approvals page', () => {
       expect.stringContaining('/v1/toolcalls/event-1/execute'),
     )
     expect(writeTextSpy).toHaveBeenCalledWith(
+      expect.stringContaining('OPENCLAUSE_BASE_URL="${OPENCLAUSE_BASE_URL:-http://localhost:8080}"'),
+    )
+    expect(writeTextSpy).toHaveBeenCalledWith(
       expect.stringContaining('X-API-Key: sk-oc-live-123'),
     )
+  })
+
+  it('honors the tenant_id query filter for verification deep links', async () => {
+    mockApiGet([
+      ['/admin/approvals/pending', {
+        approvals: [
+          approvalFixture,
+          { ...approvalFixture, id: 'approval-2', event_id: 'event-2', tenant_id: 'tenant-2', session_id: 'session-2' },
+        ],
+      }],
+    ])
+
+    renderRoute(<Approvals />, { path: '/approvals', route: '/approvals?tenant_id=tenant-1' })
+
+    expect(await screen.findByText(/tenant id: tenant-1/i)).toBeInTheDocument()
+    expect(screen.getByText(/slack\.msg\.post/i)).toBeInTheDocument()
+    expect(screen.queryByText('approval-2')).not.toBeInTheDocument()
+  })
+
+  it('clears a selected approval when a tenant filter hides it', async () => {
+    mockApiGet([
+      ['/admin/approvals/pending', {
+        approvals: [
+          approvalFixture,
+          { ...approvalFixture, id: 'approval-2', event_id: 'event-2', tenant_id: 'tenant-2', session_id: 'session-2' },
+        ],
+      }],
+    ])
+
+    renderRoute(<Approvals />, { path: '/approvals', route: '/approvals?tenant_id=tenant-1&approval_id=approval-2' })
+
+    expect(await screen.findByText(/tenant id: tenant-1/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('heading', { name: /approval detail/i })).not.toBeInTheDocument())
+    expect(screen.queryByText('approval-2')).not.toBeInTheDocument()
+    expect(screen.getByText(/slack\.msg\.post/i)).toBeInTheDocument()
+  })
+
+  it('clears a URL-selected approval when the route changes to a missing approval id', async () => {
+    const user = userEvent.setup()
+    mockApiGet([
+      ['/admin/approvals/pending', { approvals: [approvalFixture] }],
+    ])
+
+    function Harness() {
+      const [searchParams, setSearchParams] = useSearchParams()
+      return (
+        <>
+          <button type="button" onClick={() => setSearchParams(new URLSearchParams({ approval_id: 'missing' }))}>
+            Switch to missing approval
+          </button>
+          <Approvals />
+        </>
+      )
+    }
+
+    renderRoute(<Harness />, { path: '/approvals', route: '/approvals?approval_id=approval-1' })
+
+    expect(await screen.findByRole('heading', { name: /approval detail/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /switch to missing approval/i }))
+    await waitFor(() => expect(screen.queryByRole('heading', { name: /approval detail/i })).not.toBeInTheDocument())
+  })
+
+  it('removes only the tenant_id filter chip and preserves other query params', async () => {
+    const user = userEvent.setup()
+    mockApiGet([
+      ['/admin/approvals/pending', {
+        approvals: [
+          approvalFixture,
+          { ...approvalFixture, id: 'approval-2', event_id: 'event-2', tenant_id: 'tenant-2', session_id: 'session-2' },
+        ],
+      }],
+    ])
+
+    renderRoute(<Approvals />, { path: '/approvals', route: '/approvals?tenant_id=tenant-1&approval_id=approval-1' })
+
+    expect(await screen.findByRole('heading', { name: /approval detail/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^tenant id: tenant-1$/i }))
+
+    expect(await screen.findByRole('heading', { name: /approval detail/i })).toBeInTheDocument()
+    expect(screen.queryByText(/tenant id: tenant-1/i)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/slack\.msg\.post/i).length).toBeGreaterThan(0)
   })
 })

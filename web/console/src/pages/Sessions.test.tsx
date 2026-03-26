@@ -102,6 +102,22 @@ describe('Sessions page', () => {
     })
   })
 
+  it('hydrates filters from query params so onboarding verification links land on the right sessions', async () => {
+    const getSpy = mockApiGet([
+      [/^\/admin\/sessions/, { sessions: sessionsFixture }],
+    ])
+
+    renderRoute(<Sessions />, { path: '/sessions', route: '/sessions?tenant_id=tenant-2&agent_id=agent-2' })
+
+    expect(await screen.findByRole('heading', { name: /sessions/i })).toBeInTheDocument()
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith(expect.stringContaining('tenant_id=tenant-2')))
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith(expect.stringContaining('agent_id=agent-2')))
+    expect(screen.getByLabelText(/^tenant$/i)).toHaveValue('tenant-2')
+    expect(screen.getByLabelText(/^agent id$/i)).toHaveValue('agent-2')
+    expect(screen.getByRole('button', { name: /tenant id: tenant-2/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /agent id: agent-2/i })).toBeInTheDocument()
+  })
+
   it('accepts wrapped payloads and keeps fallback text stable when optional fields are missing', async () => {
     mockApiGet([
       [/^\/admin\/sessions/, {

@@ -1,5 +1,5 @@
 import { OpenClauseClient } from "../src/client";
-import { ToolCallRequest, ToolCallResponse } from "../src/models";
+import { ToolCallEvent, ToolCallRequest, ToolCallResponse } from "../src/models";
 import { OpenClauseError, APIError, AuthenticationError, TimeoutError } from "../src/errors";
 
 describe("OpenClauseClient", () => {
@@ -82,7 +82,10 @@ describe("OpenClauseClient", () => {
         risk_factors: ["destructive", "production"],
         user_id: "user_xyz",
         session_id: "sess_456",
+        labels: { user_name: "Casey", user_email: "casey@example.com" },
+        source_ip: "203.0.113.10",
         trace_id: "trace_789",
+        requested_at: "2026-01-15T10:30:00Z",
         schema_version: "1.0",
       };
 
@@ -95,7 +98,10 @@ describe("OpenClauseClient", () => {
       expect(parsed.risk_factors).toEqual(["destructive", "production"]);
       expect(parsed.user_id).toBe("user_xyz");
       expect(parsed.session_id).toBe("sess_456");
+      expect(parsed.labels).toEqual({ user_name: "Casey", user_email: "casey@example.com" });
+      expect(parsed.source_ip).toBe("203.0.113.10");
       expect(parsed.trace_id).toBe("trace_789");
+      expect(parsed.requested_at).toBe("2026-01-15T10:30:00Z");
       expect(parsed.schema_version).toBe("1.0");
     });
   });
@@ -163,6 +169,43 @@ describe("OpenClauseClient", () => {
       const response: ToolCallResponse = JSON.parse(raw);
       expect(response.result!.status).toBe("error");
       expect(response.result!.error).toBe("connection refused");
+    });
+  });
+
+  describe("ToolCallEvent deserialization", () => {
+    it("should deserialize the nested envelope returned by GET /v1/toolcalls/{event_id}", () => {
+      const raw = JSON.stringify({
+        event_id: "evt_005",
+        request: {
+          tenant_id: "t_123",
+          agent_id: "agent_abc",
+          tool: "slack",
+          action: "msg.post",
+          idempotency_key: "key-005",
+          session_id: "sess_456",
+          trace_id: "trace_789",
+          labels: { user_name: "Casey", user_email: "casey@example.com" },
+          requested_at: "2026-01-15T10:30:00Z",
+        },
+        decision: "allow",
+        policy_result: { decision: "allow", reason: "ok" },
+        execution_result: { status: "success", duration_ms: 12 },
+        hash: "hash-1",
+        prev_hash: "hash-0",
+        received_at: "2026-01-15T10:31:00Z",
+      });
+
+      const event: ToolCallEvent = JSON.parse(raw);
+      expect(event.event_id).toBe("evt_005");
+      expect(event.request.session_id).toBe("sess_456");
+      expect(event.request.trace_id).toBe("trace_789");
+      expect(event.request.labels).toEqual({
+        user_name: "Casey",
+        user_email: "casey@example.com",
+      });
+      expect(event.execution_result?.status).toBe("success");
+      expect(event.hash).toBe("hash-1");
+      expect(event.received_at).toBe("2026-01-15T10:31:00Z");
     });
   });
 
@@ -286,6 +329,50 @@ describe("OpenClauseClient", () => {
       const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
 
       await expect(client.getEvent("evt-auth")).rejects.toBeInstanceOf(AuthenticationError);
+    });
+
+    it("getEvent parses top-level event metadata and execution_result", async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({
+          event_id: "evt-6",
+          decision: "allow",
+          tenant_id: "tenant-1",
+          agent_id: "agent-1",
+          tool: "slack",
+          action: "msg.post",
+          resource: "channels/general",
+          risk_score: 2,
+          user_id: "user-1",
+          session_id: "sess-1",
+          trace_id: "trace-1",
+          source_ip: "203.0.113.10",
+          requested_at: "2026-01-15T10:30:00Z",
+          policy_result: { decision: "allow", reason: "ok" },
+          execution_result: { status: "success", duration_ms: 12, output_json: { ok: true } },
+          received_at: "2026-01-15T10:31:00Z",
+        }),
+      });
+      (global as any).fetch = fetchMock;
+
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const event = await client.getEvent("evt-6");
+
+      expect(event.event_id).toBe("evt-6");
+      expect(event.decision).toBe("allow");
+      expect(event.tenant_id).toBe("tenant-1");
+      expect(event.requested_at).toBe("2026-01-15T10:30:00Z");
+      expect(event.execution_result?.status).toBe("success");
+      expect(event.policy_result).toEqual({ decision: "allow", reason: "ok" });
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${BASE_URL}/v1/toolcalls/evt-6`,
+        expect.objectContaining({
+          method: "GET",
+        }),
+      );
     });
 
     it("maps abort errors to TimeoutError", async () => {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/console"
+	"github.com/bturcanu/OpenClause/pkg/evidence"
 	"github.com/bturcanu/OpenClause/pkg/types"
 )
 
@@ -20,7 +21,7 @@ type fakeExportStore struct {
 	csvErr        error
 	bundleErr     error
 	csvWriteBytes string
-	events        []console.EventListItem
+	events        []console.EventDetail
 	count         int
 	countErr      error
 	tenantID      string
@@ -47,7 +48,7 @@ func (f *fakeExportStore) CountEventsInRange(_ context.Context, _ string, since,
 	return f.count, nil
 }
 
-func (f *fakeExportStore) ListEventsInRange(_ context.Context, _ string, since, until time.Time, _ int) ([]console.EventListItem, error) {
+func (f *fakeExportStore) ListEventDetailsInRange(_ context.Context, _ string, since, until time.Time, _ int) ([]console.EventDetail, error) {
 	f.since = since
 	f.until = until
 	if f.bundleErr != nil {
@@ -57,9 +58,14 @@ func (f *fakeExportStore) ListEventsInRange(_ context.Context, _ string, since, 
 }
 
 func newTestConsoleAPI(exportStore exportEventsStore) *ConsoleAPI {
+	signer, err := evidence.ResolveBundleSigningKey("", "test-export-bundle-secret")
+	if err != nil {
+		panic(err)
+	}
 	return &ConsoleAPI{
-		log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		exportStore: exportStore,
+		log:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		exportStore:          exportStore,
+		evidenceBundleSigner: signer,
 	}
 }
 
@@ -299,7 +305,7 @@ func TestHandleExportBundle_UsesUntilQueryParameter(t *testing.T) {
 
 	store := &fakeExportStore{
 		count:  1,
-		events: []console.EventListItem{{EventID: "evt-1"}},
+		events: []console.EventDetail{{EventListItem: console.EventListItem{EventID: "evt-1"}}},
 	}
 	api := newTestConsoleAPI(store)
 
@@ -322,6 +328,85 @@ func TestHandleExportBundle_UsesUntilQueryParameter(t *testing.T) {
 	}
 	if got := store.since.Format(time.RFC3339); got != since {
 		t.Fatalf("expected since %q, got %q", since, got)
+	}
+}
+
+func TestHandleExportBundle_PreservesEventReasonInBundle(t *testing.T) {
+	api := newTestConsoleAPI(&fakeExportStore{
+		count: 1,
+		events: []console.EventDetail{{
+			EventListItem: console.EventListItem{
+				EventID:  "evt-1",
+				TenantID: "tenant-1",
+				AgentID:  "agent-1",
+				Tool:     "slack",
+				Action:   "msg.post",
+				Reason:   "export fixture reason",
+			},
+			PayloadJSON:  json.RawMessage(`{"channel":"C123","text":"hello"}`),
+			PolicyResult: json.RawMessage(`{"allow":true,"reason":"export fixture reason"}`),
+			Hash:         "hash-1",
+			PrevHash:     "hash-0",
+			Result: &console.EventResult{
+				Status:     "executed",
+				OutputJSON: json.RawMessage(`{"ok":true}`),
+				DurationMS: 42,
+			},
+		}},
+	})
+
+	claims := &console.JWTClaims{Roles: []string{"platform_admin"}}
+	ctx := context.WithValue(context.Background(), claimsKey{}, claims)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/reports/export/bundle?tenant_id=tenant-1&since=2020-01-01T00:00:00Z&until=2020-01-02T00:00:00Z",
+		nil,
+	).WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	api.handleExportBundle(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var bundle struct {
+		Events            []map[string]any `json:"events"`
+		Manifest          map[string]any   `json:"manifest"`
+		ManifestSignature string           `json:"manifest_signature"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &bundle); err != nil {
+		t.Fatalf("decode export bundle: %v body=%s", err, rr.Body.String())
+	}
+	if len(bundle.Events) != 1 {
+		t.Fatalf("expected one exported event, got %+v", bundle.Events)
+	}
+	if bundle.Events[0]["reason"] != "export fixture reason" {
+		t.Fatalf("expected policy reason in export bundle, got %+v", bundle.Events[0])
+	}
+	if bundle.Events[0]["payload_json"] == nil || bundle.Events[0]["policy_result"] == nil || bundle.Events[0]["hash"] != "hash-1" || bundle.Events[0]["prev_hash"] != "hash-0" {
+		t.Fatalf("expected evidence fields in export bundle, got %+v", bundle.Events[0])
+	}
+	result, ok := bundle.Events[0]["result"].(map[string]any)
+	if !ok || result["status"] != "executed" {
+		t.Fatalf("expected execution result in export bundle, got %+v", bundle.Events[0])
+	}
+	if bundle.ManifestSignature == "" {
+		t.Fatalf("expected manifest signature, got %+v", bundle)
+	}
+	if bundle.Manifest["signature_scheme"] != evidence.SignatureSchemeEd25519 || bundle.Manifest["chain_contiguous"] != true || bundle.Manifest["public_key"] == "" || bundle.Manifest["signing_key_id"] == "" {
+		t.Fatalf("expected manifest verification metadata, got %+v", bundle.Manifest)
+	}
+	manifestCanon, _, err := evidence.HashPayload(bundle.Manifest)
+	if err != nil {
+		t.Fatalf("HashPayload(manifest): %v", err)
+	}
+	signer, err := evidence.ResolveBundleSigningKey("", "test-export-bundle-secret")
+	if err != nil {
+		t.Fatalf("ResolveBundleSigningKey: %v", err)
+	}
+	expectedSignature := evidence.SignCanonicalPayload(manifestCanon, signer.PrivateKey)
+	if bundle.ManifestSignature != expectedSignature {
+		t.Fatalf("expected manifest signature %q, got %q", expectedSignature, bundle.ManifestSignature)
 	}
 }
 

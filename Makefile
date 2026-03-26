@@ -2,7 +2,7 @@
 # OpenClause — Makefile
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: dev dev-down test policy-test lint build clean migrate wait-pg help
+.PHONY: dev dev-down test policy-test lint build clean migrate wait-pg validate-env compose-smoke help
 
 # Default env file
 ENV_FILE ?= .env
@@ -11,18 +11,7 @@ ENV_FILE ?= .env
 
 ## Start all services locally via Docker Compose
 dev:
-	@echo ">>> Starting OpenClause stack..."
-	@test -f .env || cp .env.example .env 2>/dev/null || true
-	docker compose --env-file $(ENV_FILE) -f deploy/docker-compose.yml up --build -d
-	@$(MAKE) wait-pg
-	@$(MAKE) migrate
-	@echo ""
-	@echo "✓ Gateway:    http://localhost:8080/healthz"
-	@echo "✓ Approvals:  http://localhost:8081/healthz"
-	@echo "✓ Slack:      http://localhost:8082/healthz"
-	@echo "✓ Jira:       http://localhost:8083/healthz"
-	@echo "✓ OPA:        http://localhost:8181/health"
-	@echo "✓ MinIO:      http://localhost:9001"
+	@bash ./scripts/dev.sh
 
 ## Wait for postgres to be ready (retry loop)
 wait-pg:
@@ -46,10 +35,15 @@ logs:
 
 ## Run database migrations
 migrate:
-	@echo ">>> Running migrations..."
-	@docker compose -f deploy/docker-compose.yml exec -T postgres \
-		psql -U openclause -d openclause < migrations/001_initial.sql
-	@echo "✓ Migrations complete (001_initial)"
+	@bash ./scripts/migrate.sh
+
+## Validate env/secrets before boot
+validate-env:
+	@bash ./scripts/validate-env.sh --file $(ENV_FILE)
+
+## Run the compose-native post-start smoke target
+compose-smoke:
+	docker compose --env-file $(ENV_FILE) -f deploy/docker-compose.yml --profile smoke run --rm poststart-smoke
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 
@@ -109,6 +103,8 @@ help:
 	@echo "  dev-down      Stop and remove all services"
 	@echo "  logs          Tail logs from all services"
 	@echo "  migrate       Run database migrations"
+	@echo "  validate-env  Validate .env before startup"
+	@echo "  compose-smoke Run one-shot post-start smoke checks"
 	@echo "  test          Run all tests (Go + policy)"
 	@echo "  go-test       Run Go unit tests"
 	@echo "  policy-test   Run OPA policy tests"

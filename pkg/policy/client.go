@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
@@ -27,7 +28,7 @@ type Client struct {
 // NewClient creates a new OPA policy client.
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL: baseURL,
+		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},

@@ -1,5 +1,7 @@
 # OpenClause
 
+**v0.5** productizes OpenClause around real pilot onboarding, saved integrations, local bridge flows, operator verification, and evidence-grade exports so teams can connect one agent, govern one real tool path, and prove value quickly.
+
 A policy-driven governance layer for AI agent tool calls. Every action an agent takes — posting a Slack message, creating a Jira ticket, querying a database — flows through OpenClause, where it is validated, evaluated against OPA policy, optionally routed for human approval, executed via pluggable connectors, and recorded as tamper-evident audit evidence.
 
 **v0.2** adds a web admin console, self-service tenant onboarding, multi-language SDKs, a connector marketplace, policy simulation, compliance exports, and more.
@@ -7,6 +9,8 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 **v0.3** adds DB-backed tenant-scoped approver/user/invite/reset + setup wizard flows, SSO/OIDC auth-provider seams, persistent notification routing, a full deny-spike alert worker and UI, tenant analytics dashboards, API key rotation/primary/expiry metadata UX, tenant policy rule-builder with version diff/rollback + enforcement wiring, Helm charts for console services, and deep usability/correctness fixes from the demo/usability trackers (SDK endpoint + wait semantics, export/error-contract consistency, race/stale UI fixes, invite UX/token visibility, safer execute/tenant-disable handling, and robust date rendering).
 
 **v0.4** adds a gateway-backed connector catalog in the console, server-tracked console auth sessions with admin revocation, an operator-grade Sessions explorer with exports and attribution, real invite email delivery with absolute links and delivery status, Java Gradle-wrapper builds, console-wide UX polish, and a final correctness pass across API-client behavior, docs, demo flow, and logic/evidence edge cases.
+
+**v0.5** adds opinionated onboarding flows for preview/create/regenerate/regenerate-with-defaults, saved integration history, downloadable runtime bundles, a local bridge for OpenAI-compatible model hosts and LM Studio, stronger pilot-health analytics, and independently verifiable evidence bundles.
 
 ---
 
@@ -16,6 +20,8 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 - [Architecture](#architecture)
 - [Services](#services)
 - [Quick Start](#quick-start)
+- [Onboarding Guide](#onboarding-guide)
+- [Pilot Recipes](#pilot-recipes)
 - [Web Console](#web-console)
 - [API Reference](#api-reference)
 - [SDKs](#sdks)
@@ -140,6 +146,8 @@ curl http://localhost:8090/healthz   # Console API
 
 If this is your first run, start by opening the console UI at `http://localhost:3000` and completing the First-run Setup Wizard (it creates the initial platform admin and first tenant). Use the email/password you set there to log in below.
 
+For terminal verification, the smoke helpers under `scripts/` now tolerate a completely fresh stack too: if the console API still reports `initialized=false`, they bootstrap first-run setup automatically before logging in.
+
 ### 4. Log into the console
 
 Open http://localhost:3000 in your browser, or use the API:
@@ -152,7 +160,139 @@ curl -s -X POST http://localhost:8090/auth/login \
 
 The login response includes both `token` and `session_id`. New console JWTs are tracked server-side so admins can revoke active logins from the Users page, and `POST /auth/logout` revokes the current login session on sign-out.
 
-### 5. Create a tenant, agent, and API key
+### 5. Use the onboarding golden path
+
+OpenClause now has a shared onboarding bundle flow for the current v0.5 golden paths:
+
+- Python SDK wrapper
+- TypeScript SDK wrapper
+- LangChain
+- Local OpenAI-compatible model
+
+Supported entry points today:
+
+- Overview page `Create Agent Integration` CTA, which routes into the existing Tenants onboarding flow
+- Console create flow from Tenant Detail -> Agents and the Tenants page
+- Console tenant-scoped `Onboard agent` action directly from the Tenants list
+- Console preview flow for an existing tenant
+- Console regenerate flow for an existing tenant + agent
+- Console regenerate-with-defaults flow for an existing tenant + agent when curated defaults are available
+- Console saved-integration history plus direct saved/defaults bundle download from Tenant Detail
+- `openclause init-agent --local-only`
+- `openclause auth login --server-url ...` once, then `openclause init-agent --server-url ...` for server-backed create, preview, regenerate, and regenerate-with-defaults
+
+Important behavior:
+
+- Preview is non-destructive and requires an existing tenant.
+- Create is the only flow that returns a one-time raw API key.
+- For `pilot_safe` and `read_only_first`, create now also applies a starter tenant policy config for the selected tools so the first governed call is not blocked by an empty allowlist.
+- Regenerate never recovers a raw API key. It returns key-prefix guidance and generated env files that reference an existing `OPENCLAUSE_API_KEY` value.
+- Regenerate with defaults is explicit. It only uses reviewable curated defaults from the current connector catalog and fails clearly if no safe default tool set is available.
+- For LM Studio and other local OpenAI-compatible servers, start the local server first, copy the model id from `curl http://localhost:1234/v1/models`, and set `LOCAL_MODEL_NAME` in the generated env artifacts before running `python local_model_agent.py --smoke` or the interactive `python local_model_agent.py` loop.
+- Local OpenAI-compatible bundles now also include `openclause-bridge.yaml`; start it once with `go run ./cmd/openclause bridge start --config ./openclause-bridge.yaml` so the generated runtime, `openclause bridge chat`, or any OpenAI-compatible chat client can talk to a local OpenClause seam instead of embedding tenant, agent, and API-key wiring into every call.
+- `openclause bridge doctor --config ./openclause-bridge.yaml` now gives users a preflight check for bridge config, gateway reachability, API-key auth, upstream model reachability, and MCP readiness before the first request.
+- `openclause bridge chat --config ./openclause-bridge.yaml` now gives you a thin terminal REPL on top of the bridge-hosted chat endpoint, so you can test the governed conversation loop without modifying starter code.
+- Local OpenAI-compatible bundles now also include `lmstudio.mcp.example.jsonc` and `lmstudio.mcp.remote.example.jsonc`; copy either one into LM Studio's `mcp.json` for native LM Studio chat-UI tool access through OpenClause.
+- The bridge-hosted `POST /v1/chat/completions` surface now supports governed streaming through the tool loop, so assistant content can continue streaming after governed tool execution.
+- If the bridge needs to report already-executed governed actions during a mixed tool-call turn, it now does so under the namespaced `openclause.governed_results` envelope rather than a raw top-level custom field.
+- The local bridge can now host multiple named tenant and agent profiles from one YAML config, which makes the sidecar/runtime seam more useful for real local multi-agent setups.
+- The bridge now also supports session-aware HTTP MCP on `POST /mcp` and `DELETE /mcp` for URL-based MCP clients or sidecar adapters, in addition to the native stdio LM Studio path.
+- The bridge can now merge client-provided tools with the governed tool surface; OpenClause only intercepts the governed tool name and passes non-governed tools through.
+- If the downloaded bundle will run from your host machine instead of inside the Docker network, set `PUBLIC_GATEWAY_URL` on `console-api` so generated `OPENCLAUSE_BASE_URL` values point at a host-reachable gateway such as `http://localhost:8080`.
+- Generated starter calls should always include `session_id`, `trace_id`, and `idempotency_key`; those fields are critical for Sessions, Audit Trail, approvals, and triage.
+- The console result view now makes the mode explicit:
+  - preview = synthetic agent id + placeholder key
+  - create = real tenant/agent/api key + one-time raw key block
+  - regenerate = reused tenant/agent + existing key reference or missing-key recovery note
+  - regenerate with defaults = reused tenant/agent + explicit assumed defaults before handoff
+- Generated bundles now carry stronger runtime-specific setup, approval-wait, smoke-test, and verification guidance for Python, TypeScript, LangChain, and local OpenAI-compatible model flows.
+
+Mode summary:
+
+| Mode | Console/API behavior | CLI shape | Raw API key behavior |
+|---|---|---|---|
+| Preview | Existing tenant only, non-destructive | `init-agent --preview ...` | Never returned |
+| Create | Creates tenant if requested, creates agent + API key | `auth login` once, then `init-agent --server-url ...` or explicit `--auth-token` | Returned once only here |
+| Regenerate | Existing tenant + agent, explicit runtime/tool/posture | `init-agent --regenerate ... --tools ...` | Never reissued |
+| Regenerate with defaults | Existing tenant + agent, explicit curated defaults | `init-agent --regenerate --use-defaults ...` | Never reissued |
+| Local-only | No server mutation, bundle only | `init-agent --local-only ...` | Uses provided key or placeholder only |
+
+No-active-key regenerate behavior:
+
+- the bundle still renders with placeholder `OPENCLAUSE_API_KEY` guidance
+- the response omits `api_key` instead of returning an empty or misleading key object
+- the operator must create or rotate an API key from the tenant API Keys tab before running the smoke test
+
+More detailed onboarding, CLI lifecycle, archive, and troubleshooting guidance lives in [`docs/ONBOARDING.md`](docs/ONBOARDING.md). The shipped admin endpoint contract for these flows is summarized in [`docs/API_ONBOARDING_ENDPOINTS.md`](docs/API_ONBOARDING_ENDPOINTS.md), represented in [`api/openapi.yaml`](api/openapi.yaml), and illustrated with concrete response examples under [`docs/examples/onboarding/`](docs/examples/onboarding/).
+For the new local bridge alpha and its generated config file, use [`docs/LOCAL_BRIDGE.md`](docs/LOCAL_BRIDGE.md).
+
+For a real first pilot instead of a generic demo, use [`docs/PILOTS.md`](docs/PILOTS.md). For the current production-shaped deployment and runbook story, use [`docs/PRODUCTION.md`](docs/PRODUCTION.md).
+For a comprehensive endpoint-by-endpoint curl checklist, use [`docs/CURL_TEST_MATRIX.md`](docs/CURL_TEST_MATRIX.md).
+
+Example CLI lifecycle:
+
+```bash
+# Store a reusable console bearer token once
+go run ./cmd/openclause auth login \
+  --server-url http://localhost:8090 \
+  --email admin@openclause.dev \
+  --password 'Admin123!'
+
+# Local-only artifact generation
+go run ./cmd/openclause init-agent \
+  --local-only \
+  --tenant-id tenant-123 \
+  --agent-name "Support Bot" \
+  --runtime python \
+  --tools slack:slack.channel.list,slack:slack.msg.post \
+  --output-dir ./support-bot
+
+# Server-backed preview
+go run ./cmd/openclause init-agent \
+  --server-url http://localhost:8090 \
+  --preview \
+  --tenant-id tenant-123 \
+  --agent-name "Support Bot" \
+  --runtime python \
+  --tools slack:slack.channel.list
+
+# Server-backed create
+go run ./cmd/openclause init-agent \
+  --server-url http://localhost:8090 \
+  --tenant-id tenant-123 \
+  --agent-name "Support Bot" \
+  --runtime python \
+  --tools slack:slack.channel.list,slack:slack.msg.post \
+  --output-dir ./support-bot
+
+# Server-backed regenerate
+go run ./cmd/openclause init-agent \
+  --server-url http://localhost:8090 \
+  --regenerate \
+  --tenant-id tenant-123 \
+  --agent-id agent-123 \
+  --agent-name "Support Bot" \
+  --runtime python \
+  --tools slack:slack.channel.list
+
+# Server-backed regenerate with explicit defaults
+go run ./cmd/openclause init-agent \
+  --server-url http://localhost:8090 \
+  --regenerate \
+  --use-defaults \
+  --tenant-id tenant-123 \
+  --agent-id agent-123
+```
+
+Recommended first verification:
+
+1. Send one governed read action with the generated smoke test.
+2. Open Audit Trail and confirm the event is filtered to the expected tenant and agent.
+3. Open Sessions and confirm the same `session_id` appears there.
+4. Send one write or high-risk action.
+5. Open Approvals for the tenant and confirm the gated action appears there.
+
+### 6. Create a tenant, agent, and API key manually
 
 ```bash
 TOKEN="<token from login response>"
@@ -272,6 +412,50 @@ make dev-down
 
 ---
 
+## Onboarding Guide
+
+Use [`docs/ONBOARDING.md`](docs/ONBOARDING.md) for the current generated-bundle lifecycle:
+
+- console preview, create, regenerate, and regenerate-with-defaults
+- CLI local-only, preview, create, regenerate, and regenerate-with-defaults
+- raw API key visibility rules
+- bundle archive/download behavior
+- verification and troubleshooting
+
+The canonical fastest path is still:
+
+1. Create or choose a tenant.
+2. Launch `Create Agent Integration` or the tenant-scoped `Onboard agent` shortcut.
+3. Preview the bundle.
+4. Create the real integration.
+5. Run the smoke test and verify it in Audit Trail, Sessions, and Approvals.
+
+Onboarding metadata is now persisted on the saved agent integration record, which is the canonical source for regenerate/defaulted-regenerate handoffs and saved bundle/history actions.
+
+After first traffic lands, use `Tenant Detail -> Analytics` as the pilot cockpit for recent event/session/approval health, missing request-context rates, top connector failures, and next best actions.
+
+---
+
+## Pilot Recipes
+
+The highest-value v0.5 usage pattern is still a focused pilot:
+
+- one tenant
+- one agent
+- one read action
+- one write action
+- one approver group
+
+Recommended first journeys:
+
+- Slack: `slack.channel.list` + `slack.msg.post`
+- Jira: `jira.issue.list` + `jira.issue.create`
+- Postgres readonly + Webhook post: `postgres.query.readonly` + `webhook.post`
+
+Use [`docs/PILOTS.md`](docs/PILOTS.md) for the full runtime recommendation, posture guidance, week-one metrics, and operator review checklist.
+
+---
+
 ## Web Console
 
 The admin console (http://localhost:3000) provides:
@@ -359,6 +543,11 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/tenants` | JWT | List tenants (scoped by role) |
 | `GET` | `/admin/tenants/{tenant_id}` | JWT | Get tenant detail |
 | `POST` | `/admin/tenants/{tenant_id}/status` | platform_admin | Set tenant status to `active` or `disabled` |
+| `POST` | `/admin/onboarding/integrations` | JWT | Create tenant when requested, create agent + API key, and return a generated onboarding bundle (raw API key shown once here only) |
+| `POST` | `/admin/onboarding/bundles/preview` | JWT | Generate a non-destructive onboarding bundle for an existing tenant without creating credentials |
+| `POST` | `/admin/onboarding/bundles/regenerate` | JWT | Regenerate onboarding artifacts for an existing tenant + agent without reissuing a raw API key |
+| `POST` | `/admin/onboarding/bundles/regenerate-defaults` | JWT | Regenerate onboarding artifacts for an existing tenant + agent using explicit curated defaults when available |
+| `POST` | `/admin/onboarding/bundles/archive` | JWT | Return a downloadable zip archive of writable onboarding artifacts from a bundle response |
 | `POST` | `/admin/tenants/{tenant_id}/agents` | `tenant_admin` or `platform_admin` | Register agent |
 | `GET` | `/admin/tenants/{tenant_id}/agents` | JWT (tenant access) | List agents |
 | `POST` | `/admin/tenants/{tenant_id}/apikeys` | `tenant_admin` or `platform_admin` | Create API key (returns raw key once) |
@@ -376,7 +565,7 @@ Prometheus metrics are served on a **separate internal-only listener** (default 
 | `GET` | `/admin/events` | JWT | List events (filterable by tenant, user, agent, trace, tool, action, decision, session, and risk range) |
 | `GET` | `/admin/events/{event_id}` | JWT | Event detail with policy result + hash chain |
 | `GET` | `/admin/events/export/csv` | JWT | Export events as CSV (honors `since` / `until`; `tenant_id` required for platform admins) |
-| `GET` | `/admin/reports/export/bundle` | JWT | Export evidence bundle JSON (`tenant_id` required for platform admins; honors `since` / `until`; rejects ranges over 10,000 events) |
+| `GET` | `/admin/reports/export/bundle` | JWT | Export a signed evidence bundle JSON package with manifest hashes, Ed25519 signature, and embedded public-key metadata (`tenant_id` required for platform admins; honors `since` / `until`; rejects ranges over 10,000 events) |
 | `GET` | `/admin/reports/activity` | JWT | Legacy alias for `/admin/events` |
 | `GET` | `/admin/reports/export/csv` | JWT | Legacy alias for `/admin/events/export/csv` |
 | `GET` | `/admin/sessions` | JWT | List observed runs derived from `tool_events.session_id` with user/agent attribution, decision counts, and last action summary |
@@ -456,7 +645,7 @@ Multi-language SDKs are available in the `sdk/` directory.
 
 These SDKs wrap the gateway tool-call APIs. Console-admin flows such as invite delivery, session exports, and evidence bundle exports are documented in the Console API section above and in [`docs/LOCAL_TESTING.md`](docs/LOCAL_TESTING.md). Current console contracts to keep in mind:
 - Session exports return `404` when the session id is missing or outside the caller's tenant scope.
-- Evidence bundle export honors `since` / `until` and returns `400` when the requested window exceeds 10,000 events.
+- Evidence bundle export honors `since` / `until`, returns `400` when the requested window exceeds 10,000 events, and includes an Ed25519-signed manifest plus embedded public-key metadata that `cmd/verify` can validate directly or against `EVIDENCE_BUNDLE_SIGNING_PUBLIC_KEY`.
 - `POST /admin/invites` returns the raw invite token once plus `accept_url` and `email_status`; later `GET /admin/invites` responses omit the raw token.
 
 Note: the SDK examples below are written for the local dev seed data (`tenant_id="tenant1"`, `agent_id="agent-1"`, `api_key="sk-test-key-1"`). If you initialized via the Setup Wizard, replace these with your real `tenant_id`, `agent_id`, and raw API key.
@@ -669,7 +858,7 @@ evidence.VerifyChain(events) // returns error if chain is broken
 - **Evidence bundle**: `GET /admin/reports/export/bundle?tenant_id=...`
   - Honors optional `since` / `until` query parameters.
   - Fails closed with `400` if the requested range exceeds 10,000 events, instead of silently truncating the bundle.
-- **Verify bundle**: `go run ./cmd/verify --bundle <file>`
+- **Verify bundle**: `go run ./cmd/verify --bundle <file>`, optionally pinned with `--public-key-file`, `--public-key`, or `--require-signing-key-id` ([bundle format](docs/EVIDENCE_BUNDLE_FORMAT.md))
 
 ### Database tables
 
@@ -734,7 +923,7 @@ Approvals and remote connector services use an `X-Internal-Token` header for ser
 INTERNAL_AUTH_TOKEN=your-shared-secret
 ```
 
-`approvals`, `connector-slack`, `connector-jira`, and `alert-worker` require this to be set at startup; gateway uses it for downstream internal calls. Token comparisons use constant-time comparison to prevent timing attacks.
+`approvals`, `connector-slack`, `connector-jira`, and `alert-worker` require this to be set at startup; gateway uses it for downstream internal calls. The local dev bootstrap scripts rewrite the checked-in placeholder in `.env` with a strong random value on first run, and token comparisons use constant-time comparison to prevent timing attacks.
 
 ---
 
@@ -848,6 +1037,7 @@ The response includes:
 - `risk_heatmap` (risk_score decision distribution)
 - `per_agent` (top agents by total events)
 - `onboarding_checklist` (setup progress for the tenant)
+- `pilot_health` (last event/session/approval, pending approvals, execution success, missing session/trace rates, top connector failures, deny reasons, and next best actions)
 
 ### API Key Lifecycle UX (Tier 3 item 10)
 API keys now support lifecycle metadata and safer rotation:
@@ -1002,7 +1192,9 @@ Defaults below describe runtime behavior when a variable is unset. The checked-i
 | `GATEWAY_URL` | `http://localhost:8080` | Gateway base URL used by console-api for connector discovery |
 | `PUBLIC_APPROVALS_URL` | `APPROVALS_URL` | Public base URL embedded in `approval_url` responses |
 | `PUBLIC_BASE_URL` | `http://localhost:3000` | Public console base URL used to build absolute invite/password-reset links |
-| `CONSOLE_JWT_SECRET` | — | **Required at runtime.** JWT signing secret for console; local dev scripts generate one if missing |
+| `CONSOLE_JWT_SECRET` | — | **Required at runtime.** JWT signing secret for console; local dev scripts generate one if missing or placeholder |
+| `EVIDENCE_BUNDLE_SIGNING_PRIVATE_KEY` | — | Optional Ed25519 private key for evidence-bundle signing; if unset, console-api derives a deterministic local-dev key from `CONSOLE_JWT_SECRET` |
+| `EVIDENCE_BUNDLE_SIGNING_PUBLIC_KEY` | — | Optional Ed25519 public key override for `cmd/verify`; if unset, verification uses the bundle's embedded public key |
 | `CONSOLE_JWT_EXPIRY_HOURS` | `24` | JWT token expiry in hours |
 | `CONSOLE_CORS_ORIGINS` | — | Comma-separated allowed origins for console-api CORS responses |
 | `CONSOLE_AUTH_PROVIDER` | `email_password` | Console auth provider implementation (`email_password`, `password`, `local`) |
@@ -1018,7 +1210,7 @@ Defaults below describe runtime behavior when a variable is unset. The checked-i
 | `CONNECTOR_SLACK_URL` | `http://localhost:8082` | Slack connector URL |
 | `CONNECTOR_JIRA_URL` | `http://localhost:8083` | Jira connector URL |
 | `API_KEYS` | — | Comma-separated `tenant:key` pairs (env-var auth); env keys still respect tenant disable status in the DB |
-| `INTERNAL_AUTH_TOKEN` | — | Shared secret for approvals/connectors/alert-worker internal auth; effectively required for a working stack |
+| `INTERNAL_AUTH_TOKEN` | — | Shared secret for approvals/gateway/connectors/alert-worker internal auth; local dev scripts generate one if missing or placeholder |
 | `ALLOWLIST_SOURCE` | `db` | Approver authorization source (`db`, `env`, `both`). Default is DB-backed approvers. |
 | `APPROVER_EMAIL_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
 | `APPROVER_SLACK_ALLOWLIST` | — | Dev bootstrap fallback (used only when `ALLOWLIST_SOURCE=env|both`) |
@@ -1160,7 +1352,19 @@ If you need migrations only:
 
 On console-ui startup, the app will call `GET /api/setup/status` and show a first-run setup wizard when the DB is not initialized yet. This replaces the need to manually seed the initial platform admin + first tenant SQL on first run.
 
-For local development, `./scripts/dev.sh` / `./scripts/dev.ps1` also ensure `CONSOLE_JWT_SECRET` is set in `.env` (generating a strong secret if missing) and run `docker compose` with `--env-file` so compose interpolation uses the correct values.
+For local development, `./scripts/dev.sh` / `./scripts/dev.ps1` also ensure both `CONSOLE_JWT_SECRET` and `INTERNAL_AUTH_TOKEN` are populated in `.env` (generating strong secrets when missing or placeholder values are present), run `docker compose` with `--env-file`, wait for the one-shot `migrate` service to exit successfully, and finish with an explicit compose-native post-start smoke that checks the main health/readiness endpoints plus connector discovery before printing success.
+
+Useful operator shortcuts:
+
+```bash
+./scripts/validate-env.sh --file .env
+make validate-env
+
+docker compose --env-file .env -f deploy/docker-compose.yml --profile smoke run --rm poststart-smoke
+make compose-smoke
+```
+
+The one-shot `poststart-smoke` service is intentionally hidden behind the `smoke` compose profile so `docker compose up -d` keeps the main stack clean instead of auto-running a transient verifier container.
 
 ### Testing
 
@@ -1171,6 +1375,7 @@ The repo has broad automated coverage across the main data flows and contracts:
 - Approvals and evidence concurrency/idempotency coverage, including grant consumption, hash-chain behavior, and duplicate-request handling
 - Alert-worker loop tests covering retry scheduling and sent/failure transitions
 - Gateway tests for allow/deny/approve paths, idempotency, and session/trace persistence
+- Runtime helper coverage for env validation and post-start smoke scripts
 - SDK contract tests for Go, TypeScript, Python, and Java
 - Policy verification via `opa test policy/bundles/v0/ policy/tests/ -v`
 
@@ -1181,6 +1386,7 @@ The detailed inventory lives in [`.ai/test-coverage-sweep.md`](.ai/test-coverage
 ```bash
 go test ./...             # All Go tests
 go test -race ./...       # With race detector
+go test ./scripts -count=1                               # Runtime helper/env validation coverage
 go test ./cmd/console-api -run '^$' -fuzz=FuzzParseRangeDurationDoesNotReturnNonPositiveValues -fuzztime=2s  # Example fuzz smoke
 opa test policy/bundles/v0/ policy/tests/ -v   # Policy tests
 npm --prefix web/console run test              # Console UI tests
@@ -1224,6 +1430,13 @@ go build ./cmd/verify
 ---
 
 ## Deployment
+
+The current production-shaped story is documented in [`docs/PRODUCTION.md`](docs/PRODUCTION.md). The short version:
+
+- use the shipped Helm charts in `deploy/helm/`
+- back them with real Postgres, OPA, and S3-compatible evidence storage
+- deploy only the connectors your pilot actually needs
+- verify one governed read and one approval-gated write before expanding the rollout
 
 ### Local (Docker Compose)
 

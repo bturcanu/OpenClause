@@ -100,6 +100,15 @@ func (api *ConsoleAPI) handleTenantAnalyticsSummary(w http.ResponseWriter, r *ht
 	if summary.PerAgent == nil {
 		summary.PerAgent = []console.AgentBreakdownRow{}
 	}
+	if summary.PilotHealth.TopConnectorFailures == nil {
+		summary.PilotHealth.TopConnectorFailures = []console.PilotConnectorFailure{}
+	}
+	if summary.PilotHealth.TopDenyReasons == nil {
+		summary.PilotHealth.TopDenyReasons = []console.PilotDenyReason{}
+	}
+	if summary.PilotHealth.NextActions == nil {
+		summary.PilotHealth.NextActions = []console.PilotAction{}
+	}
 
 	writeJSON(w, http.StatusOK, summary)
 }

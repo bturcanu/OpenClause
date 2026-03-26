@@ -10,7 +10,10 @@ export interface ToolCallRequest {
   risk_factors?: string[];
   user_id?: string;
   session_id?: string;
+  labels?: Record<string, string>;
+  source_ip?: string;
   trace_id?: string;
+  requested_at?: string;
   schema_version?: string;
 }
 
@@ -31,16 +34,27 @@ export interface ToolCallResponse {
 
 export interface ToolCallEvent {
   event_id: string;
-  tenant_id: string;
-  agent_id: string;
-  tool: string;
-  action: string;
-  resource: string;
-  risk_score: number;
+  request: ToolCallRequest;
   decision: string;
-  reason: string;
+  reason?: string;
+  policy_result?: Record<string, unknown>;
+  execution_result?: ExecutionResult;
   result?: ExecutionResult;
+  hash?: string;
+  prev_hash?: string;
   received_at: string;
+  tenant_id?: string;
+  agent_id?: string;
+  tool?: string;
+  action?: string;
+  resource?: string;
+  risk_score?: number;
+  user_id?: string;
+  session_id?: string;
+  trace_id?: string;
+  labels?: Record<string, string>;
+  source_ip?: string;
+  requested_at?: string;
 }
 
 export interface ClientOptions {

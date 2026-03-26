@@ -1,0 +1,78 @@
+{
+  "mode": "preview",
+  "tenant": {
+    "id": "tenant-1",
+    "name": "Alpha Corp",
+    "created": false
+  },
+  "agent": {
+    "id": "preview-support-bot",
+    "name": "Support Bot",
+    "status": "preview",
+    "created_at": "2026-03-24T15:00:00Z",
+    "preview": true
+  },
+  "bundle": {
+    "title": "TypeScript SDK wrapper onboarding bundle",
+    "summary": "Tenant tenant-1 · Agent preview-support-bot · TypeScript SDK wrapper",
+    "runtime": "typescript",
+    "runtime_label": "TypeScript SDK wrapper",
+    "starter_file_name": "agent.ts",
+    "environment": {
+      "OPENCLAUSE_BASE_URL": "http://localhost:8080",
+      "OPENCLAUSE_TENANT_ID": "tenant-1",
+      "OPENCLAUSE_AGENT_ID": "preview-support-bot",
+      "OPENCLAUSE_API_KEY": "${OPENCLAUSE_API_KEY:-generated-on-create}"
+    },
+    "environment_script": "export OPENCLAUSE_BASE_URL=\"http://localhost:8080\"\nexport OPENCLAUSE_TENANT_ID=\"tenant-1\"\nexport OPENCLAUSE_AGENT_ID=\"preview-support-bot\"\nexport OPENCLAUSE_API_KEY=\"${OPENCLAUSE_API_KEY:-generated-on-create}\"",
+    "environment_file": "OPENCLAUSE_BASE_URL=\"http://localhost:8080\"\nOPENCLAUSE_TENANT_ID=\"tenant-1\"\nOPENCLAUSE_AGENT_ID=\"preview-support-bot\"\nOPENCLAUSE_API_KEY=\"${OPENCLAUSE_API_KEY:-generated-on-create}\"",
+    "starter_snippet": "import { OpenClauseClient } from \"openclause\"",
+    "readme_snippet": "# OpenClause TypeScript SDK wrapper onboarding\n\n## Quick start\n\nKeep session_id, trace_id, and idempotency_key stable.",
+    "sample_call": "#!/usr/bin/env bash\nset -euo pipefail\n\n# Load environment first: source ./setup-env.sh\n# Success looks like a JSON payload with event_id and decision.\n# Then open Audit Trail and Sessions for the same tenant + agent and confirm the generated session_id.\n# If the decision comes back as \"approve\", use the generated Approvals link before retrying your runtime path.\nfor required_var in OPENCLAUSE_BASE_URL OPENCLAUSE_API_KEY OPENCLAUSE_TENANT_ID OPENCLAUSE_AGENT_ID; do\n  if [ -z \"${!required_var:-}\" ]; then\n    echo \"missing required environment variable: $required_var\" >&2\n    exit 1\n  fi\ndone\n\nrandom_id() {\n  if command -v uuidgen >/dev/null 2>&1; then\n    uuidgen\n    return 0\n  fi\n  if command -v python3 >/dev/null 2>&1; then\n    python3 - <<'PY'\nimport uuid\nprint(uuid.uuid4())\nPY\n    return 0\n  fi\n  printf 'oc-%s-%s\\n' \"$(date +%s)\" \"${RANDOM:-0}\"\n}\n\ntrace_id=\"trace-$(random_id)\"\nidempotency_key=\"$(random_id)\"\n\npayload=\"$(cat <<JSON\n{\n  \"tenant_id\": \"tenant-1\",\n  \"agent_id\": \"preview-support-bot\",\n  \"tool\": \"slack\",\n  \"action\": \"slack.channel.list\",\n  \"params\": {\"example\": true},\n  \"risk_score\": 2,\n  \"user_id\": \"pilot-user\",\n  \"session_id\": \"demo-session-$(date +%s)\",\n  \"trace_id\": \"$trace_id\",\n  \"idempotency_key\": \"$idempotency_key\"\n}\nJSON\n)\"\n\ncurl -fsS \"$OPENCLAUSE_BASE_URL/v1/toolcalls\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"X-API-Key: $OPENCLAUSE_API_KEY\" \\\n  -d \"$payload\"",
+    "artifacts": [
+      {
+        "id": "starter",
+        "label": "Starter runtime file",
+        "file_name": "agent.ts",
+        "path_hint": "agent.ts",
+        "kind": "starter_file",
+        "purpose": "Golden-path runtime starter showing governed tool execution.",
+        "writable": true,
+        "language": "typescript",
+        "content": "import { OpenClauseClient } from \"openclause\""
+      },
+      {
+        "id": "package-snippet",
+        "label": "Package snippet",
+        "file_name": "package.onboarding.json",
+        "path_hint": "package.onboarding.json",
+        "kind": "package_snippet",
+        "purpose": "Optional package.json fragment for the TypeScript golden path.",
+        "writable": true,
+        "language": "json",
+        "content": "{ \"dependencies\": { \"openclause\": \"latest\" } }"
+      }
+    ],
+    "verification_checklist": [
+      "Send one governed slack.slack.channel.list call with the sample payload.",
+      "Open Audit Trail and confirm the event appears under the expected tenant and agent."
+    ],
+    "verification_links": [
+      {
+        "label": "Open Audit Trail",
+        "path": "/events?agent_id=preview-support-bot&tenant_id=tenant-1"
+      },
+      {
+        "label": "Open Sessions",
+        "path": "/sessions?agent_id=preview-support-bot&tenant_id=tenant-1"
+      },
+      {
+        "label": "Open Approvals",
+        "path": "/approvals?tenant_id=tenant-1"
+      }
+    ],
+    "notes": [
+      "Preview bundles use a placeholder API key value. The real raw key is only shown when you create an integration."
+    ]
+  }
+}

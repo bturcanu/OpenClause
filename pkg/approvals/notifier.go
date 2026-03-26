@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -50,6 +51,25 @@ type Dispatcher struct {
 	slackURL              string
 	internalToken         string
 	SkipWebhookValidation bool // testing only — disables SSRF URL checks
+}
+
+type nonRetryableNotificationError struct {
+	err error
+}
+
+func (e *nonRetryableNotificationError) Error() string { return e.err.Error() }
+func (e *nonRetryableNotificationError) Unwrap() error { return e.err }
+
+func markNotificationNonRetryable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &nonRetryableNotificationError{err: err}
+}
+
+func isNonRetryableNotificationError(err error) bool {
+	var target *nonRetryableNotificationError
+	return errors.As(err, &target)
 }
 
 type notificationStore interface {
@@ -96,6 +116,29 @@ func SafeTransport() *http.Transport {
 	}
 }
 
+var validateWebhookResolveIPs = net.LookupIP
+
+func withValidatedWebhookRedirects(base *http.Client) *http.Client {
+	if base == nil {
+		base = &http.Client{Timeout: 10 * time.Second, Transport: SafeTransport()}
+	}
+	clone := *base
+	previous := base.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := ValidateWebhookURL(req.URL.String()); err != nil {
+			return markNotificationNonRetryable(fmt.Errorf("redirect target validation: %w", err))
+		}
+		if previous != nil {
+			return previous(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after %d redirects", len(via))
+		}
+		return nil
+	}
+	return &clone
+}
+
 func (d *Dispatcher) DispatchOnce(ctx context.Context) error {
 	items, err := d.store.ClaimDueNotifications(ctx, defaultDispatchBatchSize)
 	if err != nil {
@@ -109,6 +152,12 @@ func (d *Dispatcher) DispatchOnce(ctx context.Context) error {
 				continue
 			}
 			if err := d.deliverWebhook(ctx, item); err != nil {
+				if isNonRetryableNotificationError(err) {
+					if markErr := d.store.MarkNotificationFailed(ctx, item.ID, err.Error()); markErr != nil {
+						slog.Error("mark notification failed error", "id", item.ID, "error", markErr)
+					}
+					continue
+				}
 				if item.Attempts >= maxNotificationAttempts {
 					if markErr := d.store.MarkNotificationFailed(ctx, item.ID, "max retries exceeded: "+err.Error()); markErr != nil {
 						slog.Error("mark notification failed error", "id", item.ID, "error", markErr)
@@ -178,8 +227,11 @@ func ValidateWebhookURL(rawURL string) error {
 	if host == "" {
 		return fmt.Errorf("empty hostname")
 	}
-	ip := net.ParseIP(host)
-	if ip != nil {
+	ips, err := validateWebhookResolveIPs(host)
+	if err != nil {
+		return fmt.Errorf("resolve host %q: %w", host, err)
+	}
+	for _, ip := range ips {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 			return fmt.Errorf("private/loopback IP not allowed: %s", ip)
 		}
@@ -190,7 +242,7 @@ func ValidateWebhookURL(rawURL string) error {
 func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox) error {
 	if !d.SkipWebhookValidation {
 		if err := ValidateWebhookURL(item.NotifyURL); err != nil {
-			return fmt.Errorf("webhook URL validation: %w", err)
+			return markNotificationNonRetryable(fmt.Errorf("webhook URL validation: %w", err))
 		}
 	}
 	// When SkipWebhookValidation is set (testing), use the internal client
@@ -198,6 +250,8 @@ func (d *Dispatcher) deliverWebhook(ctx context.Context, item NotificationOutbox
 	webhookClient := d.httpClient
 	if d.SkipWebhookValidation {
 		webhookClient = d.internalHTTPClient
+	} else {
+		webhookClient = withValidatedWebhookRedirects(webhookClient)
 	}
 	body, err := BuildApprovalRequestedCloudEvent(item, d.source, d.summarizer.Summarize(item))
 	if err != nil {

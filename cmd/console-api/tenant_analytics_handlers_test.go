@@ -49,6 +49,11 @@ func Test_handleTenantAnalyticsSummary_parsesParamsAndCallsStore(t *testing.T) {
 			RiskHeatmap:         []console.RiskHeatmapRow{},
 			PerAgent:            []console.AgentBreakdownRow{},
 			OnboardingChecklist: console.OnboardingChecklist{},
+			PilotHealth: console.PilotHealthSummary{
+				TopConnectorFailures: []console.PilotConnectorFailure{},
+				TopDenyReasons:       []console.PilotDenyReason{},
+				NextActions:          []console.PilotAction{},
+			},
 		},
 	}
 	api := &ConsoleAPI{
@@ -113,7 +118,7 @@ func Test_handleTenantAnalyticsSummary_nilSummaryReturnsStableEmptyJSON(t *testi
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
 	}
-	if got["totals"] == nil || got["trend"] == nil || got["risk_heatmap"] == nil || got["per_agent"] == nil || got["onboarding_checklist"] == nil {
+	if got["totals"] == nil || got["trend"] == nil || got["risk_heatmap"] == nil || got["per_agent"] == nil || got["onboarding_checklist"] == nil || got["pilot_health"] == nil {
 		t.Fatalf("expected stable empty summary shape, got %+v", got)
 	}
 }
@@ -148,6 +153,15 @@ func Test_handleTenantAnalyticsSummary_returnsJSONValuesFromStore(t *testing.T) 
 				{AgentID: "agent-b", AllowCount: 2, DenyCount: 2, ApproveCount: 1, Total: 5},
 			},
 			OnboardingChecklist: console.OnboardingChecklist{HasToolcall: true},
+			PilotHealth: console.PilotHealthSummary{
+				Status:               "needs_attention",
+				StatusReason:         "Traffic is flowing, but one or more approvals are still waiting on operator action.",
+				PendingApprovals:     1,
+				ExecutionSuccessRate: 0.5,
+				TopConnectorFailures: []console.PilotConnectorFailure{},
+				TopDenyReasons:       []console.PilotDenyReason{{Reason: "tool/action mismatch in tenant policy", Count: 2, LastSeenAt: time.Date(2026, 1, 15, 13, 0, 0, 0, time.UTC)}},
+				NextActions:          []console.PilotAction{{ID: "review_pending_approvals", Title: "Review pending approvals", Description: "Review pending approvals so write-path pilots do not stall.", Path: "/approvals?tenant_id=tenant-analytics", Severity: "high"}},
+			},
 		},
 	}
 	api := &ConsoleAPI{
@@ -194,6 +208,15 @@ func Test_handleTenantAnalyticsSummary_returnsJSONValuesFromStore(t *testing.T) 
 		OnboardingChecklist struct {
 			HasToolcall bool `json:"has_toolcall"`
 		} `json:"onboarding_checklist"`
+		PilotHealth struct {
+			Status           string `json:"status"`
+			PendingApprovals int    `json:"pending_approvals"`
+			NextActions      []struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+				Path  string `json:"path"`
+			} `json:"next_actions"`
+		} `json:"pilot_health"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
@@ -212,6 +235,9 @@ func Test_handleTenantAnalyticsSummary_returnsJSONValuesFromStore(t *testing.T) 
 	}
 	if !got.OnboardingChecklist.HasToolcall {
 		t.Fatalf("expected onboarding JSON flag to round-trip, got %+v", got.OnboardingChecklist)
+	}
+	if got.PilotHealth.Status != "needs_attention" || got.PilotHealth.PendingApprovals != 1 || len(got.PilotHealth.NextActions) != 1 || got.PilotHealth.NextActions[0].ID != "review_pending_approvals" {
+		t.Fatalf("expected pilot health JSON to round-trip, got %+v", got.PilotHealth)
 	}
 }
 

@@ -33,8 +33,17 @@ public class ToolCallRequest {
     @SerializedName("session_id")
     private String sessionId;
 
+    @SerializedName("labels")
+    private Map<String, String> labels;
+
+    @SerializedName("source_ip")
+    private String sourceIp;
+
     @SerializedName("trace_id")
     private String traceId;
+
+    @SerializedName("requested_at")
+    private String requestedAt;
 
     @SerializedName("schema_version")
     private String schemaVersion;
@@ -52,7 +61,10 @@ public class ToolCallRequest {
     public List<String> getRiskFactors() { return riskFactors; }
     public String getUserId() { return userId; }
     public String getSessionId() { return sessionId; }
+    public Map<String, String> getLabels() { return labels; }
+    public String getSourceIp() { return sourceIp; }
     public String getTraceId() { return traceId; }
+    public String getRequestedAt() { return requestedAt; }
     public String getSchemaVersion() { return schemaVersion; }
 
     public static Builder builder(String tenantId, String agentId, String tool, String action, String idempotencyKey) {
@@ -104,8 +116,23 @@ public class ToolCallRequest {
             return this;
         }
 
+        public Builder labels(Map<String, String> labels) {
+            request.labels = labels;
+            return this;
+        }
+
+        public Builder sourceIp(String sourceIp) {
+            request.sourceIp = sourceIp;
+            return this;
+        }
+
         public Builder traceId(String traceId) {
             request.traceId = traceId;
+            return this;
+        }
+
+        public Builder requestedAt(String requestedAt) {
+            request.requestedAt = requestedAt;
             return this;
         }
 

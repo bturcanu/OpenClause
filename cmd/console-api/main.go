@@ -29,7 +29,7 @@ import (
 	"github.com/bturcanu/OpenClause/pkg/config"
 	"github.com/bturcanu/OpenClause/pkg/connectors"
 	"github.com/bturcanu/OpenClause/pkg/console"
-	"github.com/bturcanu/OpenClause/pkg/policy"
+	"github.com/bturcanu/OpenClause/pkg/evidence"
 	"github.com/bturcanu/OpenClause/pkg/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -109,6 +109,11 @@ func main() {
 		log.Error("auth provider init failed", "error", err)
 		os.Exit(1)
 	}
+	evidenceBundleSigner, err := evidence.ResolveBundleSigningKey(os.Getenv("EVIDENCE_BUNDLE_SIGNING_PRIVATE_KEY"), jwtCfg.Secret)
+	if err != nil {
+		log.Error("evidence bundle signer init failed", "error", err)
+		os.Exit(1)
+	}
 
 	api := &ConsoleAPI{
 		log:                     log,
@@ -126,9 +131,11 @@ func main() {
 		authProvider:            authProvider,
 		authSessionStore:        store,
 		gatewayURL:              config.EnvOr("GATEWAY_URL", defaultGatewayURL),
+		publicGatewayURL:        config.EnvOr("PUBLIC_GATEWAY_URL", config.EnvOr("GATEWAY_URL", defaultGatewayURL)),
 		publicBaseURL:           config.EnvOr("PUBLIC_BASE_URL", "http://localhost:3000"),
 		inviteEmailSender:       newInviteEmailSenderFromEnv(log),
 		httpClient:              &http.Client{Timeout: 10 * time.Second},
+		evidenceBundleSigner:    evidenceBundleSigner,
 		devLogRawTokens:         devLogRawTokens,
 	}
 
@@ -163,9 +170,9 @@ func main() {
 	r.Get("/setup/status", api.handleSetupStatus)
 	r.Post("/setup/initialize", api.handleSetupInitialize)
 
-	r.Post("/auth/login", api.handleLogin)
 	r.Group(func(r chi.Router) {
 		r.Use(unauthLimiter.middleware)
+		r.Post("/auth/login", api.handleLogin)
 		r.Post("/auth/invite/accept", api.handleInviteAccept)
 		r.Post("/auth/reset/request", api.handleResetRequest)
 		r.Post("/auth/reset/confirm", api.handleResetConfirm)
@@ -195,6 +202,14 @@ func main() {
 		r.Get("/admin/tenants", api.handleListTenants)
 		r.Get("/admin/tenants/{tenant_id}", api.handleGetTenant)
 		r.Post("/admin/tenants/{tenant_id}/status", api.requireRole("platform_admin", api.handleUpdateTenantStatus))
+		r.Post("/admin/onboarding/bundles/preview", api.handlePreviewOnboardingBundle)
+		r.Post("/admin/onboarding/bundles/regenerate", api.handleRegenerateOnboardingBundle)
+		r.Post("/admin/onboarding/bundles/regenerate-defaults", api.handleRegenerateOnboardingBundleDefaults)
+		r.Post("/admin/onboarding/bundles/archive", api.handleArchiveOnboardingBundle)
+		r.Post("/admin/onboarding/integrations", api.handleCreateOnboardingIntegration)
+		r.Get("/admin/tenants/{tenant_id}/agents/{agent_id}/integration", api.requireTenantAccess(api.handleGetAgentIntegration))
+		r.Get("/admin/tenants/{tenant_id}/agents/{agent_id}/integration/revisions", api.requireTenantAccess(api.handleListAgentIntegrationRevisions))
+		r.Get("/admin/tenants/{tenant_id}/agents/{agent_id}/integration/bundle", api.requireTenantAccess(api.handleGetAgentIntegrationBundle))
 
 		r.Post("/admin/tenants/{tenant_id}/agents", api.requireTenantRole("tenant_admin", api.handleCreateAgent))
 		r.Get("/admin/tenants/{tenant_id}/agents", api.requireTenantAccess(api.handleListAgents))
@@ -230,7 +245,7 @@ func main() {
 
 		r.Get("/admin/policy/versions", api.handleListPolicyVersions)
 		r.Post("/admin/policy/versions", api.requireRole("tenant_admin", api.handleCreatePolicyVersion))
-		r.Post("/admin/policy/simulate", api.handleSimulatePolicy)
+		r.Post("/admin/policy/simulate", api.requireRole("tenant_admin", api.handleSimulatePolicy))
 		r.Get("/admin/tenants/{tenant_id}/policy/config", api.requireTenantAccess(api.handleGetTenantPolicyConfig))
 		r.Put("/admin/tenants/{tenant_id}/policy/config", api.requireTenantRole("tenant_admin", api.handleUpsertTenantPolicyConfig))
 		r.Get("/admin/tenants/{tenant_id}/policy/versions", api.requireTenantAccess(api.handleListTenantPolicyVersions))
@@ -301,17 +316,49 @@ type ConsoleAPI struct {
 	approverAuth            *approvals.ApproverAuthorizer
 	approverAuthSource      string
 	gatewayURL              string
+	publicGatewayURL        string
 	publicBaseURL           string
 	inviteEmailSender       InviteEmailSender
 	httpClient              *http.Client
+	evidenceBundleSigner    evidence.BundleSigningKey
 
 	devLogRawTokens bool
+}
+
+type exportBundlePayload struct {
+	Version    string                `json:"version"`
+	TenantID   string                `json:"tenant_id"`
+	ExportedAt string                `json:"exported_at"`
+	Since      string                `json:"since"`
+	Until      string                `json:"until"`
+	Events     []console.EventDetail `json:"events"`
+	EventCount int                   `json:"event_count"`
+}
+
+type exportBundleManifest struct {
+	Version         string `json:"version"`
+	GeneratedAt     string `json:"generated_at"`
+	EventCount      int    `json:"event_count"`
+	PayloadSHA256   string `json:"payload_sha256"`
+	EventsSHA256    string `json:"events_sha256"`
+	StartPrevHash   string `json:"start_prev_hash,omitempty"`
+	EndHash         string `json:"end_hash,omitempty"`
+	ChainContiguous bool   `json:"chain_contiguous"`
+	SignatureScheme string `json:"signature_scheme"`
+	SigningKeyID    string `json:"signing_key_id,omitempty"`
+	PublicKey       string `json:"public_key,omitempty"`
+}
+
+type signedExportBundle struct {
+	exportBundlePayload
+	Manifest          exportBundleManifest `json:"manifest"`
+	ManifestSignature string               `json:"manifest_signature"`
 }
 
 type exportEventsStore interface {
 	ExportEventsCSV(ctx context.Context, tenantID string, since, until time.Time, w io.Writer) error
 	CountEventsInRange(ctx context.Context, tenantID string, since, until time.Time) (int, error)
-	ListEventsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventListItem, error)
+	ListEventDetailsInRange(ctx context.Context, tenantID string, since, until time.Time, limit int) ([]console.EventDetail, error)
 }
 
 type inviteStore interface {
@@ -1029,7 +1076,7 @@ func (api *ConsoleAPI) handleInviteAccept(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if in.Token == "" || in.Password == "" {
+	if strings.TrimSpace(in.Token) == "" || strings.TrimSpace(in.Password) == "" {
 		writeError(w, http.StatusBadRequest, "token and password required")
 		return
 	}
@@ -1119,7 +1166,7 @@ func (api *ConsoleAPI) handleResetConfirm(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if in.Token == "" || in.Password == "" {
+	if strings.TrimSpace(in.Token) == "" || strings.TrimSpace(in.Password) == "" {
 		writeError(w, http.StatusBadRequest, "token and password required")
 		return
 	}
@@ -1163,7 +1210,7 @@ func (api *ConsoleAPI) handleSetupInitialize(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if in.Email == "" || in.Password == "" {
+	if strings.TrimSpace(in.Email) == "" || strings.TrimSpace(in.Password) == "" {
 		writeError(w, http.StatusBadRequest, "email, password, and first_tenant_name are required")
 		return
 	}
@@ -1198,6 +1245,9 @@ func (api *ConsoleAPI) handleSetupInitialize(w http.ResponseWriter, r *http.Requ
 	_, err = api.store.CreateUser(r.Context(), email, in.Password, "Admin", "platform_admin", nil, nil)
 	if err != nil {
 		api.log.Error("create platform admin failed", "error", err)
+		if _, cleanupErr := api.store.Pool().Exec(r.Context(), `DELETE FROM tenants WHERE id = $1`, tenant.ID); cleanupErr != nil {
+			api.log.Error("cleanup bootstrap tenant failed", "error", cleanupErr, "tenant_id", tenant.ID)
+		}
 		writeError(w, http.StatusInternalServerError, "failed to initialize admin user")
 		return
 	}
@@ -2197,21 +2247,27 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	events, err := api.exportStore.ListEventsInRange(r.Context(), tenant, since, until, maxBundleEvents)
+	events, err := api.exportStore.ListEventDetailsInRange(r.Context(), tenant, since, until, maxBundleEvents)
 	if err != nil {
 		api.log.Error("export bundle events failed", "error", err)
 		types.ErrInternal("failed to export bundle").WriteJSON(w)
 		return
 	}
 
-	bundle := map[string]any{
-		"version":     "1.0",
-		"tenant_id":   tenant,
-		"exported_at": time.Now().UTC().Format(time.RFC3339),
-		"since":       since.Format(time.RFC3339),
-		"until":       until.Format(time.RFC3339),
-		"events":      events,
-		"event_count": len(events),
+	payload := exportBundlePayload{
+		Version:    "1.1",
+		TenantID:   tenant,
+		ExportedAt: time.Now().UTC().Format(time.RFC3339),
+		Since:      since.Format(time.RFC3339),
+		Until:      until.Format(time.RFC3339),
+		Events:     events,
+		EventCount: len(events),
+	}
+	bundle, err := api.buildSignedExportBundle(payload)
+	if err != nil {
+		api.log.Error("build signed export bundle failed", "error", err)
+		types.ErrInternal("failed to build signed export bundle").WriteJSON(w)
+		return
 	}
 
 	// Atomic export: encode fully before writing to response.
@@ -2235,7 +2291,69 @@ func (api *ConsoleAPI) handleExportBundle(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func encodeBundleJSON(w io.Writer, bundle map[string]any) error {
+func (api *ConsoleAPI) buildSignedExportBundle(payload exportBundlePayload) (signedExportBundle, error) {
+	_, payloadHash, err := evidence.HashPayload(payload)
+	if err != nil {
+		return signedExportBundle{}, fmt.Errorf("hash export payload: %w", err)
+	}
+	_, eventsHash, err := evidence.HashPayload(payload.Events)
+	if err != nil {
+		return signedExportBundle{}, fmt.Errorf("hash export events: %w", err)
+	}
+	manifest := exportBundleManifest{
+		Version:         "1",
+		GeneratedAt:     payload.ExportedAt,
+		EventCount:      payload.EventCount,
+		PayloadSHA256:   payloadHash,
+		EventsSHA256:    eventsHash,
+		ChainContiguous: exportBundleChainContiguous(payload.Events),
+		SignatureScheme: evidence.SignatureSchemeEd25519,
+		SigningKeyID:    api.evidenceBundleSigner.KeyID,
+		PublicKey:       api.evidenceBundleSigner.PublicKeyBase64,
+	}
+	if len(payload.Events) > 0 {
+		manifest.StartPrevHash = payload.Events[0].PrevHash
+		manifest.EndHash = payload.Events[len(payload.Events)-1].Hash
+	}
+	signature, err := api.signExportBundleManifest(manifest)
+	if err != nil {
+		return signedExportBundle{}, err
+	}
+	return signedExportBundle{
+		exportBundlePayload: payload,
+		Manifest:            manifest,
+		ManifestSignature:   signature,
+	}, nil
+}
+
+func (api *ConsoleAPI) signExportBundleManifest(manifest exportBundleManifest) (string, error) {
+	if len(api.evidenceBundleSigner.PrivateKey) == 0 {
+		return "", fmt.Errorf("missing export bundle signing key")
+	}
+	canon, _, err := evidence.HashPayload(manifest)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize export manifest: %w", err)
+	}
+	signature := evidence.SignCanonicalPayload(canon, api.evidenceBundleSigner.PrivateKey)
+	if signature == "" {
+		return "", fmt.Errorf("failed to sign export manifest")
+	}
+	return signature, nil
+}
+
+func exportBundleChainContiguous(events []console.EventDetail) bool {
+	if len(events) <= 1 {
+		return true
+	}
+	for index := 1; index < len(events); index++ {
+		if events[index].PrevHash != events[index-1].Hash {
+			return false
+		}
+	}
+	return true
+}
+
+func encodeBundleJSON(w io.Writer, bundle any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(bundle)
@@ -2534,6 +2652,15 @@ func (api *ConsoleAPI) handleCreatePolicyVersion(w http.ResponseWriter, r *http.
 
 // MED-03: Uses the correct OPA package path via shared constant.
 func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
+	claims := claimsFromCtx(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !hasRole(claims, "platform_admin") && !hasRole(claims, "tenant_admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var in struct {
 		TenantID  string `json:"tenant_id"`
@@ -2546,6 +2673,18 @@ func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Reque
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
+	}
+	if !hasRole(claims, "platform_admin") {
+		scope := tenantScope(claims)
+		if scope == tenantDenySentinel || scope == "" {
+			writeError(w, http.StatusForbidden, "access denied for this tenant")
+			return
+		}
+		if strings.TrimSpace(in.TenantID) != "" && strings.TrimSpace(in.TenantID) != scope {
+			writeError(w, http.StatusForbidden, "access denied for this tenant")
+			return
+		}
+		in.TenantID = scope
 	}
 
 	opaURL := config.EnvOr("OPA_URL", "http://localhost:8181")
@@ -2568,18 +2707,10 @@ func (api *ConsoleAPI) handleSimulatePolicy(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to build simulation request")
 		return
 	}
-
-	resp, err := http.Post(opaURL+policy.OPAPolicyPath, "application/json", strings.NewReader(string(body)))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reach policy engine")
+	opaResp, apiErr := api.callPolicySimulationOPA(r.Context(), opaURL, body)
+	if apiErr != nil {
+		apiErr.WriteJSON(w)
 		return
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	var opaResp map[string]any
-	if err := json.Unmarshal(respBody, &opaResp); err != nil {
-		api.log.Error("decode OPA simulation response failed", "error", err)
 	}
 
 	result := map[string]any{

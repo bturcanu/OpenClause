@@ -2,6 +2,26 @@
 
 Connectors bridge OpenClause to external tools and services. Every action an AI agent attempts — posting a Slack message, creating a Jira ticket, querying a database — is routed through a connector.
 
+Important current limitation: OpenClause governs only the connector actions that are explicitly registered in the catalog. It does not automatically expose every API inside Slack, Jira, AWS, GitHub, or any other app. If an action is not registered, the agent cannot use it through OpenClause yet.
+
+## Best First Pilot Journeys
+
+OpenClause becomes useful fastest when you start with a small, opinionated pilot instead of a broad connector rollout.
+
+Recommended first journeys:
+
+- Slack: `slack.channel.list` + `slack.msg.post`
+- Jira: `jira.issue.list` + `jira.issue.create`
+- Postgres readonly + Webhook post: `postgres.query.readonly` + `webhook.post`
+
+Why these work well:
+
+- they give one fast read path and one obvious write/approval path
+- operators can verify them quickly in Audit Trail, Sessions, and Approvals
+- they generate meaningful pilot data without forcing a wide connector rollout
+
+See [PILOTS.md](PILOTS.md) for the full runtime, posture, and operator-review recipe.
+
 ## Architecture
 
 ```
@@ -17,7 +37,13 @@ The **Registry** (`pkg/connectors/registry.go`) holds two kinds of connectors:
 
 Remote connectors take precedence: if a tool name is registered both ways, the HTTP route wins.
 
+Remote connectors do not have to run inside Docker. They can run on a developer laptop, another container stack, or any reachable service endpoint, as long as the gateway can reach them over HTTP. In local Docker setups that usually means using a host-reachable address instead of bare `localhost` from inside the gateway container.
+
+That means adoption does not depend only on the small built-in catalog, but it does depend on having a connector or adapter that turns the target application into explicit `tool + action` operations OpenClause can govern.
+
 ## Available Connectors
+
+The list below is the currently shipped catalog, not an implicit promise that the whole application behind each connector is available. For example, Slack currently exposes three actions, not the entire Slack API.
 
 ### Remote connectors (separate binaries)
 
@@ -25,6 +51,8 @@ Remote connectors take precedence: if a tool name is registered both ways, the H
 |------|--------|---------|----------|
 | `slack` | `cmd/connector-slack` | `msg.post`, `channel.list`, `approval.request` | `SLACK_BOT_TOKEN` |
 | `jira` | `cmd/connector-jira` | `issue.create`, `issue.list` | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` |
+
+If you need additional actions inside one of these apps, you add them in the connector implementation and register them in the gateway catalog. If you need a completely different app, you add a new remote connector or future generic adapter path.
 
 ### Built-in connectors (`pkg/connectors/builtins/`)
 

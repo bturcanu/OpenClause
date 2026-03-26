@@ -1,0 +1,5 @@
+HTTP/1.1 200 OK
+Content-Type: application/zip
+Content-Disposition: attachment; filename="openclause-alpha-corp-support-bot-created.zip"
+
+(binary zip payload containing the writable onboarding artifacts from the submitted bundle)

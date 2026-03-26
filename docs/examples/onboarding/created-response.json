@@ -1,0 +1,109 @@
+{
+  "mode": "created",
+  "tenant": {
+    "id": "tenant-1",
+    "name": "Alpha Corp",
+    "created": false
+  },
+  "agent": {
+    "id": "agent-1",
+    "name": "Support Bot",
+    "status": "active",
+    "created_at": "2026-03-24T15:00:00Z",
+    "preview": false
+  },
+  "integration": {
+    "id": "integration-1",
+    "tenant_id": "tenant-1",
+    "agent_id": "agent-1",
+    "runtime": "python",
+    "environment_label": "staging",
+    "owner_name": "Platform Team",
+    "description": "First governed support pilot.",
+    "approval_posture": "pilot_safe",
+    "tools": [
+      {
+        "tool": "slack",
+        "action": "slack.channel.list"
+      },
+      {
+        "tool": "slack",
+        "action": "slack.msg.post"
+      }
+    ],
+    "created_at": "2026-03-24T15:00:00Z",
+    "updated_at": "2026-03-24T15:00:00Z"
+  },
+  "api_key": {
+    "id": "key-1",
+    "name": "Support Bot onboarding key",
+    "key_prefix": "sk-oc-de",
+    "raw_key": "sk-oc-demo-raw"
+  },
+  "bundle": {
+    "title": "Python SDK wrapper onboarding bundle",
+    "summary": "Tenant tenant-1 · Agent agent-1 · Python SDK wrapper",
+    "runtime": "python",
+    "runtime_label": "Python SDK wrapper",
+    "starter_file_name": "agent.py",
+    "environment": {
+      "OPENCLAUSE_BASE_URL": "http://localhost:8080",
+      "OPENCLAUSE_TENANT_ID": "tenant-1",
+      "OPENCLAUSE_AGENT_ID": "agent-1",
+      "OPENCLAUSE_API_KEY": "sk-oc-demo-raw"
+    },
+    "environment_script": "export OPENCLAUSE_BASE_URL=\"http://localhost:8080\"\nexport OPENCLAUSE_TENANT_ID=\"tenant-1\"\nexport OPENCLAUSE_AGENT_ID=\"agent-1\"\nexport OPENCLAUSE_API_KEY=\"sk-oc-demo-raw\"",
+    "environment_file": "OPENCLAUSE_BASE_URL=\"http://localhost:8080\"\nOPENCLAUSE_TENANT_ID=\"tenant-1\"\nOPENCLAUSE_AGENT_ID=\"agent-1\"\nOPENCLAUSE_API_KEY=\"sk-oc-demo-raw\"",
+    "starter_snippet": "def governed_call():\n    pass",
+    "readme_snippet": "# OpenClause Python SDK wrapper onboarding\n\n## Quick start\n\nKeep session_id, trace_id, and idempotency_key stable.",
+    "sample_call": "#!/usr/bin/env bash\nset -euo pipefail\n\n# Load environment first: source ./setup-env.sh\n# Success looks like a JSON payload with event_id and decision.\n# Then open Audit Trail and Sessions for the same tenant + agent and confirm the generated session_id.\n# If the decision comes back as \"approve\", use the generated Approvals link before retrying your runtime path.\nfor required_var in OPENCLAUSE_BASE_URL OPENCLAUSE_API_KEY OPENCLAUSE_TENANT_ID OPENCLAUSE_AGENT_ID; do\n  if [ -z \"${!required_var:-}\" ]; then\n    echo \"missing required environment variable: $required_var\" >&2\n    exit 1\n  fi\ndone\n\nrandom_id() {\n  if command -v uuidgen >/dev/null 2>&1; then\n    uuidgen\n    return 0\n  fi\n  if command -v python3 >/dev/null 2>&1; then\n    python3 - <<'PY'\nimport uuid\nprint(uuid.uuid4())\nPY\n    return 0\n  fi\n  printf 'oc-%s-%s\\n' \"$(date +%s)\" \"${RANDOM:-0}\"\n}\n\ntrace_id=\"trace-$(random_id)\"\nidempotency_key=\"$(random_id)\"\n\npayload=\"$(cat <<JSON\n{\n  \"tenant_id\": \"tenant-1\",\n  \"agent_id\": \"agent-1\",\n  \"tool\": \"slack\",\n  \"action\": \"slack.channel.list\",\n  \"params\": {\"example\": true},\n  \"risk_score\": 4,\n  \"user_id\": \"pilot-user\",\n  \"session_id\": \"demo-session-$(date +%s)\",\n  \"trace_id\": \"$trace_id\",\n  \"idempotency_key\": \"$idempotency_key\"\n}\nJSON\n)\"\n\ncurl -fsS \"$OPENCLAUSE_BASE_URL/v1/toolcalls\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"X-API-Key: $OPENCLAUSE_API_KEY\" \\\n  -d \"$payload\"",
+    "artifacts": [
+      {
+        "id": "env-script",
+        "label": "Environment shell exports",
+        "file_name": "setup-env.sh",
+        "path_hint": "setup-env.sh",
+        "kind": "environment_script",
+        "purpose": "Export OpenClause environment variables for local shells.",
+        "writable": true,
+        "language": "bash",
+        "content": "export OPENCLAUSE_BASE_URL=\"http://localhost:8080\""
+      },
+      {
+        "id": "starter",
+        "label": "Starter runtime file",
+        "file_name": "agent.py",
+        "path_hint": "agent.py",
+        "kind": "starter_file",
+        "purpose": "Golden-path runtime starter showing governed tool execution.",
+        "writable": true,
+        "language": "python",
+        "content": "def governed_call():\n    pass"
+      }
+    ],
+    "verification_checklist": [
+      "Send one governed slack.slack.channel.list call with the sample payload.",
+      "Open Audit Trail and confirm the event appears under the expected tenant and agent."
+    ],
+    "verification_links": [
+      {
+        "label": "Open Audit Trail",
+        "path": "/events?agent_id=agent-1&tenant_id=tenant-1",
+        "description": "Audit Trail already supports tenant_id and agent_id query filters."
+      },
+      {
+        "label": "Open Sessions",
+        "path": "/sessions?agent_id=agent-1&tenant_id=tenant-1",
+        "description": "Sessions narrows the run list to this tenant and agent."
+      },
+      {
+        "label": "Open Approvals",
+        "path": "/approvals?tenant_id=tenant-1",
+        "description": "Use this when your pilot routes writes or risky actions through approval."
+      }
+    ],
+    "notes": [
+      "Generated starter bundle for the v0.5 golden path."
+    ]
+  }
+}

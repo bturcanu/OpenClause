@@ -34,6 +34,7 @@ type fakeInviteStore struct {
 	listErr           error
 	consumedInvite    *console.InviteAcceptResult
 	consumeErr        error
+	consumeCalled     bool
 }
 
 func (f *fakeInviteStore) GetTenant(_ context.Context, _ string) (*console.Tenant, error) {
@@ -63,6 +64,7 @@ func (f *fakeInviteStore) ListInvites(_ context.Context, _ *string, _, _ int) ([
 }
 
 func (f *fakeInviteStore) ConsumeInviteAccept(_ context.Context, _, _, _ string) (*console.InviteAcceptResult, error) {
+	f.consumeCalled = true
 	return f.consumedInvite, f.consumeErr
 }
 
@@ -260,6 +262,24 @@ func TestHandleInviteAcceptRejectsInvalidToken(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleInviteAcceptRejectsWhitespaceOnlyPassword(t *testing.T) {
+	store := &fakeInviteStore{}
+	api := newTestInviteAPI(store, &fakeInviteEmailSender{})
+
+	body := []byte(`{"token":"tok-123","password":"   "}`)
+	req := httptest.NewRequest(http.MethodPost, "/auth/invite/accept", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	api.handleInviteAccept(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if store.consumeCalled {
+		t.Fatal("expected store to not be called for whitespace-only password")
 	}
 }
 

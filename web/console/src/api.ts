@@ -1,5 +1,6 @@
 const API_BASE = '/api';
 const apiFailureCounts = new Map<string, number>()
+let unauthorizedRedirect: ((path: string) => void) | null = null
 
 export class APIClientError extends Error {
   status: number
@@ -44,6 +45,18 @@ function decodeTokenClaims(token: string | null): StoredAuthClaims | null {
 export function clearStoredAuth() {
   localStorage.removeItem('oc_token')
   localStorage.removeItem('oc_session_id')
+}
+
+function redirectTo(path: string) {
+  if (unauthorizedRedirect) {
+    unauthorizedRedirect(path)
+    return
+  }
+  window.location.href = path
+}
+
+export function setUnauthorizedRedirectForTests(handler: ((path: string) => void) | null) {
+  unauthorizedRedirect = handler
 }
 
 export function getStoredAuthClaims(): StoredAuthClaims | null {
@@ -138,7 +151,7 @@ async function apiFetch(path: string, options?: RequestInit) {
     });
     if (res.status === 401) {
       clearStoredAuth();
-      window.location.href = '/login';
+      redirectTo('/login');
       throw new Error('Unauthorized');
     }
     if (!res.ok) {
@@ -184,6 +197,8 @@ export const api = {
   get: (path: string) => apiFetch(path).then(readJSONResponse),
   post: (path: string, body?: unknown) =>
     apiFetch(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }).then(readJSONResponse),
+  postBlob: (path: string, body?: unknown) =>
+    apiFetch(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }).then(r => r.blob()),
   put: (path: string, body?: unknown) =>
     apiFetch(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }).then(readJSONResponse),
   delete: (path: string) =>

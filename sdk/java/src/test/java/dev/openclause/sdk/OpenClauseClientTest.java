@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.sun.net.httpserver.HttpServer;
 import dev.openclause.sdk.exceptions.APIException;
 import dev.openclause.sdk.models.ExecutionResult;
+import dev.openclause.sdk.models.ToolCallEvent;
 import dev.openclause.sdk.models.ToolCallRequest;
 import dev.openclause.sdk.models.ToolCallResponse;
 import org.junit.jupiter.api.Test;
@@ -87,7 +88,10 @@ class OpenClauseClientTest {
                 .riskFactors(List.of("destructive", "production"))
                 .userId("user_xyz")
                 .sessionId("sess_456")
+                .labels(Map.of("user_name", "Casey", "user_email", "casey@example.com"))
+                .sourceIp("203.0.113.10")
                 .traceId("trace_789")
+                .requestedAt("2026-01-15T10:30:00Z")
                 .schemaVersion("1.0")
                 .build();
 
@@ -96,7 +100,10 @@ class OpenClauseClientTest {
         assertTrue(json.contains("\"risk_score\":8"));
         assertTrue(json.contains("\"user_id\":\"user_xyz\""));
         assertTrue(json.contains("\"session_id\":\"sess_456\""));
+        assertTrue(json.contains("\"labels\""));
+        assertTrue(json.contains("\"source_ip\":\"203.0.113.10\""));
         assertTrue(json.contains("\"trace_id\":\"trace_789\""));
+        assertTrue(json.contains("\"requested_at\":\"2026-01-15T10:30:00Z\""));
         assertTrue(json.contains("\"schema_version\":\"1.0\""));
     }
 
@@ -196,13 +203,91 @@ class OpenClauseClientTest {
                 .resource("res")
                 .userId("u")
                 .sessionId("s")
+                .labels(Map.of("user_name", "Casey"))
+                .sourceIp("203.0.113.10")
                 .traceId("tr")
+                .requestedAt("2026-01-15T10:30:00Z")
                 .build();
 
         assertEquals("res", request.getResource());
         assertEquals("u", request.getUserId());
         assertEquals("s", request.getSessionId());
+        assertEquals("203.0.113.10", request.getSourceIp());
+        assertEquals("2026-01-15T10:30:00Z", request.getRequestedAt());
         assertEquals("tr", request.getTraceId());
+    }
+
+    @Test
+    void deserializeToolCallEnvelopePreservesLinkedRequestMetadata() {
+        String json = "{"
+                + "\"event_id\":\"evt_005\","
+                + "\"request\":{"
+                + "\"tenant_id\":\"t_123\","
+                + "\"agent_id\":\"agent_abc\","
+                + "\"tool\":\"slack\","
+                + "\"action\":\"msg.post\","
+                + "\"idempotency_key\":\"key-005\","
+                + "\"session_id\":\"sess_456\","
+                + "\"trace_id\":\"trace_789\","
+                + "\"labels\":{\"user_name\":\"Casey\",\"user_email\":\"casey@example.com\"},"
+                + "\"requested_at\":\"2026-01-15T10:30:00Z\""
+                + "},"
+                + "\"decision\":\"allow\","
+                + "\"policy_result\":{\"decision\":\"allow\",\"reason\":\"ok\"},"
+                + "\"execution_result\":{\"status\":\"success\",\"duration_ms\":12},"
+                + "\"hash\":\"hash-1\","
+                + "\"prev_hash\":\"hash-0\","
+                + "\"received_at\":\"2026-01-15T10:31:00Z\""
+                + "}";
+
+        ToolCallEvent event = gson.fromJson(json, ToolCallEvent.class);
+        assertNotNull(event.getRequest());
+        assertEquals("sess_456", event.getSessionId());
+        assertEquals("trace_789", event.getTraceId());
+        assertEquals("slack", event.getTool());
+        assertEquals("msg.post", event.getAction());
+        assertEquals("success", event.getResult().getStatus());
+        assertEquals("ok", event.getReason());
+        assertEquals("hash-1", event.getHash());
+        assertEquals("2026-01-15T10:31:00Z", event.getReceivedAt());
+    }
+
+    @Test
+    void deserializeToolCallEventWithoutNestedRequestUsesTopLevelFields() {
+        String json = "{"
+                + "\"event_id\":\"evt_006\","
+                + "\"decision\":\"allow\","
+                + "\"tenant_id\":\"tenant-1\","
+                + "\"agent_id\":\"agent-1\","
+                + "\"tool\":\"slack\","
+                + "\"action\":\"msg.post\","
+                + "\"resource\":\"channels/general\","
+                + "\"risk_score\":2,"
+                + "\"user_id\":\"user-1\","
+                + "\"session_id\":\"sess-1\","
+                + "\"trace_id\":\"trace-1\","
+                + "\"labels\":{\"user_name\":\"Casey\"},"
+                + "\"source_ip\":\"203.0.113.10\","
+                + "\"requested_at\":\"2026-01-15T10:30:00Z\","
+                + "\"policy_result\":{\"decision\":\"allow\",\"reason\":\"ok\"},"
+                + "\"result\":{\"status\":\"success\",\"duration_ms\":12},"
+                + "\"received_at\":\"2026-01-15T10:31:00Z\""
+                + "}";
+
+        ToolCallEvent event = gson.fromJson(json, ToolCallEvent.class);
+        assertEquals("tenant-1", event.getTenantId());
+        assertEquals("agent-1", event.getAgentId());
+        assertEquals("slack", event.getTool());
+        assertEquals("msg.post", event.getAction());
+        assertEquals("channels/general", event.getResource());
+        assertEquals(2, event.getRiskScore());
+        assertEquals("user-1", event.getUserId());
+        assertEquals("sess-1", event.getSessionId());
+        assertEquals("trace-1", event.getTraceId());
+        assertEquals("203.0.113.10", event.getSourceIp());
+        assertEquals("2026-01-15T10:30:00Z", event.getRequestedAt());
+        assertEquals("success", event.getResult().getStatus());
+        assertEquals("ok", event.getReason());
     }
 
     @Test

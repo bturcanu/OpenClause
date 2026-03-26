@@ -38,6 +38,42 @@ interface Event {
   tenant_id: string
 }
 
+function buildGettingStartedPlan(overview: OverviewData) {
+  const hasTraffic = overview.total_events > 0
+  const hasPendingApprovals = overview.pending_approvals > 0
+  const hasPilotSignal = hasTraffic || hasPendingApprovals
+  const headline = !hasPilotSignal
+    ? 'Create one governed agent integration first.'
+    : !hasTraffic
+      ? 'Your pilot is waiting on the first governed call. Send one now.'
+      : hasPendingApprovals
+        ? 'Traffic is flowing. Clear pending approvals to keep the pilot moving.'
+        : 'Traffic is flowing. Verify one event and one session, then widen the pilot carefully.'
+  return {
+    headline,
+    steps: [
+      {
+        label: 'Create a governed integration',
+        done: hasPilotSignal,
+        path: '/tenants?onboarding=1',
+        actionLabel: hasPilotSignal ? 'Open tenants' : 'Create integration',
+      },
+      {
+        label: 'Send one governed request',
+        done: hasTraffic,
+        path: '/tenants',
+        actionLabel: hasTraffic ? 'Open tenants' : 'Pick a tenant',
+      },
+      {
+        label: hasPendingApprovals ? 'Review pending approvals' : 'Verify the first event and session',
+        done: hasTraffic && !hasPendingApprovals,
+        path: hasPendingApprovals ? '/approvals' : '/events',
+        actionLabel: hasPendingApprovals ? 'Open approvals' : 'Open audit trail',
+      },
+    ],
+  }
+}
+
 const EMPTY_OVERVIEW: OverviewData = {
   total_events: 0,
   allow_count: 0,
@@ -155,12 +191,23 @@ export default function Overview() {
       until: activeBucketWindow.end.toISOString(),
     })
     : ''
+  const gettingStarted = buildGettingStartedPlan(overview)
 
   return (
     <div>
       <PageHeaderBlock
         title="Overview"
         description="System-wide analytics and recent activity across tenants, approvals, and governed tool runs."
+        actions={(
+          <div className="btn-group">
+            <Link to="/tenants?onboarding=1" className="btn btn-primary">
+              Create Agent Integration
+            </Link>
+            <Link to="/tenants" className="btn btn-outline">
+              View Tenants
+            </Link>
+          </div>
+        )}
       />
 
       {error ? <InlineErrorState message={error} onRetry={() => void fetchOverview()} /> : null}
@@ -172,6 +219,21 @@ export default function Overview() {
         <StatCard label="Approval Required" value={overview.approve_count.toLocaleString()} tone="yellow" />
         <StatCard label="Pending Approvals" value={overview.pending_approvals.toLocaleString()} tone="yellow" />
         <StatCard label="Active Tenants" value={overview.active_tenants.toLocaleString()} tone="blue" />
+      </div>
+
+      <div className="detail-panel">
+        <h3>Getting Started</h3>
+        <div className="table-subtext">{gettingStarted.headline}</div>
+        <ul className="onboarding-checklist mt-16">
+          {gettingStarted.steps.map(step => (
+            <li key={step.label} className="onboarding-checklist-item">
+              <div>
+                <strong>{step.done ? 'Done' : 'Next'}</strong> {step.label}
+              </div>
+              <Link to={step.path}>{step.actionLabel}</Link>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {!loading && timeseries.length > 0 ? (

@@ -17,6 +17,27 @@ services:
       retries: 5
     restart: unless-stopped
 
+  migrate:
+    image: postgres:16-alpine
+    env_file: ../.env
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../migrations:/migrations:ro
+    command:
+      - /bin/sh
+      - -lc
+      - >
+        set -eu;
+        until pg_isready -h postgres -p 5432 -U ${POSTGRES_USER:-openclause} -d ${POSTGRES_DB:-openclause}; do
+          sleep 1;
+        done;
+        psql -v ON_ERROR_STOP=1 -1 -h postgres -p 5432 -U ${POSTGRES_USER:-openclause} -d ${POSTGRES_DB:-openclause} -f /migrations/001_initial.sql
+    restart: "no"
+
   minio:
     image: minio/minio:RELEASE.2024-06-13T22-53-53Z
     ports:
@@ -67,6 +88,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 2 http://127.0.0.1:8081/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   connector-slack:
@@ -80,6 +108,11 @@ services:
     env_file: ../.env
     environment:
       CONNECTOR_SLACK_ADDR: :8082
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 2 http://127.0.0.1:8082/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   connector-jira:
@@ -93,6 +126,11 @@ services:
     env_file: ../.env
     environment:
       CONNECTOR_JIRA_ADDR: :8083
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 2 http://127.0.0.1:8083/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   gateway:
@@ -117,14 +155,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       opa:
         condition: service_healthy
       approvals:
-        condition: service_started
+        condition: service_healthy
       connector-slack:
-        condition: service_started
+        condition: service_healthy
       connector-jira:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 2 http://127.0.0.1:8080/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   console-api:
@@ -142,15 +187,23 @@ services:
       POSTGRES_SSLMODE: disable
       CONSOLE_API_ADDR: :8090
       GATEWAY_URL: http://gateway:8080
+      PUBLIC_GATEWAY_URL: ${PUBLIC_GATEWAY_URL:-http://localhost:8080}
       CONSOLE_JWT_SECRET: ${CONSOLE_JWT_SECRET:?CONSOLE_JWT_SECRET must be set in .env}
       OPA_URL: http://opa:8181
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       opa:
         condition: service_healthy
       gateway:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 2 http://127.0.0.1:8090/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   console-ui:
@@ -180,9 +233,40 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       connector-slack:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
+
+  poststart-smoke:
+    image: curlimages/curl:8.8.0
+    profiles: ["smoke"]
+    env_file: ../.env
+    environment:
+      GATEWAY_URL: http://gateway:8080
+      APPROVALS_URL: http://approvals:8081
+      CONNECTOR_SLACK_URL: http://connector-slack:8082
+      CONNECTOR_JIRA_URL: http://connector-jira:8083
+      CONSOLE_API_URL: http://console-api:8090
+      OPA_URL: http://opa:8181
+    volumes:
+      - ../scripts:/scripts:ro
+    depends_on:
+      approvals:
+        condition: service_healthy
+      connector-slack:
+        condition: service_healthy
+      connector-jira:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      console-api:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+    command: ["sh", "/scripts/post-start-smoke.sh"]
+    restart: "no"
 
 volumes:
   postgres_data:

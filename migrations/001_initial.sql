@@ -25,6 +25,44 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
 
+-- ── Agent integrations (persistent onboarding/runtime metadata) ────────────
+
+CREATE TABLE IF NOT EXISTS agent_integrations (
+    id                TEXT PRIMARY KEY,
+    tenant_id         TEXT NOT NULL REFERENCES tenants(id),
+    agent_id          TEXT NOT NULL REFERENCES agents(id),
+    runtime           TEXT NOT NULL,
+    environment_label TEXT NOT NULL DEFAULT '',
+    owner_name        TEXT NOT NULL DEFAULT '',
+    description       TEXT NOT NULL DEFAULT '',
+    approval_posture  TEXT NOT NULL DEFAULT '',
+    tools             JSONB NOT NULL DEFAULT '[]',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_integrations_tenant_agent
+    ON agent_integrations(tenant_id, agent_id);
+
+CREATE TABLE IF NOT EXISTS agent_integration_revisions (
+    id                TEXT PRIMARY KEY,
+    integration_id    TEXT NOT NULL REFERENCES agent_integrations(id) ON DELETE CASCADE,
+    tenant_id         TEXT NOT NULL REFERENCES tenants(id),
+    agent_id          TEXT NOT NULL REFERENCES agents(id),
+    mode              TEXT NOT NULL DEFAULT '',
+    runtime           TEXT NOT NULL,
+    environment_label TEXT NOT NULL DEFAULT '',
+    owner_name        TEXT NOT NULL DEFAULT '',
+    description       TEXT NOT NULL DEFAULT '',
+    approval_posture  TEXT NOT NULL DEFAULT '',
+    tools             JSONB NOT NULL DEFAULT '[]',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_integration_revisions_tenant_agent_created
+    ON agent_integration_revisions(tenant_id, agent_id, created_at DESC);
+
 -- ── API Keys (DB-backed, hashed) ────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS api_keys (

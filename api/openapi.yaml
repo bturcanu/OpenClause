@@ -13,6 +13,8 @@ servers:
     description: Local gateway
   - url: http://localhost:8081
     description: Local approvals service
+  - url: http://localhost:8090
+    description: Local console API
 
 security:
   - ApiKeyAuth: []
@@ -301,6 +303,438 @@ paths:
         "403":
           description: Approver not allowed for tenant
 
+  # ── Console Onboarding ──────────────────────────────────────────────────
+  /admin/onboarding/integrations:
+    post:
+      operationId: createOnboardingIntegration
+      summary: Create an onboarding integration bundle and real credentials
+      description: >
+        Creates or selects tenant context, creates an agent, creates an API key,
+        and returns the generated onboarding bundle. This is the only onboarding
+        mode that returns a one-time raw API key.
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingIntegrationInput"
+      responses:
+        "201":
+          description: Created onboarding integration bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingCreatedResponse"
+        "400":
+          description: Invalid request body, runtime, or tool selection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "403":
+          description: Insufficient permissions for the requested tenant operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "404":
+          description: Referenced tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "502":
+          description: Failed to load connector catalog from the gateway
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /admin/onboarding/bundles/preview:
+    post:
+      operationId: previewOnboardingBundle
+      summary: Generate a non-destructive onboarding bundle for an existing tenant
+      description: >
+        Returns generated onboarding artifacts for an existing tenant without
+        creating a tenant, agent, or API key. The response uses a synthetic
+        preview agent id and placeholder API key guidance.
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingPreviewInput"
+      responses:
+        "200":
+          description: Preview onboarding bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingPreviewResponse"
+        "400":
+          description: Invalid request body, runtime, or tool selection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "403":
+          description: Insufficient permissions for the requested tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "404":
+          description: Referenced tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "502":
+          description: Failed to load connector catalog from the gateway
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /admin/onboarding/bundles/regenerate:
+    post:
+      operationId: regenerateOnboardingBundle
+      summary: Regenerate onboarding artifacts for an existing tenant and agent
+      description: >
+        Returns a fresh onboarding bundle for an existing tenant and agent
+        without creating new tenant, agent, or API key state. Raw API keys are
+        never reissued here; responses include an existing key reference only
+        when one is available.
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingRegenerateInput"
+      responses:
+        "200":
+          description: Regenerated onboarding bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingRegeneratedResponse"
+        "400":
+          description: Invalid request body, runtime, or tool selection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "403":
+          description: Insufficient permissions for the requested tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "404":
+          description: Referenced tenant or agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "502":
+          description: Failed to load connector catalog from the gateway
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /admin/onboarding/bundles/regenerate-defaults:
+    post:
+      operationId: regenerateOnboardingBundleWithDefaults
+      summary: Regenerate onboarding artifacts from tenant and agent context using explicit defaults
+      description: >
+        Regenerates onboarding artifacts for an existing tenant and agent using
+        reviewable curated defaults. Current defaults are runtime `python`,
+        approval posture `pilot_safe`, and up to two curated tools that are
+        available in the live connector catalog.
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingRegenerateDefaultsInput"
+      responses:
+        "200":
+          description: Regenerated onboarding bundle built from curated defaults
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingRegeneratedDefaultsResponse"
+        "400":
+          description: Invalid request body or referenced agent context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "403":
+          description: Insufficient permissions for the requested tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "404":
+          description: Referenced tenant or agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "409":
+          description: No curated default tool set is available in the current connector catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "502":
+          description: Failed to load connector catalog from the gateway
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /admin/onboarding/bundles/archive:
+    post:
+      operationId: archiveOnboardingBundle
+      summary: Archive writable onboarding artifacts into a downloadable zip
+      description: >
+        Accepts a generated onboarding bundle response and returns a zip archive
+        containing only the bundle's writable artifacts.
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingBundleArchiveRequest"
+      responses:
+        "200":
+          description: Zip archive of writable onboarding artifacts
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid bundle payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /admin/tenants/{tenant_id}/agents/{agent_id}/integration:
+    get:
+      operationId: getAgentIntegration
+      summary: Fetch the saved onboarding integration snapshot for an existing agent
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: agent_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Saved integration snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingBundleIntegration"
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "403":
+          description: Insufficient permissions for the requested tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "404":
+          description: Integration not found for the requested tenant and agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /admin/tenants/{tenant_id}/agents/{agent_id}/integration/revisions:
+    get:
+      operationId: listAgentIntegrationRevisions
+      summary: List saved onboarding integration revisions for an existing agent
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: agent_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Saved integration revisions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingIntegrationRevisionListResponse"
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "403":
+          description: Insufficient permissions for the requested tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
+  /admin/tenants/{tenant_id}/agents/{agent_id}/integration/bundle:
+    get:
+      operationId: getAgentIntegrationBundle
+      summary: Fetch or archive the saved onboarding bundle for an existing agent
+      description: >
+        Builds a read-only onboarding bundle for an existing tenant and agent
+        from the saved integration snapshot. When `defaults=true`, the server
+        prefers explicit default regeneration behavior. When `archive=true`, the
+        response is a writable artifact zip instead of JSON.
+      tags: [Onboarding]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: agent_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: defaults
+          required: false
+          schema:
+            type: boolean
+        - in: query
+          name: archive
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Saved bundle response or archive
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OnboardingFetchedResponse"
+                  - $ref: "#/components/schemas/OnboardingFetchedDefaultsResponse"
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Missing or invalid console bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "403":
+          description: Insufficient permissions for the requested tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "404":
+          description: Referenced tenant, agent, or saved integration not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "409":
+          description: Saved bundle could not be built from the current integration or curated defaults
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+        "502":
+          description: Failed to load connector catalog from the gateway
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIError"
+
   # ── Health ───────────────────────────────────────────────────────────────
   /healthz:
     get:
@@ -340,6 +774,10 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
 
   schemas:
     # ── Tool Call ────────────────────────────────────────────────────────
@@ -523,6 +961,16 @@ components:
           type: string
         agent_id:
           type: string
+        user_id:
+          type: string
+        user_name:
+          type: string
+        user_email:
+          type: string
+        session_id:
+          type: string
+        trace_id:
+          type: string
         tool:
           type: string
         action:
@@ -532,6 +980,8 @@ components:
         risk_score:
           type: integer
         reason:
+          type: string
+        deny_reason:
           type: string
         status:
           type: string
@@ -604,6 +1054,471 @@ components:
           type: string
         agent_id:
           type: string
+
+    # ── Console Onboarding ──────────────────────────────────────────────
+    OnboardingRuntime:
+      type: string
+      enum: [python, typescript, langchain, openai_local]
+
+    OnboardingMode:
+      type: string
+      enum: [created, preview, regenerated, regenerated_defaults, fetched, fetched_defaults]
+
+    OnboardingSelectedTool:
+      type: object
+      required: [tool, action]
+      properties:
+        tool:
+          type: string
+        action:
+          type: string
+
+    OnboardingIntegrationExistingTenantInput:
+      type: object
+      required: [runtime, tenant_id, agent_name, tools]
+      properties:
+        runtime:
+          $ref: "#/components/schemas/OnboardingRuntime"
+        tenant_id:
+          type: string
+        agent_name:
+          type: string
+        environment_label:
+          type: string
+        owner_name:
+          type: string
+        description:
+          type: string
+        approval_posture:
+          type: string
+          enum: [pilot_safe, read_only_first, tenant_default]
+        tools:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OnboardingSelectedTool"
+
+    OnboardingIntegrationNewTenantInput:
+      type: object
+      required: [runtime, new_tenant_name, agent_name, tools]
+      properties:
+        runtime:
+          $ref: "#/components/schemas/OnboardingRuntime"
+        new_tenant_name:
+          type: string
+        agent_name:
+          type: string
+        environment_label:
+          type: string
+        owner_name:
+          type: string
+        description:
+          type: string
+        approval_posture:
+          type: string
+          enum: [pilot_safe, read_only_first, tenant_default]
+        tools:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OnboardingSelectedTool"
+
+    OnboardingIntegrationInput:
+      description: >
+        Create payload for the real onboarding integration flow. Provide either
+        `tenant_id` for an existing tenant or `new_tenant_name` for inline
+        tenant creation.
+      oneOf:
+        - $ref: "#/components/schemas/OnboardingIntegrationExistingTenantInput"
+        - $ref: "#/components/schemas/OnboardingIntegrationNewTenantInput"
+
+    OnboardingPreviewInput:
+      type: object
+      required: [runtime, tenant_id, agent_name, tools]
+      properties:
+        runtime:
+          $ref: "#/components/schemas/OnboardingRuntime"
+        tenant_id:
+          type: string
+        agent_name:
+          type: string
+        environment_label:
+          type: string
+        owner_name:
+          type: string
+        description:
+          type: string
+        approval_posture:
+          type: string
+          enum: [pilot_safe, read_only_first, tenant_default]
+        tools:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OnboardingSelectedTool"
+
+    OnboardingRegenerateInput:
+      type: object
+      required: [runtime, tenant_id, agent_id, tools]
+      properties:
+        runtime:
+          $ref: "#/components/schemas/OnboardingRuntime"
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+          description: Optional caller-side hint; the server resolves the real agent by `tenant_id` + `agent_id`.
+        environment_label:
+          type: string
+        owner_name:
+          type: string
+        description:
+          type: string
+        approval_posture:
+          type: string
+          enum: [pilot_safe, read_only_first, tenant_default]
+        tools:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OnboardingSelectedTool"
+
+    OnboardingRegenerateDefaultsInput:
+      type: object
+      required: [tenant_id, agent_id]
+      properties:
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        environment_label:
+          type: string
+        owner_name:
+          type: string
+        description:
+          type: string
+
+    OnboardingBundleDefault:
+      type: object
+      required: [field, value]
+      properties:
+        field:
+          type: string
+        value:
+          type: string
+        reason:
+          type: string
+
+    OnboardingBundleTenant:
+      type: object
+      required: [id, name, created]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created:
+          type: boolean
+
+    OnboardingBundleAgent:
+      type: object
+      required: [id, name, status, created_at, preview]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          description: >
+            Real creation timestamp for created/regenerated bundles, or a
+            synthetic preview timestamp for preview bundles.
+        preview:
+          type: boolean
+
+    OnboardingBundleIntegration:
+      type: object
+      required: [id, tenant_id, agent_id, runtime, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        runtime:
+          $ref: "#/components/schemas/OnboardingRuntime"
+        environment_label:
+          type: string
+        owner_name:
+          type: string
+        description:
+          type: string
+        approval_posture:
+          type: string
+          enum: [pilot_safe, read_only_first, tenant_default]
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnboardingSelectedTool"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OnboardingBundleIntegrationRevision:
+      type: object
+      required: [id, integration_id, tenant_id, agent_id, mode, runtime, created_at]
+      properties:
+        id:
+          type: string
+        integration_id:
+          type: string
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        mode:
+          type: string
+          enum: [created, regenerated, regenerated_defaults]
+        runtime:
+          $ref: "#/components/schemas/OnboardingRuntime"
+        environment_label:
+          type: string
+        owner_name:
+          type: string
+        description:
+          type: string
+        approval_posture:
+          type: string
+          enum: [pilot_safe, read_only_first, tenant_default]
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnboardingSelectedTool"
+        created_at:
+          type: string
+          format: date-time
+
+    OnboardingIntegrationRevisionListResponse:
+      type: object
+      required: [tenant_id, agent_id, revisions, total, limit]
+      properties:
+        tenant_id:
+          type: string
+        agent_id:
+          type: string
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnboardingBundleIntegrationRevision"
+        total:
+          type: integer
+        limit:
+          type: integer
+
+    OnboardingBundleAPIKey:
+      type: object
+      required: [id, name, key_prefix]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        key_prefix:
+          type: string
+        raw_key:
+          type: string
+          description: >
+            One-time raw API key. Present only for create responses and never
+            returned by preview or regenerate flows.
+        expires_at:
+          type: string
+          format: date-time
+
+    OnboardingBundleArtifact:
+      type: object
+      required: [id, label, file_name, path_hint, kind, purpose, writable, content]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        file_name:
+          type: string
+        path_hint:
+          type: string
+        kind:
+          type: string
+        purpose:
+          type: string
+        writable:
+          type: boolean
+        executable:
+          type: boolean
+          description: >
+            Present for writable shell artifacts that should be executable after
+            download, such as generated smoke-test helpers.
+        language:
+          type: string
+        content:
+          type: string
+
+    OnboardingVerificationLink:
+      type: object
+      required: [label, path]
+      properties:
+        label:
+          type: string
+        path:
+          type: string
+        description:
+          type: string
+
+    OnboardingBundle:
+      type: object
+      required:
+        - title
+        - summary
+        - runtime
+        - runtime_label
+        - starter_file_name
+        - environment
+        - environment_script
+        - environment_file
+        - starter_snippet
+        - readme_snippet
+        - sample_call
+        - artifacts
+        - verification_checklist
+        - verification_links
+        - notes
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        runtime:
+          $ref: "#/components/schemas/OnboardingRuntime"
+        runtime_label:
+          type: string
+        starter_file_name:
+          type: string
+        environment:
+          type: object
+          additionalProperties:
+            type: string
+        environment_script:
+          type: string
+        environment_file:
+          type: string
+        starter_snippet:
+          type: string
+        readme_snippet:
+          type: string
+        sample_call:
+          type: string
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnboardingBundleArtifact"
+        verification_checklist:
+          type: array
+          items:
+            type: string
+        verification_links:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnboardingVerificationLink"
+        applied_defaults:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnboardingBundleDefault"
+        notes:
+          type: array
+          items:
+            type: string
+
+    OnboardingBundleResponse:
+      type: object
+      required: [mode, tenant, agent, bundle]
+      properties:
+        mode:
+          $ref: "#/components/schemas/OnboardingMode"
+        tenant:
+          $ref: "#/components/schemas/OnboardingBundleTenant"
+        agent:
+          $ref: "#/components/schemas/OnboardingBundleAgent"
+        integration:
+          $ref: "#/components/schemas/OnboardingBundleIntegration"
+        api_key:
+          $ref: "#/components/schemas/OnboardingBundleAPIKey"
+        bundle:
+          $ref: "#/components/schemas/OnboardingBundle"
+
+    OnboardingCreatedResponse:
+      allOf:
+        - $ref: "#/components/schemas/OnboardingBundleResponse"
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum: [created]
+
+    OnboardingPreviewResponse:
+      allOf:
+        - $ref: "#/components/schemas/OnboardingBundleResponse"
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum: [preview]
+
+    OnboardingRegeneratedResponse:
+      allOf:
+        - $ref: "#/components/schemas/OnboardingBundleResponse"
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum: [regenerated]
+
+    OnboardingRegeneratedDefaultsResponse:
+      allOf:
+        - $ref: "#/components/schemas/OnboardingBundleResponse"
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum: [regenerated_defaults]
+
+    OnboardingFetchedResponse:
+      allOf:
+        - $ref: "#/components/schemas/OnboardingBundleResponse"
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum: [fetched]
+
+    OnboardingFetchedDefaultsResponse:
+      allOf:
+        - $ref: "#/components/schemas/OnboardingBundleResponse"
+        - type: object
+          properties:
+            mode:
+              type: string
+              enum: [fetched_defaults]
+
+    OnboardingBundleArchiveRequest:
+      $ref: "#/components/schemas/OnboardingBundleResponse"
 
     StatusResponse:
       type: object

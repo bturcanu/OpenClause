@@ -1,0 +1,46 @@
+{
+  "tenant_id": "tenant-1",
+  "agent_id": "agent-1",
+  "revisions": [
+    {
+      "id": "revision-2",
+      "integration_id": "integration-1",
+      "tenant_id": "tenant-1",
+      "agent_id": "agent-1",
+      "mode": "regenerated",
+      "runtime": "typescript",
+      "environment_label": "production",
+      "owner_name": "Support Engineering",
+      "description": "Saved TypeScript pilot runtime for governed support actions.",
+      "approval_posture": "pilot_safe",
+      "tools": [
+        {
+          "tool": "slack",
+          "action": "slack.msg.post"
+        }
+      ],
+      "created_at": "2026-03-25T09:10:00Z"
+    },
+    {
+      "id": "revision-1",
+      "integration_id": "integration-1",
+      "tenant_id": "tenant-1",
+      "agent_id": "agent-1",
+      "mode": "created",
+      "runtime": "typescript",
+      "environment_label": "staging",
+      "owner_name": "Platform Team",
+      "description": "Initial TypeScript pilot setup.",
+      "approval_posture": "pilot_safe",
+      "tools": [
+        {
+          "tool": "slack",
+          "action": "slack.channel.list"
+        }
+      ],
+      "created_at": "2026-03-24T15:00:00Z"
+    }
+  ],
+  "total": 2,
+  "limit": 20
+}

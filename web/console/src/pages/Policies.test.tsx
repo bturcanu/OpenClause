@@ -1,11 +1,107 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import { api } from '../api'
+import { APIClientError, api } from '../api'
 import Policies from './Policies'
 import { renderRoute } from '../test/render'
 
 describe('Policies page', () => {
+  it('switches tenants when the tenant_id query param changes after the page is already loaded', async () => {
+    const user = userEvent.setup()
+    const getSpy = vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/admin/tenants') {
+        return [
+          { id: 'tenant-1', name: 'Tenant One', status: 'active' },
+          { id: 'tenant-2', name: 'Tenant Two', status: 'active' },
+        ]
+      }
+      if (path === '/admin/tenants/tenant-1/policy/config') {
+        return {
+          max_risk_auto_approve: 5,
+          read_actions: ['jira.issue.read'],
+          write_actions: ['jira.issue.create'],
+          destructive_actions: [],
+          require_destructive_approval: true,
+        }
+      }
+      if (path === '/admin/tenants/tenant-1/policy/versions') {
+        return [
+          {
+            id: 1,
+            version: 'v1',
+            deployed_by: 'admin@example.com',
+            deployed_at: '2026-03-23T12:00:00Z',
+            notes: 'Tenant one',
+            policy_data: {
+              max_risk_auto_approve: 5,
+              read_actions: ['jira.issue.read'],
+              write_actions: ['jira.issue.create'],
+              destructive_actions: [],
+              require_destructive_approval: true,
+            },
+          },
+        ]
+      }
+      if (path === '/admin/tenants/tenant-2/policy/config') {
+        return {
+          max_risk_auto_approve: 8,
+          read_actions: ['slack.channel.list'],
+          write_actions: ['slack.msg.post'],
+          destructive_actions: [],
+          require_destructive_approval: true,
+        }
+      }
+      if (path === '/admin/tenants/tenant-2/policy/versions') {
+        return [
+          {
+            id: 2,
+            version: 'v2',
+            deployed_by: 'admin@example.com',
+            deployed_at: '2026-03-24T12:00:00Z',
+            notes: 'Tenant two',
+            policy_data: {
+              max_risk_auto_approve: 8,
+              read_actions: ['slack.channel.list'],
+              write_actions: ['slack.msg.post'],
+              destructive_actions: [],
+              require_destructive_approval: true,
+            },
+          },
+        ]
+      }
+      throw new Error(`Unhandled api.get call for ${path}`)
+    })
+
+    function Harness() {
+      const navigate = useNavigate()
+      return (
+        <>
+          <button type="button" onClick={() => navigate('/policies?tenant_id=tenant-2')}>
+            Switch tenant
+          </button>
+          <Policies />
+        </>
+      )
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/policies']}>
+        <Routes>
+          <Route path="/policies" element={<Harness />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('button', { name: /^selected$/i })).toBeInTheDocument()
+    expect(within(screen.getByRole('heading', { name: /^tenant$/i }).closest('.form-card') as HTMLElement).getByLabelText(/^selected tenant$/i)).toHaveValue('tenant-1')
+
+    await user.click(screen.getByRole('button', { name: /switch tenant/i }))
+
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith('/admin/tenants/tenant-2/policy/config'))
+    expect(within(screen.getByRole('heading', { name: /^tenant$/i }).closest('.form-card') as HTMLElement).getByLabelText(/^selected tenant$/i)).toHaveValue('tenant-2')
+  })
+
   it('accepts array tenant responses and honors the tenant_id query param', async () => {
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/admin/tenants') {
@@ -43,6 +139,23 @@ describe('Policies page', () => {
     expect(tenantCard).not.toBeNull()
     await waitFor(() => expect(within(tenantCard!).getByLabelText(/^selected tenant$/i)).toHaveValue('tenant-2'))
     expect(await screen.findByRole('button', { name: /^selected$/i })).toBeInTheDocument()
+  })
+
+  it('shows an explicit invalid-tenant state instead of silently falling back', async () => {
+    const getSpy = vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/admin/tenants') {
+        return [
+          { id: 'tenant-1', name: 'Tenant One', status: 'active' },
+          { id: 'tenant-2', name: 'Tenant Two', status: 'active' },
+        ]
+      }
+      throw new Error(`Unhandled api.get call for ${path}`)
+    })
+
+    renderRoute(<Policies />, { path: '/policies', route: '/policies?tenant_id=missing-tenant' })
+
+    expect(await screen.findByText(/no tenant matched id missing-tenant\./i)).toBeInTheDocument()
+    expect(getSpy).toHaveBeenCalledTimes(1)
   })
 
   it('serializes builder textareas for version creation, previews decisions, and rolls back the selected version', async () => {
@@ -149,7 +262,8 @@ describe('Policies page', () => {
     const simulatorCard = screen.getByRole('heading', { name: /policy simulator/i }).closest('.form-card') as HTMLElement | null
     expect(simulatorCard).not.toBeNull()
     await user.click(within(simulatorCard!).getByRole('button', { name: /preview decision/i }))
-    expect(await within(simulatorCard!).findByText(/allowed in preview/i, { selector: '.policy-sim-reason' })).toBeInTheDocument()
+    await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/policy/simulate', expect.any(Object)))
+    expect(within(simulatorCard!).getByText(/allowed in preview/i, { selector: '.policy-sim-reason' })).toBeInTheDocument()
 
     const createVersionCard = screen.getByRole('heading', { name: /create version/i }).closest('.form-card') as HTMLElement | null
     expect(createVersionCard).not.toBeNull()
@@ -167,6 +281,45 @@ describe('Policies page', () => {
     await user.click(screen.getByRole('button', { name: /rollback to selected version/i }))
 
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/policy/versions/1/rollback', {}))
+  })
+
+  it('surfaces actionable policy engine diagnostics when simulation fails upstream', async () => {
+    const user = userEvent.setup()
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/admin/tenants') return { tenants: [{ id: 'tenant-1', name: 'Tenant One', status: 'active' }] }
+      if (path === '/admin/tenants/tenant-1/policy/config') return {
+        max_risk_auto_approve: 7,
+        read_actions: ['jira.issue.read'],
+        write_actions: ['jira.issue.create'],
+        destructive_actions: [],
+        require_destructive_approval: true,
+      }
+      if (path === '/admin/tenants/tenant-1/policy/versions') return []
+      throw new Error(`Unhandled api.get call for ${path}`)
+    })
+    vi.spyOn(api, 'post').mockRejectedValue(new APIClientError('policy engine returned 500', {
+      status: 502,
+      code: 'BAD_GATEWAY',
+      details: {
+        stage: 'upstream_status',
+        upstream_status: 500,
+        target: 'http://opa.example.test/v1/data/openclause/main',
+        suggestion: 'Check the OPA process, policy bundle load, and recent OPA logs before retrying policy simulation.',
+      },
+    }))
+
+    renderRoute(<Policies />, { path: '/policies', route: '/policies' })
+
+    await waitFor(() => expect(screen.getByLabelText(/^selected tenant$/i)).toHaveValue('tenant-1'))
+
+    const simulatorCard = screen.getByRole('heading', { name: /policy simulator/i }).closest('.form-card') as HTMLElement
+    await user.click(within(simulatorCard).getByRole('button', { name: /preview decision/i }))
+
+    expect(await screen.findByText(/policy engine returned 500/i)).toBeInTheDocument()
+    expect(screen.getByText(/upstream status: 500/i)).toBeInTheDocument()
+    expect(screen.getByText(/target: http:\/\/opa\.example\.test\/v1\/data\/openclause\/main/i)).toBeInTheDocument()
+    expect(screen.getByText(/check the opa process, policy bundle load, and recent opa logs/i)).toBeInTheDocument()
   })
 
   it('accepts wrapped policy version payloads without losing the current selection state', async () => {

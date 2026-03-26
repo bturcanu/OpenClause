@@ -5,7 +5,6 @@ cd "$(dirname "$0")/.."
 
 echo ">>> Running migrations..."
 docker compose --env-file .env -f deploy/docker-compose.yml exec -T postgres \
-  psql -U openclause -d openclause < migrations/001_initial.sql
+  psql -v ON_ERROR_STOP=1 -1 -U openclause -d openclause < migrations/001_initial.sql
 
 echo "✓ Migrations complete (001_initial)"
-

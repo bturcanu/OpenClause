@@ -236,6 +236,17 @@ jobs:
             web/console/test-results
           if-no-files-found: ignore
 
+  e2e-curl-happy-path:
+    name: E2E Curl Happy Path
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run curl-based end-to-end smoke
+        run: bash ./scripts/e2e-curl-happy-path.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -258,7 +269,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [go-test, go-race, go-fuzz-smoke, console-ui, python-sdk-39, python-sdk-tests, typescript-sdk, java-sdk, policy-test, browser-smoke, lint]
+    needs: [go-test, go-race, go-fuzz-smoke, console-ui, python-sdk-39, python-sdk-tests, typescript-sdk, java-sdk, policy-test, browser-smoke, e2e-curl-happy-path, lint]
     permissions:
       contents: read
       packages: write

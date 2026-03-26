@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api } from '../api'
+import { APIClientError, api } from '../api'
 import {
   ActiveFiltersBar,
   EmptyState,
@@ -68,6 +68,21 @@ function parseActions(raw: string): string[] {
     .filter(Boolean)
 }
 
+function formatPolicySimulationError(err: unknown) {
+  if (!(err instanceof APIClientError)) {
+    return err instanceof Error ? err.message : 'Failed to simulate policy'
+  }
+  const details = typeof err.details === 'object' && err.details !== null
+    ? err.details as Record<string, unknown>
+    : null
+  const suggestion = typeof details?.suggestion === 'string' ? details.suggestion : ''
+  const upstreamStatus = typeof details?.upstream_status === 'number' ? `Upstream status: ${details.upstream_status}. ` : ''
+  const target = typeof details?.target === 'string' ? `Target: ${details.target}. ` : ''
+  const stage = typeof details?.stage === 'string' ? `Stage: ${String(details.stage).replace(/_/g, ' ')}. ` : ''
+  const prefix = [stage, upstreamStatus, target].join('')
+  return [err.message, prefix.trim(), suggestion].filter(Boolean).join(' ')
+}
+
 export default function Policies() {
   const [searchParams] = useSearchParams()
   const [tenants, setTenants] = useState<Tenant[]>([])
@@ -98,10 +113,31 @@ export default function Policies() {
       const data = await api.get('/admin/tenants')
       const items = Array.isArray(data) ? (data as Tenant[]) : ((data as { tenants?: Tenant[] })?.tenants || [])
       setTenants(items)
-      if (!selectedTenantID && items.length > 0) {
-        const requestedTenantID = searchParams.get('tenant_id') || ''
-        const matchedTenant = requestedTenantID ? items.find(item => item.id === requestedTenantID) : null
-        setSelectedTenantID(matchedTenant?.id || items[0].id)
+      const requestedTenantID = searchParams.get('tenant_id') || ''
+      const requestedTenant = requestedTenantID ? items.find(item => item.id === requestedTenantID) : null
+      if (requestedTenantID && !requestedTenant) {
+        setSelectedTenantID('')
+        setBuilder(DEFAULT_POLICY_CONFIG)
+        setReadActionsText('')
+        setWriteActionsText('')
+        setDestructiveActionsText('')
+        setVersions([])
+        setSelectedVersionID(null)
+        setError(`No tenant matched id ${requestedTenantID}.`)
+        setLoading(false)
+        return
+      }
+      const currentTenant = selectedTenantID ? items.find(item => item.id === selectedTenantID) : null
+      const nextTenantID = requestedTenant?.id || currentTenant?.id || items[0]?.id || ''
+      const selectionChanged = nextTenantID !== selectedTenantID
+      if (selectionChanged) {
+        setSelectedTenantID(nextTenantID)
+        if (nextTenantID) {
+          void fetchPolicyState(nextTenantID)
+        }
+      }
+      if (!nextTenantID || !selectionChanged) {
+        setLoading(false)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load tenants')
@@ -154,11 +190,6 @@ export default function Policies() {
   useEffect(() => {
     void fetchTenants()
   }, [searchParams])
-
-  useEffect(() => {
-    if (!selectedTenantID) return
-    void fetchPolicyState(selectedTenantID)
-  }, [selectedTenantID])
 
   function buildConfigPayload(): TenantPolicyConfig {
     return {
@@ -236,7 +267,7 @@ export default function Policies() {
       const resp = await api.post(`/admin/tenants/${selectedTenantID}/policy/simulate`, payload)
       setSimResult(resp as SimulationResponse)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to simulate policy')
+      setError(formatPolicySimulationError(err))
     } finally {
       setSimLoading(false)
     }
@@ -293,7 +324,13 @@ export default function Policies() {
         <h3>Tenant</h3>
         <div className="form-group policy-tenant-field">
           <label htmlFor="policy-selected-tenant">Selected tenant</label>
-          <select id="policy-selected-tenant" value={selectedTenantID} onChange={e => setSelectedTenantID(e.target.value)}>
+          <select id="policy-selected-tenant" value={selectedTenantID} onChange={e => {
+            const nextTenantID = e.target.value
+            setSelectedTenantID(nextTenantID)
+            if (nextTenantID) {
+              void fetchPolicyState(nextTenantID)
+            }
+          }}>
             {tenants.map(t => (
               <option key={t.id} value={t.id}>{t.name} ({t.id})</option>
             ))}

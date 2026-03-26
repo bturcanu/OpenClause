@@ -12,9 +12,11 @@ import {
   compareNumber,
   compareText,
   copyText,
+  downloadBlob,
   formatRelativeTime,
   formatRequester,
   formatTimeWithTitle,
+  setDownloadTriggerForTests,
   shortID,
   type SortState,
 } from './ui'
@@ -238,5 +240,21 @@ describe('ui helpers', () => {
       configurable: true,
       value: originalClipboard,
     })
+  })
+
+  it('downloads blobs through the shared trigger seam', () => {
+    const trigger = vi.fn()
+    setDownloadTriggerForTests(trigger)
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-url')
+
+    downloadBlob(new Blob(['bundle']), 'bundle.zip')
+
+    expect(trigger).toHaveBeenCalledWith(expect.objectContaining({
+      download: 'bundle.zip',
+      href: 'blob:test-url',
+    }))
+    expect(revokeSpy).toHaveBeenCalledWith('blob:test-url')
+    setDownloadTriggerForTests(null)
   })
 })

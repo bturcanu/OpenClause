@@ -14,6 +14,7 @@ from openclause import (
     OpenClauseClient,
     ToolCallRequest,
     ToolCallResponse,
+    ToolCallEvent,
     ExecutionResult,
 )
 from openclause.exceptions import APIError, AuthenticationError, ValidationError
@@ -55,7 +56,10 @@ class TestToolCallRequestSerialization(unittest.TestCase):
             risk_factors=["high-impact"],
             user_id="u1",
             session_id="s1",
+            labels={"user_name": "Casey", "user_email": "casey@example.com"},
+            source_ip="203.0.113.10",
             trace_id="trace-abc",
+            requested_at="2026-01-15T10:30:00Z",
         )
         d = req.to_dict()
         self.assertEqual(d["params"], {"pr": 42})
@@ -64,7 +68,10 @@ class TestToolCallRequestSerialization(unittest.TestCase):
         self.assertEqual(d["risk_factors"], ["high-impact"])
         self.assertEqual(d["user_id"], "u1")
         self.assertEqual(d["session_id"], "s1")
+        self.assertEqual(d["labels"], {"user_name": "Casey", "user_email": "casey@example.com"})
+        self.assertEqual(d["source_ip"], "203.0.113.10")
         self.assertEqual(d["trace_id"], "trace-abc")
+        self.assertEqual(d["requested_at"], "2026-01-15T10:30:00Z")
 
     def test_risk_score_zero_included_when_set(self) -> None:
         req = ToolCallRequest(
@@ -191,6 +198,40 @@ class TestToolCallResponseDeserialization(unittest.TestCase):
         self.assertEqual(resp.approval_url, "")
 
 
+class TestToolCallEventDeserialization(unittest.TestCase):
+    def test_nested_envelope_preserves_request_and_execution_metadata(self) -> None:
+        data = {
+            "event_id": "evt-5",
+            "decision": "allow",
+            "request": {
+                "tenant_id": "t1",
+                "agent_id": "a1",
+                "tool": "slack",
+                "action": "msg.post",
+                "idempotency_key": "key-5",
+                "session_id": "s1",
+                "trace_id": "trace-5",
+                "labels": {"user_name": "Casey", "user_email": "casey@example.com"},
+                "requested_at": "2026-01-15T10:30:00Z",
+            },
+            "policy_result": {"decision": "allow", "reason": "ok"},
+            "execution_result": {"status": "success", "duration_ms": 12},
+            "hash": "hash-1",
+            "prev_hash": "hash-0",
+            "received_at": "2026-01-15T10:31:00Z",
+        }
+        event = ToolCallEvent.from_dict(data)
+        self.assertIsNotNone(event.request)
+        self.assertEqual(event.request.session_id, "s1")
+        self.assertEqual(event.request.trace_id, "trace-5")
+        self.assertEqual(event.request.labels, {"user_name": "Casey", "user_email": "casey@example.com"})
+        self.assertIsNotNone(event.result)
+        self.assertEqual(event.result.status, "success")
+        self.assertEqual(event.reason, "ok")
+        self.assertEqual(event.hash, "hash-1")
+        self.assertEqual(event.received_at, "2026-01-15T10:31:00Z")
+
+
 class TestIdempotencyKey(unittest.TestCase):
     """generate_idempotency_key() produces unique values."""
 
@@ -297,6 +338,46 @@ class TestHTTPErrorMapping(unittest.TestCase):
         )
         with self.assertRaises(TimeoutError):
             client.submit_tool_call(req)
+
+    def test_get_event_parses_top_level_fields_and_result_alias(self) -> None:
+        client = self._make_client()
+        client._session.get.return_value = self._mock_response(
+            200,
+            json.dumps(
+                {
+                    "event_id": "evt-6",
+                    "decision": "allow",
+                    "tenant_id": "tenant-1",
+                    "agent_id": "agent-1",
+                    "tool": "slack",
+                    "action": "msg.post",
+                    "resource": "channels/general",
+                    "risk_score": 2,
+                    "user_id": "user-1",
+                    "session_id": "sess-1",
+                    "trace_id": "trace-1",
+                    "labels": {"user_name": "Casey"},
+                    "source_ip": "203.0.113.10",
+                    "requested_at": "2026-01-15T10:30:00Z",
+                    "policy_result": {"decision": "allow", "reason": "ok"},
+                    "result": {"status": "success", "duration_ms": 12, "output_json": {"ok": True}},
+                    "received_at": "2026-01-15T10:31:00Z",
+                }
+            ),
+        )
+
+        event = client.get_event("evt-6")
+        self.assertEqual(event.event_id, "evt-6")
+        self.assertEqual(event.decision, "allow")
+        self.assertEqual(event.tenant_id, "tenant-1")
+        self.assertEqual(event.requested_at, "2026-01-15T10:30:00Z")
+        self.assertEqual(event.session_id, "sess-1")
+        self.assertEqual(event.trace_id, "trace-1")
+        self.assertEqual(event.source_ip, "203.0.113.10")
+        self.assertEqual(event.labels, {"user_name": "Casey"})
+        self.assertIsNotNone(event.result)
+        self.assertEqual(event.result.status, "success")
+        self.assertEqual(event.reason, "ok")
 
 
 class TestWaitForApproval(unittest.TestCase):

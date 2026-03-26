@@ -39,6 +39,8 @@ const (
 	executePollCount = 5
 )
 
+const knownInsecureInternalToken = "dev-internal-token-change-me"
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
@@ -79,12 +81,18 @@ func main() {
 	keyStore := auth.NewCompositeKeyStore(envKeyStore, dbKeyStore)
 	tenantChecker := auth.NewDBTenantChecker(pool)
 
+	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
+	if internalToken == "" || internalToken == knownInsecureInternalToken {
+		log.Error("INTERNAL_AUTH_TOKEN is required and must not use the default placeholder")
+		os.Exit(1)
+	}
+
 	connectorReg := connectors.NewRegistry()
 	connectorReg.Register("slack", config.EnvOr("CONNECTOR_SLACK_URL", "http://localhost:8082"),
 		"msg.post", "channel.list", "approval.request")
 	connectorReg.Register("jira", config.EnvOr("CONNECTOR_JIRA_URL", "http://localhost:8083"),
 		"issue.create", "issue.list")
-	connectorReg.SetInternalToken(os.Getenv("INTERNAL_AUTH_TOKEN"))
+	connectorReg.SetInternalToken(internalToken)
 
 	for _, bc := range builtins.All() {
 		connectorReg.RegisterBuiltin(bc.Name(), bc.Actions(), bc.Exec)

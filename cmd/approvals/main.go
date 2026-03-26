@@ -20,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const knownInsecureInternalToken = "dev-internal-token-change-me"
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
@@ -51,8 +53,8 @@ func main() {
 
 	store := approvals.NewStore(pool)
 	internalToken := os.Getenv("INTERNAL_AUTH_TOKEN")
-	if internalToken == "" {
-		log.Error("INTERNAL_AUTH_TOKEN is required")
+	if internalToken == "" || internalToken == knownInsecureInternalToken {
+		log.Error("INTERNAL_AUTH_TOKEN is required and must not use the default placeholder")
 		os.Exit(1)
 	}
 
