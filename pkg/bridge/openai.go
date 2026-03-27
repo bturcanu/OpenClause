@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
 )
@@ -64,16 +66,18 @@ type openAIChatMessage struct {
 }
 
 type openAIGovernedResult struct {
-	ToolCallID  string `json:"tool_call_id,omitempty"`
-	EventID     string `json:"event_id,omitempty"`
-	Decision    string `json:"decision,omitempty"`
-	Reason      string `json:"reason,omitempty"`
-	ApprovalURL string `json:"approval_url,omitempty"`
-	Tool        string `json:"tool,omitempty"`
-	Action      string `json:"action,omitempty"`
-	SessionID   string `json:"session_id,omitempty"`
-	TraceID     string `json:"trace_id,omitempty"`
-	Result      any    `json:"result,omitempty"`
+	ToolCallID      string `json:"tool_call_id,omitempty"`
+	EventID         string `json:"event_id,omitempty"`
+	Decision        string `json:"decision,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	ApprovalURL     string `json:"approval_url,omitempty"`
+	ApprovalEventID string `json:"approval_event_id,omitempty"`
+	ApprovalReason  string `json:"approval_reason,omitempty"`
+	Tool            string `json:"tool,omitempty"`
+	Action          string `json:"action,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	TraceID         string `json:"trace_id,omitempty"`
+	Result          any    `json:"result,omitempty"`
 }
 
 type openAIExtension struct {
@@ -108,6 +112,11 @@ type governedActionArgs struct {
 }
 
 const maxBridgeChatLoopSteps = 8
+
+var (
+	bridgeApprovalPollInterval = time.Second
+	bridgeApprovalWaitTimeout  = 5 * time.Minute
+)
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	profile, err := s.profileForRequest(r)
@@ -725,19 +734,17 @@ func (s *Server) executeGovernedToolCall(ctx context.Context, profile *profileRu
 		"session_id", submitted.SessionID,
 		"trace_id", submitted.TraceID,
 	)
-	payload := map[string]any{
-		"event_id":     resp.EventID,
-		"decision":     resp.Decision,
-		"reason":       resp.Reason,
-		"approval_url": resp.ApprovalURL,
-		"tool":         submitted.Tool,
-		"action":       submitted.Action,
-		"session_id":   submitted.SessionID,
-		"trace_id":     submitted.TraceID,
+	finalResp := resp
+	approvalResp := (*types.ToolCallResponse)(nil)
+	if resp.Decision == types.DecisionApprove {
+		approvalResp = resp
+		resumed, waitErr := s.waitForApprovedGovernedExecution(ctx, profile, submitted, resp)
+		if waitErr != nil {
+			return "", waitErr
+		}
+		finalResp = resumed
 	}
-	if resp.Result != nil {
-		payload["result"] = resp.Result.OutputJSON
-	}
+	payload := governedToolPayload(finalResp, submitted, approvalResp)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", types.ErrInternal("failed to encode governed tool result")
@@ -745,17 +752,104 @@ func (s *Server) executeGovernedToolCall(ctx context.Context, profile *profileRu
 	return string(encoded), nil
 }
 
+func (s *Server) waitForApprovedGovernedExecution(ctx context.Context, profile *profileRuntime, submitted types.ToolCallRequest, approvalResp *types.ToolCallResponse) (*types.ToolCallResponse, error) {
+	if approvalResp == nil || approvalResp.Decision != types.DecisionApprove || strings.TrimSpace(approvalResp.EventID) == "" {
+		return approvalResp, nil
+	}
+
+	waitCtx := ctx
+	cancel := func() {}
+	if bridgeApprovalWaitTimeout > 0 {
+		waitCtx, cancel = context.WithTimeout(ctx, bridgeApprovalWaitTimeout)
+	}
+	defer cancel()
+
+	pollEvery := bridgeApprovalPollInterval
+	if pollEvery <= 0 {
+		pollEvery = time.Second
+	}
+
+	resp, err := profile.client.WaitForApprovalThenExecute(waitCtx, approvalResp.EventID, pollEvery)
+	if err != nil {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			return nil, &types.APIError{
+				Code:      "APPROVAL_TIMEOUT",
+				Message:   fmt.Sprintf("approval for %s.%s did not complete before the bridge wait timed out", submitted.Tool, submitted.Action),
+				Retryable: true,
+				HTTPCode:  http.StatusGatewayTimeout,
+				Details: map[string]any{
+					"approval_event_id": approvalResp.EventID,
+					"approval_url":      approvalResp.ApprovalURL,
+				},
+			}
+		case errors.Is(err, context.Canceled):
+			return nil, &types.APIError{
+				Code:      "REQUEST_CANCELED",
+				Message:   "request canceled while waiting for approval",
+				Retryable: true,
+				HTTPCode:  http.StatusRequestTimeout,
+			}
+		default:
+			return nil, upstreamAPIError(err, "approved execution failed")
+		}
+	}
+
+	s.logger.Info("bridge openai approval resumed",
+		"profile", profile.name,
+		"tool", submitted.Tool,
+		"action", submitted.Action,
+		"approval_event_id", approvalResp.EventID,
+		"event_id", resp.EventID,
+		"decision", resp.Decision,
+		"session_id", submitted.SessionID,
+		"trace_id", submitted.TraceID,
+	)
+	return resp, nil
+}
+
+func governedToolPayload(resp *types.ToolCallResponse, submitted types.ToolCallRequest, approvalResp *types.ToolCallResponse) map[string]any {
+	payload := map[string]any{
+		"event_id":   resp.EventID,
+		"decision":   resp.Decision,
+		"reason":     resp.Reason,
+		"tool":       submitted.Tool,
+		"action":     submitted.Action,
+		"session_id": submitted.SessionID,
+		"trace_id":   submitted.TraceID,
+	}
+	if approvalResp != nil {
+		if strings.TrimSpace(approvalResp.EventID) != "" {
+			payload["approval_event_id"] = approvalResp.EventID
+		}
+		if strings.TrimSpace(approvalResp.Reason) != "" {
+			payload["approval_reason"] = approvalResp.Reason
+		}
+		if strings.TrimSpace(approvalResp.ApprovalURL) != "" {
+			payload["approval_url"] = approvalResp.ApprovalURL
+		}
+	} else if strings.TrimSpace(resp.ApprovalURL) != "" {
+		payload["approval_url"] = resp.ApprovalURL
+	}
+	if resp.Result != nil {
+		payload["result"] = resp.Result.OutputJSON
+	}
+	return payload
+}
+
 func governedExecutionResult(call openAIToolCall, payload map[string]any) openAIGovernedResult {
 	result := openAIGovernedResult{
-		ToolCallID:  strings.TrimSpace(call.ID),
-		EventID:     stringValue(payload, "event_id"),
-		Decision:    stringValue(payload, "decision"),
-		Reason:      stringValue(payload, "reason"),
-		ApprovalURL: stringValue(payload, "approval_url"),
-		Tool:        stringValue(payload, "tool"),
-		Action:      stringValue(payload, "action"),
-		SessionID:   stringValue(payload, "session_id"),
-		TraceID:     stringValue(payload, "trace_id"),
+		ToolCallID:      strings.TrimSpace(call.ID),
+		EventID:         stringValue(payload, "event_id"),
+		Decision:        stringValue(payload, "decision"),
+		Reason:          stringValue(payload, "reason"),
+		ApprovalURL:     stringValue(payload, "approval_url"),
+		ApprovalEventID: stringValue(payload, "approval_event_id"),
+		ApprovalReason:  stringValue(payload, "approval_reason"),
+		Tool:            stringValue(payload, "tool"),
+		Action:          stringValue(payload, "action"),
+		SessionID:       stringValue(payload, "session_id"),
+		TraceID:         stringValue(payload, "trace_id"),
 	}
 	if payload != nil {
 		if value, ok := payload["result"]; ok {

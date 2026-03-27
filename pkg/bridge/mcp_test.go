@@ -156,6 +156,65 @@ func TestServeMCPStdioSupportsContentLengthFraming(t *testing.T) {
 	}
 }
 
+func TestServeMCPStdioRespondsUsingEachMessageFormat(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(types.ToolCallResponse{
+			EventID:  "evt-mixed-1",
+			Decision: types.DecisionAllow,
+		})
+	}))
+	defer upstream.Close()
+
+	cfg, err := ResolveConfig(Config{
+		BaseURL:  upstream.URL,
+		TenantID: "tenant-1",
+		AgentID:  "agent-1",
+		APIKey:   "sk-oc-bridge",
+		Tools: []ToolConfig{
+			{Tool: "postgres", Action: "query.readonly", RiskScore: 2, Description: "List demo users"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`,
+		"",
+	}, "\n") +
+		framedMCPMessage(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`) +
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"openclause_postgres_query_readonly","arguments":{"sql":"select 1","params":[]}}}` + "\n"
+
+	var output bytes.Buffer
+	if err := server.ServeMCPStdio(context.Background(), strings.NewReader(input), &output); err != nil {
+		t.Fatalf("ServeMCPStdio mixed: %v", err)
+	}
+
+	responses := decodeMCPStdioResponses(t, output.Bytes())
+	if len(responses) != 3 {
+		t.Fatalf("expected 3 mixed stdio responses, got %d body=%s", len(responses), output.String())
+	}
+	if responses[0].format != mcpStdioFormatLine {
+		t.Fatalf("expected first response to stay line-delimited, got %v", responses[0].format)
+	}
+	if responses[1].format != mcpStdioFormatContentLength {
+		t.Fatalf("expected second response to stay content-length framed, got %v", responses[1].format)
+	}
+	if responses[2].format != mcpStdioFormatLine {
+		t.Fatalf("expected third response to return to line-delimited framing, got %v", responses[2].format)
+	}
+	if !strings.Contains(string(responses[1].payload), `"openclause_postgres_query_readonly"`) {
+		t.Fatalf("expected tools/list payload, got %s", string(responses[1].payload))
+	}
+	if !strings.Contains(string(responses[2].payload), `"event_id":"evt-mixed-1"`) {
+		t.Fatalf("expected tools/call payload, got %s", string(responses[2].payload))
+	}
+}
+
 func TestMCPHTTPEndpointReturnsJSONRPCResponse(t *testing.T) {
 	cfg, err := ResolveConfig(Config{
 		BaseURL:  "http://localhost:8080",
@@ -229,6 +288,27 @@ func decodeFramedMCPMessages(t *testing.T, body string) []string {
 			t.Fatalf("read framed payload: %v", err)
 		}
 		payloads = append(payloads, string(payload))
+	}
+}
+
+type decodedMCPResponse struct {
+	format  mcpStdioFormat
+	payload []byte
+}
+
+func decodeMCPStdioResponses(t *testing.T, body []byte) []decodedMCPResponse {
+	t.Helper()
+	reader := bufio.NewReader(bytes.NewReader(body))
+	responses := []decodedMCPResponse{}
+	for {
+		payload, format, err := readMCPStdioPayload(reader)
+		if err == io.EOF {
+			return responses
+		}
+		if err != nil {
+			t.Fatalf("decode mixed stdio payload: %v", err)
+		}
+		responses = append(responses, decodedMCPResponse{format: format, payload: payload})
 	}
 }
 

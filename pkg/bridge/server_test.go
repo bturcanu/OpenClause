@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
 )
@@ -495,6 +496,238 @@ func TestBridgeChatCompletionsRunsGovernedToolLoop(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "The newest demo users are Alice, Bob, and Charlie.") {
 		t.Fatalf("expected final assistant response, got %s", rec.Body.String())
+	}
+}
+
+func TestBridgeChatCompletionsWaitsForApprovalAndResumesExecution(t *testing.T) {
+	var upstreamCalls int
+	var finalUpstreamReq openAIChatRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openAIChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode upstream chat request: %v", err)
+		}
+		upstreamCalls++
+		switch upstreamCalls {
+		case 1:
+			_ = json.NewEncoder(w).Encode(openAIChatResponse{
+				ID:     "chatcmpl-approval-1",
+				Object: "chat.completion",
+				Model:  "qwen/qwen3.5-9b",
+				Choices: []openAIChoice{{
+					Index: 0,
+					Message: openAIChatMessage{
+						Role: "assistant",
+						ToolCalls: []openAIToolCall{{
+							ID:   "approval-call-1",
+							Type: "function",
+							Function: openAIFunctionCall{
+								Name:      "governed_action",
+								Arguments: `{"operation":"postgres.query.readonly","params":{"sql":"select 1","params":[]}}`,
+							},
+						}},
+					},
+					FinishReason: "tool_calls",
+				}},
+			})
+		case 2:
+			finalUpstreamReq = req
+			_ = json.NewEncoder(w).Encode(openAIChatResponse{
+				ID:     "chatcmpl-approval-2",
+				Object: "chat.completion",
+				Model:  "qwen/qwen3.5-9b",
+				Choices: []openAIChoice{{
+					Index: 0,
+					Message: openAIChatMessage{
+						Role:    "assistant",
+						Content: "The approval completed and the governed query returned one row.",
+					},
+					FinishReason: "stop",
+				}},
+			})
+		default:
+			t.Fatalf("unexpected upstream call count %d", upstreamCalls)
+		}
+	}))
+	defer upstream.Close()
+
+	var executeCalls int
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/toolcalls":
+			_ = json.NewEncoder(w).Encode(types.ToolCallResponse{
+				EventID:     "evt-approval",
+				Decision:    types.DecisionApprove,
+				Reason:      "manual review required",
+				ApprovalURL: "https://approvals.example.com/v1/approvals/requests/req-1",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/toolcalls/evt-approval/execute":
+			executeCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if executeCalls == 1 {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(types.APIError{
+					Code:      "CONFLICT",
+					Message:   "awaiting approval",
+					Retryable: false,
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(types.ToolCallResponse{
+				EventID:  "exec-approval-1",
+				Decision: types.DecisionAllow,
+				Reason:   "approved execution",
+				Result: &types.ExecutionResult{
+					Status:     "success",
+					OutputJSON: json.RawMessage(`{"row_count":1}`),
+				},
+			})
+		default:
+			t.Fatalf("unexpected gateway request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	cfg, err := ResolveConfig(Config{
+		BaseURL:  gateway.URL,
+		TenantID: "tenant-1",
+		AgentID:  "agent-1",
+		APIKey:   "sk-oc-bridge",
+		Defaults: DefaultsConfig{SessionPrefix: "support-bot"},
+		Tools:    []ToolConfig{{Tool: "postgres", Action: "query.readonly", RiskScore: 2}},
+		OpenAI: OpenAIConfig{
+			UpstreamBaseURL: upstream.URL + "/v1",
+			Model:           "qwen/qwen3.5-9b",
+			ToolName:        "governed_action",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen/qwen3.5-9b","messages":[{"role":"user","content":"fetch users"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if executeCalls != 2 {
+		t.Fatalf("expected bridge to retry execute until approval was available, got %d execute calls", executeCalls)
+	}
+	if !strings.Contains(rec.Body.String(), "approval completed") {
+		t.Fatalf("expected final assistant response, got %s", rec.Body.String())
+	}
+	if len(finalUpstreamReq.Messages) == 0 {
+		t.Fatalf("expected follow-up upstream request to include governed tool result")
+	}
+	last := finalUpstreamReq.Messages[len(finalUpstreamReq.Messages)-1]
+	if last.Role != "tool" {
+		t.Fatalf("expected last upstream message to be tool result, got %+v", last)
+	}
+	content := asString(t, last.Content)
+	if !strings.Contains(content, `"event_id":"exec-approval-1"`) || !strings.Contains(content, `"approval_event_id":"evt-approval"`) || !strings.Contains(content, `"approval_reason":"manual review required"`) {
+		t.Fatalf("expected resumed execution payload with approval metadata, got %s", content)
+	}
+}
+
+func TestBridgeChatCompletionsReturnsTimeoutWhenApprovalNeverArrives(t *testing.T) {
+	originalPoll := bridgeApprovalPollInterval
+	originalTimeout := bridgeApprovalWaitTimeout
+	bridgeApprovalPollInterval = 5 * time.Millisecond
+	bridgeApprovalWaitTimeout = 25 * time.Millisecond
+	t.Cleanup(func() {
+		bridgeApprovalPollInterval = originalPoll
+		bridgeApprovalWaitTimeout = originalTimeout
+	})
+
+	var upstreamCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		_ = json.NewEncoder(w).Encode(openAIChatResponse{
+			ID:     "chatcmpl-timeout-1",
+			Object: "chat.completion",
+			Model:  "qwen/qwen3.5-9b",
+			Choices: []openAIChoice{{
+				Index: 0,
+				Message: openAIChatMessage{
+					Role: "assistant",
+					ToolCalls: []openAIToolCall{{
+						ID:   "approval-call-timeout",
+						Type: "function",
+						Function: openAIFunctionCall{
+							Name:      "governed_action",
+							Arguments: `{"operation":"postgres.query.readonly","params":{"sql":"select 1","params":[]}}`,
+						},
+					}},
+				},
+				FinishReason: "tool_calls",
+			}},
+		})
+	}))
+	defer upstream.Close()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/toolcalls":
+			_ = json.NewEncoder(w).Encode(types.ToolCallResponse{
+				EventID:     "evt-timeout",
+				Decision:    types.DecisionApprove,
+				Reason:      "manual review required",
+				ApprovalURL: "https://approvals.example.com/v1/approvals/requests/req-timeout",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/toolcalls/evt-timeout/execute":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(types.APIError{
+				Code:      "CONFLICT",
+				Message:   "awaiting approval",
+				Retryable: false,
+			})
+		default:
+			t.Fatalf("unexpected gateway request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	cfg, err := ResolveConfig(Config{
+		BaseURL:  gateway.URL,
+		TenantID: "tenant-1",
+		AgentID:  "agent-1",
+		APIKey:   "sk-oc-bridge",
+		Tools:    []ToolConfig{{Tool: "postgres", Action: "query.readonly", RiskScore: 2}},
+		OpenAI: OpenAIConfig{
+			UpstreamBaseURL: upstream.URL + "/v1",
+			Model:           "qwen/qwen3.5-9b",
+			ToolName:        "governed_action",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen/qwen3.5-9b","messages":[{"role":"user","content":"fetch users"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected 504, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("expected bridge to stop before a follow-up model turn, got %d upstream calls", upstreamCalls)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"APPROVAL_TIMEOUT"`) || !strings.Contains(rec.Body.String(), `approval for postgres.query.readonly did not complete`) {
+		t.Fatalf("expected approval timeout payload, got %s", rec.Body.String())
 	}
 }
 

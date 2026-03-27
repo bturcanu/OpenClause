@@ -89,7 +89,6 @@ func (s *Server) ServeMCPStdio(ctx context.Context, in io.Reader, out io.Writer)
 	reader := bufio.NewReader(in)
 	writer := bufio.NewWriter(out)
 	profile := s.defaultProfile
-	format := mcpStdioFormatUnknown
 
 	for {
 		select {
@@ -105,11 +104,11 @@ func (s *Server) ServeMCPStdio(ctx context.Context, in io.Reader, out io.Writer)
 			}
 			return fmt.Errorf("read MCP stdio message: %w", err)
 		}
-		if detectedFormat != mcpStdioFormatUnknown {
-			format = detectedFormat
-		}
 		if len(payload) == 0 {
 			return nil
+		}
+		if detectedFormat == mcpStdioFormatUnknown {
+			return fmt.Errorf("read MCP stdio message: unknown message framing")
 		}
 
 		responses, respond, _, err := s.handleMCPPayload(ctx, profile, payload)
@@ -124,7 +123,7 @@ func (s *Server) ServeMCPStdio(ctx context.Context, in io.Reader, out io.Writer)
 			if err != nil {
 				return fmt.Errorf("encode MCP stdio response: %w", err)
 			}
-			if err := writeMCPStdioPayload(writer, format, encoded); err != nil {
+			if err := writeMCPStdioPayload(writer, detectedFormat, encoded); err != nil {
 				return fmt.Errorf("write MCP stdio response: %w", err)
 			}
 		}

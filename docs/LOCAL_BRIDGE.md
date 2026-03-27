@@ -152,7 +152,8 @@ Current limits:
 - the bridge still owns the governed tool surface for this endpoint, but it now passes through client-provided tool definitions and non-governed tool calls when they do not conflict with the governed tool name
 - if the upstream model mixes governed and client tool calls in one turn, the bridge executes the governed actions itself, preserves the remaining client tool calls, and returns structured `openclause.governed_results` metadata so the caller can see exactly what already ran
 - `stream=true` now keeps streaming assistant content through the governed tool loop and emits remaining client tool calls after each upstream step completes
-- approval results are fed back into the conversation as governed tool output, so the assistant can explain pending approval instead of pretending the write already happened
+- approval-gated governed actions now wait inline for operator approval and resume automatically when the approval grant appears within the bridge wait window
+- if that wait window expires first, the bridge returns a retryable approval-timeout error instead of hanging forever
 
 The mixed-turn extension is namespaced under `openclause` instead of using a raw top-level field. Client hosts should treat `openclause.governed_results` as optional bridge metadata and ignore it safely when they do not need governed execution details.
 

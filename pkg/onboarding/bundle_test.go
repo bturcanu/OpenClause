@@ -288,7 +288,7 @@ func TestBuildBundleSupportsLMStudioFriendlyOpenAILocalEnv(t *testing.T) {
 	if lmStudioArtifact.FileName != "lmstudio.mcp.example.jsonc" || lmStudioArtifact.Language != "jsonc" {
 		t.Fatalf("unexpected LM Studio MCP artifact metadata: %+v", lmStudioArtifact)
 	}
-	if !containsAll(lmStudioArtifact.Content, []string{`"command": "/bin/zsh"`, `source /absolute/path/to/setup-env.sh`, `go -C /absolute/path/to/OpenClause run ./cmd/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml`}) {
+	if !containsAll(lmStudioArtifact.Content, []string{`"command": "/usr/bin/env"`, `"bash"`, `. /absolute/path/to/setup-env.sh`, `go -C /absolute/path/to/OpenClause run ./cmd/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml`}) {
 		t.Fatalf("expected LM Studio MCP snippet content, got %s", lmStudioArtifact.Content)
 	}
 	if lmStudioRemoteArtifact == nil {

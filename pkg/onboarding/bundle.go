@@ -623,7 +623,7 @@ func approvalHandlingGuidance(runtime Runtime, posture string) string {
 	case RuntimeLangChain:
 		waitGuidance = "Start with one read-style tool and one write-style tool. Keep the approval-capable tool visible to operators and avoid burying approval waits inside generic agent retries until your pilot data is stable."
 	case RuntimeOpenAILocal:
-		waitGuidance = "Let the local model propose arguments, then send those arguments through the governed tool bridge. If the decision comes back as `approve`, wait for operator action before handing the result back to the model."
+		waitGuidance = "Let the local model propose arguments, then send those arguments through the governed tool bridge. The bridge now waits inline for operator approval and resumes automatically when the approval grant is created within the request window."
 	}
 	return fmt.Sprintf("%s %s", approvalPostureSummary(posture), waitGuidance)
 }
@@ -1157,10 +1157,11 @@ func lmStudioMCPSnippet(req BundleRequest) string {
 	return fmt.Sprintf(`{
   "mcpServers": {
     "openclause-%s": {
-      "command": "/bin/zsh",
+      "command": "/usr/bin/env",
       "args": [
+        "bash",
         "-lc",
-        "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; source /absolute/path/to/setup-env.sh; exec go -C /absolute/path/to/OpenClause run ./cmd/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml"
+        "set -euo pipefail; . /absolute/path/to/setup-env.sh; exec go -C /absolute/path/to/OpenClause run ./cmd/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml"
       ]
     }
   }
@@ -1170,10 +1171,11 @@ func lmStudioMCPSnippet(req BundleRequest) string {
 // Replace both absolute paths:
 // - /absolute/path/to/OpenClause -> the OpenClause repo root containing go.mod
 // - /absolute/path/to/setup-env.sh and /absolute/path/to/openclause-bridge.yaml -> this bundle's files
+// - if LM Studio does not inherit your shell PATH, prepend the directory containing go
 //
 // If you already built or installed the OpenClause CLI, you can simplify this to:
-//   "command": "/bin/zsh"
-//   "args": ["-lc", "source /absolute/path/to/setup-env.sh; exec /absolute/path/to/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml"]
+//   "command": "/usr/bin/env"
+//   "args": ["bash", "-lc", "set -euo pipefail; . /absolute/path/to/setup-env.sh; exec /absolute/path/to/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml"]
 `, serverID)
 }
 
@@ -1212,7 +1214,7 @@ func bridgeSystemPrompt(tools []SelectedTool) string {
 		ops = append(ops, tool.Tool+"."+tool.Action)
 	}
 	sort.Strings(ops)
-	return "Use governed_action whenever the user asks to work with one of these operations: " + strings.Join(ops, ", ") + ". If a tool result says decision=approve, explain that the action is awaiting operator approval."
+	return "Use governed_action whenever the user asks to work with one of these operations: " + strings.Join(ops, ", ") + ". The bridge waits inline for approval-capable actions; if a tool result still includes an approval_url without a final result, explain that the action is still awaiting operator approval."
 }
 
 func bridgeToolDescription(tool SelectedTool) string {
