@@ -232,7 +232,10 @@ func TestBuildBundleSupportsLMStudioFriendlyOpenAILocalEnv(t *testing.T) {
 	if !containsAll(bundle.StarterSnippet, []string{"LOCAL_MODEL_NAME", "OPENCLAUSE_BRIDGE_URL", "bridge_base_url", "chat.chat.completions.create", "argparse", "interactive_loop", "--smoke", "extract_governed_results", "governed_results"}) {
 		t.Fatalf("expected env-driven local model snippet, got %s", bundle.StarterSnippet)
 	}
-	if !containsAll(bundle.ReadmeSnippet, []string{"python -m pip install --upgrade pip setuptools wheel", "python -m pip install --no-build-isolation -e ../sdk/python", "curl http://localhost:1234/v1/models", "LOCAL_MODEL_NAME", "openclause bridge start --config ./openclause-bridge.yaml", "OpenAI-compatible chat client", "openclause bridge chat --config ./openclause-bridge.yaml", "lmstudio.mcp.example.jsonc", "lmstudio.mcp.remote.example.jsonc", "openclause bridge mcp --config", "openclause.governed_results"}) {
+	if !containsAll(bundle.StarterSnippet, []string{"def request_completion(model: str, messages: list[dict]) -> tuple[str, str, list[dict]]:", "\n    try:\n", "except APIConnectionError as exc:"}) {
+		t.Fatalf("expected valid bridge connection handling indentation, got %s", bundle.StarterSnippet)
+	}
+	if !containsAll(bundle.ReadmeSnippet, []string{"python -m pip install --upgrade pip setuptools wheel", "python -m pip install --no-build-isolation -e ../sdk/python", "curl http://localhost:1234/v1/models", "LOCAL_MODEL_NAME", "./start-bridge.sh", "OpenAI-compatible chat client", "openclause bridge chat --config ./openclause-bridge.yaml", "lmstudio.mcp.example.jsonc", "lmstudio.mcp.remote.example.jsonc", "recommended default", "openclause.governed_results"}) {
 		t.Fatalf("expected LM Studio setup guidance in README, got %s", bundle.ReadmeSnippet)
 	}
 	if !containsAll(bundle.StarterSnippet, []string{"fetch the newest 3 demo users", `base_url=bridge_base_url + "/v1"`, `Type a normal prompt`, `Conversation reset.`}) {
@@ -243,12 +246,16 @@ func TestBuildBundleSupportsLMStudioFriendlyOpenAILocalEnv(t *testing.T) {
 	}
 
 	var bridgeArtifact *BundleArtifact
+	var bridgeLauncherArtifact *BundleArtifact
 	var lmStudioArtifact *BundleArtifact
 	var lmStudioRemoteArtifact *BundleArtifact
 	for index := range bundle.Artifacts {
 		artifact := &bundle.Artifacts[index]
 		if artifact.ID == "bridge-config" {
 			bridgeArtifact = artifact
+		}
+		if artifact.ID == "bridge-launcher" {
+			bridgeLauncherArtifact = artifact
 		}
 		if artifact.ID == "lmstudio-mcp-snippet" {
 			lmStudioArtifact = artifact
@@ -266,13 +273,22 @@ func TestBuildBundleSupportsLMStudioFriendlyOpenAILocalEnv(t *testing.T) {
 	if !containsAll(bridgeArtifact.Content, []string{`base_url: "http://localhost:8080"`, `api_key: "env:OPENCLAUSE_API_KEY"`, `upstream_base_url: "env:LOCAL_MODEL_BASE_URL"`, `model: "env:LOCAL_MODEL_NAME"`, `tool: "postgres"`, `action: "query.readonly"`, `risk_mode: "configured"`, `tool_name: "governed_action"`}) {
 		t.Fatalf("expected bridge config content, got %s", bridgeArtifact.Content)
 	}
+	if bridgeLauncherArtifact == nil {
+		t.Fatalf("expected bridge launcher artifact, got %+v", bundle.Artifacts)
+	}
+	if bridgeLauncherArtifact.FileName != "start-bridge.sh" || !bridgeLauncherArtifact.Executable {
+		t.Fatalf("unexpected bridge launcher artifact metadata: %+v", bridgeLauncherArtifact)
+	}
+	if !containsAll(bridgeLauncherArtifact.Content, []string{`source "$script_dir/setup-env.sh"`, `openclause bridge start --config`, `go run "$script_dir/../cmd/openclause" bridge start --config`, `Could not find the OpenClause CLI.`}) {
+		t.Fatalf("expected bridge launcher content, got %s", bridgeLauncherArtifact.Content)
+	}
 	if lmStudioArtifact == nil {
 		t.Fatalf("expected LM Studio MCP snippet artifact, got %+v", bundle.Artifacts)
 	}
 	if lmStudioArtifact.FileName != "lmstudio.mcp.example.jsonc" || lmStudioArtifact.Language != "jsonc" {
 		t.Fatalf("unexpected LM Studio MCP artifact metadata: %+v", lmStudioArtifact)
 	}
-	if !containsAll(lmStudioArtifact.Content, []string{`"command": "openclause"`, `"bridge"`, `"mcp"`, `"--config"`, "/absolute/path/to/openclause-bridge.yaml"}) {
+	if !containsAll(lmStudioArtifact.Content, []string{`"command": "/bin/zsh"`, `source /absolute/path/to/setup-env.sh`, `go -C /absolute/path/to/OpenClause run ./cmd/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml`}) {
 		t.Fatalf("expected LM Studio MCP snippet content, got %s", lmStudioArtifact.Content)
 	}
 	if lmStudioRemoteArtifact == nil {
@@ -281,7 +297,7 @@ func TestBuildBundleSupportsLMStudioFriendlyOpenAILocalEnv(t *testing.T) {
 	if lmStudioRemoteArtifact.FileName != "lmstudio.mcp.remote.example.jsonc" || lmStudioRemoteArtifact.Language != "jsonc" {
 		t.Fatalf("unexpected LM Studio remote MCP artifact metadata: %+v", lmStudioRemoteArtifact)
 	}
-	if !containsAll(lmStudioRemoteArtifact.Content, []string{`"url": "http://127.0.0.1:8787/mcp"`, `"X-OpenClause-Profile": "support"`}) {
+	if !containsAll(lmStudioRemoteArtifact.Content, []string{`"url": "http://127.0.0.1:8787/mcp"`, `"X-OpenClause-Profile": "support"`, "Recommended default", "Run ./start-bridge.sh"}) {
 		t.Fatalf("expected LM Studio remote MCP snippet content, got %s", lmStudioRemoteArtifact.Content)
 	}
 }

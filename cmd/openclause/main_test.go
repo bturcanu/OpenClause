@@ -32,7 +32,7 @@ func TestRunInitAgentWritesArtifactsLocalOnly(t *testing.T) {
 		t.Fatalf("run init-agent: %v stderr=%s", err, stderr.String())
 	}
 
-	if !strings.Contains(stdout.String(), "Mode: Local-only generation") {
+	if !strings.Contains(stdout.String(), "Mode: Local starter files") {
 		t.Fatalf("expected local mode summary, got %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "Wrote:") {
@@ -254,6 +254,67 @@ func TestRunInitAgentWritesOpenAILocalBridgeArtifactsLocalOnly(t *testing.T) {
 	}
 }
 
+func TestRunInitAgentPresetFirstPilotSuppliesRecommendedTools(t *testing.T) {
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	dir := t.TempDir()
+
+	err := run([]string{
+		"init-agent",
+		"--tenant-id", "tenant-1",
+		"--tenant-name", "Alpha Corp",
+		"--agent-name", "Preset Bot",
+		"--runtime", "openai_local",
+		"--preset", "first-pilot",
+		"--output-dir", dir,
+		"--local-only",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run init-agent preset: %v stderr=%s", err, stderr.String())
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "openclause-bridge.yaml"))
+	if err != nil {
+		t.Fatalf("read openclause-bridge.yaml: %v", err)
+	}
+	if !strings.Contains(string(content), `tool: "postgres"`) || !strings.Contains(string(content), `action: "query.readonly"`) {
+		t.Fatalf("expected recommended openai_local starter tool in bridge config, got %s", string(content))
+	}
+	if !strings.Contains(string(content), `model: "env:LOCAL_MODEL_NAME"`) {
+		t.Fatalf("expected openai_local bridge config, got %s", string(content))
+	}
+}
+
+func TestRunInitAgentSafeDefaultsAliasUsesDefaultsRegeneration(t *testing.T) {
+	server := newCLIOnboardingServer(t, func(path string, body map[string]any) {
+		if path != "/admin/onboarding/bundles/regenerate-defaults" {
+			return
+		}
+		if got := body["agent_id"]; got != "agent-1" {
+			t.Fatalf("expected agent_id in defaults regenerate payload, got %+v", body)
+		}
+	})
+	defer server.Close()
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{
+		"init-agent",
+		"--server-url", server.URL,
+		"--auth-token", "token-123",
+		"--safe-defaults",
+		"--tenant-id", "tenant-1",
+		"--agent-id", "agent-1",
+		"--output-dir", t.TempDir(),
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run init-agent safe-defaults: %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Mode: Rebuilt from safe defaults") {
+		t.Fatalf("expected safe-defaults alias output, got %s", stdout.String())
+	}
+}
+
 func TestRunInitAgentPrintOnlyServerBackedCreate(t *testing.T) {
 	server := newCLIOnboardingServer(t, nil)
 	defer server.Close()
@@ -274,7 +335,7 @@ func TestRunInitAgentPrintOnlyServerBackedCreate(t *testing.T) {
 		t.Fatalf("run init-agent server print-only: %v stderr=%s", err, stderr.String())
 	}
 
-	if !strings.Contains(stdout.String(), "Mode: Server create") {
+	if !strings.Contains(stdout.String(), "Mode: Connected agent") {
 		t.Fatalf("expected create mode summary, got %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "One-time API key: sk-oc-demo-raw") {
@@ -335,7 +396,7 @@ func TestRunInitAgentPreviewServerBackedPrintOnly(t *testing.T) {
 		t.Fatalf("run init-agent preview print-only: %v stderr=%s", err, stderr.String())
 	}
 
-	if !strings.Contains(stdout.String(), "Mode: Server preview") {
+	if !strings.Contains(stdout.String(), "Mode: Review starter files") {
 		t.Fatalf("expected preview mode summary, got %s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "One-time API key:") {
@@ -395,7 +456,7 @@ func TestRunInitAgentRegenerateServerBackedWritesArtifacts(t *testing.T) {
 		t.Fatalf("run init-agent regenerate write: %v stderr=%s", err, stderr.String())
 	}
 
-	if !strings.Contains(stdout.String(), "Mode: Server regenerate") {
+	if !strings.Contains(stdout.String(), "Mode: Rebuilt last setup") {
 		t.Fatalf("expected regenerate mode summary, got %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "Existing API key reference: sk-oc-ex") {
@@ -436,7 +497,7 @@ func TestRunInitAgentRegenerateWithDefaultsServerBackedPrintOnly(t *testing.T) {
 		t.Fatalf("run init-agent regenerate defaults: %v stderr=%s", err, stderr.String())
 	}
 
-	if !strings.Contains(stdout.String(), "Mode: Server regenerate with defaults") {
+	if !strings.Contains(stdout.String(), "Mode: Rebuilt from safe defaults") {
 		t.Fatalf("expected defaults regenerate mode summary, got %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "Defaults applied:") || !strings.Contains(stdout.String(), "tool=slack:slack.channel.list") {
@@ -492,7 +553,7 @@ func TestRunInitAgentUsesStoredAuthToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run init-agent with stored auth: %v stderr=%s", err, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Mode: Server create") {
+	if !strings.Contains(stdout.String(), "Mode: Connected agent") {
 		t.Fatalf("expected server create output, got %s", stdout.String())
 	}
 }
@@ -533,7 +594,7 @@ func TestRunInitAgentUsesStoredAuthTokenFromNamedProfileMatchingServerURL(t *tes
 	if err != nil {
 		t.Fatalf("run init-agent with named stored auth profile: %v stderr=%s", err, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Mode: Server create") {
+	if !strings.Contains(stdout.String(), "Mode: Connected agent") {
 		t.Fatalf("expected server create output, got %s", stdout.String())
 	}
 }

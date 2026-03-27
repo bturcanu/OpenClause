@@ -141,7 +141,7 @@ export default function Tenants() {
               {showForm ? 'Cancel' : '+ New Tenant'}
             </button>
             <button className="btn btn-outline" type="button" onClick={() => openOnboarding()}>
-              Create Agent Integration
+              Connect Agent
             </button>
           </div>
         }
@@ -230,7 +230,7 @@ export default function Tenants() {
                     <div className="btn-group">
                       <Link to={`/tenants/${t.id}`} className="btn btn-outline btn-sm">Open tenant</Link>
                       <button className="btn btn-outline btn-sm" type="button" onClick={() => openOnboarding(t)}>
-                        Onboard agent
+                        Connect agent
                       </button>
                     </div>
                   </td>

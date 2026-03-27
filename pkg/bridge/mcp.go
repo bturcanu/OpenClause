@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bturcanu/OpenClause/pkg/types"
@@ -76,11 +77,19 @@ type mcpResourceListResult struct {
 	Resources []any `json:"resources"`
 }
 
+type mcpStdioFormat int
+
+const (
+	mcpStdioFormatUnknown mcpStdioFormat = iota
+	mcpStdioFormatLine
+	mcpStdioFormatContentLength
+)
+
 func (s *Server) ServeMCPStdio(ctx context.Context, in io.Reader, out io.Writer) error {
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 0, 1024), 1024*1024)
+	reader := bufio.NewReader(in)
 	writer := bufio.NewWriter(out)
 	profile := s.defaultProfile
+	format := mcpStdioFormatUnknown
 
 	for {
 		select {
@@ -88,18 +97,22 @@ func (s *Server) ServeMCPStdio(ctx context.Context, in io.Reader, out io.Writer)
 			return nil
 		default:
 		}
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return fmt.Errorf("read MCP stdio message: %w", err)
+
+		payload, detectedFormat, err := readMCPStdioPayload(reader)
+		if err != nil {
+			if err == io.EOF {
+				return nil
 			}
+			return fmt.Errorf("read MCP stdio message: %w", err)
+		}
+		if detectedFormat != mcpStdioFormatUnknown {
+			format = detectedFormat
+		}
+		if len(payload) == 0 {
 			return nil
 		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
 
-		responses, respond, _, err := s.handleMCPPayload(ctx, profile, []byte(line))
+		responses, respond, _, err := s.handleMCPPayload(ctx, profile, payload)
 		if err != nil {
 			return err
 		}
@@ -111,13 +124,93 @@ func (s *Server) ServeMCPStdio(ctx context.Context, in io.Reader, out io.Writer)
 			if err != nil {
 				return fmt.Errorf("encode MCP stdio response: %w", err)
 			}
-			if _, err := writer.Write(append(encoded, '\n')); err != nil {
+			if err := writeMCPStdioPayload(writer, format, encoded); err != nil {
 				return fmt.Errorf("write MCP stdio response: %w", err)
 			}
 		}
 		if err := writer.Flush(); err != nil {
 			return fmt.Errorf("flush MCP stdio response: %w", err)
 		}
+	}
+}
+
+func readMCPStdioPayload(reader *bufio.Reader) ([]byte, mcpStdioFormat, error) {
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF && strings.TrimSpace(line) == "" {
+				return nil, mcpStdioFormatUnknown, io.EOF
+			}
+			if err != io.EOF {
+				return nil, mcpStdioFormatUnknown, err
+			}
+		}
+
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			if err == io.EOF {
+				return nil, mcpStdioFormatUnknown, io.EOF
+			}
+			continue
+		}
+
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "content-length:") {
+			length, parseErr := parseMCPContentLengthHeader(trimmed)
+			if parseErr != nil {
+				return nil, mcpStdioFormatUnknown, parseErr
+			}
+			for {
+				headerLine, headerErr := reader.ReadString('\n')
+				if headerErr != nil {
+					return nil, mcpStdioFormatUnknown, headerErr
+				}
+				headerTrimmed := strings.TrimSpace(headerLine)
+				if headerTrimmed == "" {
+					break
+				}
+				headerLower := strings.ToLower(headerTrimmed)
+				if strings.HasPrefix(headerLower, "content-length:") {
+					length, parseErr = parseMCPContentLengthHeader(headerTrimmed)
+					if parseErr != nil {
+						return nil, mcpStdioFormatUnknown, parseErr
+					}
+				}
+			}
+			payload := make([]byte, length)
+			if _, err := io.ReadFull(reader, payload); err != nil {
+				return nil, mcpStdioFormatUnknown, err
+			}
+			return payload, mcpStdioFormatContentLength, nil
+		}
+
+		return []byte(trimmed), mcpStdioFormatLine, nil
+	}
+}
+
+func parseMCPContentLengthHeader(header string) (int, error) {
+	parts := strings.SplitN(header, ":", 2)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid MCP Content-Length header")
+	}
+	length, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || length < 0 {
+		return 0, fmt.Errorf("invalid MCP Content-Length header")
+	}
+	return length, nil
+}
+
+func writeMCPStdioPayload(writer *bufio.Writer, format mcpStdioFormat, payload []byte) error {
+	switch format {
+	case mcpStdioFormatContentLength:
+		if _, err := fmt.Fprintf(writer, "Content-Length: %d\r\n\r\n", len(payload)); err != nil {
+			return err
+		}
+		_, err := writer.Write(payload)
+		return err
+	default:
+		_, err := writer.Write(append(payload, '\n'))
+		return err
 	}
 }
 

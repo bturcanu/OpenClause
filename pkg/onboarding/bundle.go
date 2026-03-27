@@ -201,25 +201,36 @@ func BuildBundle(req BundleRequest) (*Bundle, error) {
 			Language: "yaml",
 			Content:  bridgeConfigYAML(req),
 		}, BundleArtifact{
-			ID:       "lmstudio-mcp-snippet",
-			Label:    "LM Studio MCP snippet",
-			FileName: "lmstudio.mcp.example.jsonc",
-			PathHint: "lmstudio.mcp.example.jsonc",
-			Kind:     "mcp_snippet",
-			Purpose:  "Drop-in LM Studio mcp.json snippet for native chat-UI tool access through the OpenClause bridge MCP server.",
-			Writable: true,
-			Language: "jsonc",
-			Content:  lmStudioMCPSnippet(req),
+			ID:         "bridge-launcher",
+			Label:      "Start bridge helper",
+			FileName:   "start-bridge.sh",
+			PathHint:   "start-bridge.sh",
+			Kind:       "bridge_launcher",
+			Purpose:    "Recommended one-command way to load env and start the local OpenClause bridge for LM Studio and local chat clients.",
+			Writable:   true,
+			Executable: true,
+			Language:   "bash",
+			Content:    bridgeStartScript(),
 		}, BundleArtifact{
 			ID:       "lmstudio-mcp-remote-snippet",
-			Label:    "LM Studio remote MCP snippet",
+			Label:    "LM Studio MCP snippet (recommended)",
 			FileName: "lmstudio.mcp.remote.example.jsonc",
 			PathHint: "lmstudio.mcp.remote.example.jsonc",
 			Kind:     "mcp_snippet",
-			Purpose:  "LM Studio mcp.json snippet for remote URL-based MCP access against the local OpenClause bridge /mcp endpoint.",
+			Purpose:  "Recommended LM Studio mcp.json snippet. Keep the local bridge running, then let LM Studio reach it over http://127.0.0.1:8787/mcp.",
 			Writable: true,
 			Language: "jsonc",
 			Content:  lmStudioRemoteMCPSnippet(req),
+		}, BundleArtifact{
+			ID:       "lmstudio-mcp-snippet",
+			Label:    "LM Studio MCP snippet (advanced stdio)",
+			FileName: "lmstudio.mcp.example.jsonc",
+			PathHint: "lmstudio.mcp.example.jsonc",
+			Kind:     "mcp_snippet",
+			Purpose:  "Advanced LM Studio mcp.json snippet for stdio MCP when you want LM Studio to launch OpenClause directly instead of keeping the bridge running yourself.",
+			Writable: true,
+			Language: "jsonc",
+			Content:  lmStudioMCPSnippet(req),
 		})
 	default:
 		return nil, fmt.Errorf("unsupported runtime %q", req.Runtime)
@@ -551,8 +562,9 @@ func runtimeSetupInstructions(runtime Runtime) string {
 			"- Create or reuse a virtualenv, then run `python -m pip install --upgrade pip setuptools wheel`.",
 			"- Install the local-model dependencies with `python -m pip install openai && python -m pip install --no-build-isolation -e ../sdk/python`.",
 			"- Start LM Studio's OpenAI-compatible server, run `curl http://localhost:1234/v1/models`, and copy the returned model id into `LOCAL_MODEL_NAME`.",
-			"- Start the local bridge once with `openclause bridge start --config ./openclause-bridge.yaml` if the CLI is installed, or `go run ./cmd/openclause bridge start --config ./openclause-bridge.yaml` from the repo root; it exposes both the governed tool proxy and an OpenAI-compatible chat host on the same local endpoint.",
-			"- For native LM Studio chat-UI tool use, either copy `lmstudio.mcp.example.jsonc` into LM Studio's `mcp.json` for the local stdio path and point it at `openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml`, or use `lmstudio.mcp.remote.example.jsonc` if you prefer the bridge's remote `http://127.0.0.1:8787/mcp` endpoint.",
+			"- Start the local bridge with `./start-bridge.sh`. That is the recommended one-command path because it loads env for you and exposes both the governed tool proxy and an OpenAI-compatible chat host on the same local endpoint.",
+			"- For native LM Studio chat-UI tool use, copy `lmstudio.mcp.remote.example.jsonc` into LM Studio's `mcp.json`. That remote MCP path is the recommended default because it is the least fragile once the bridge is already running.",
+			"- Keep `lmstudio.mcp.example.jsonc` as the advanced fallback only when you explicitly want LM Studio to launch OpenClause itself over stdio; that path still needs the absolute repo/config paths replaced.",
 			"- Replace `LOCAL_MODEL_BASE_URL` only if LM Studio or your local model server is exposed somewhere else.",
 			"- Point your OpenAI-compatible chat client at `OPENCLAUSE_BRIDGE_URL/v1` for a more normal chat workflow; the bridge will inject the governed tool surface and route tool calls through OpenClause.",
 		}, "\n")
@@ -580,13 +592,14 @@ func quickStartBody(req BundleRequest) string {
 	if req.Runtime == RuntimeOpenAILocal {
 		return strings.Join([]string{
 			"1. Load environment with `source ./setup-env.sh` or copy values from `.env.example`.",
-			"2. Start the local bridge in another terminal with `openclause bridge start --config ./openclause-bridge.yaml` if the CLI is installed, or `go run ./cmd/openclause bridge start --config ./openclause-bridge.yaml` from the repo root.",
-			"3. Pick your runtime seam:",
+			"2. Start the bridge with `./start-bridge.sh`.",
+			"3. Recommended path: copy `lmstudio.mcp.remote.example.jsonc` into LM Studio's `mcp.json`, then talk to your model normally.",
+			"4. Alternative paths if you want them:",
 			"   - `python local_model_agent.py --smoke` for one governed smoke call",
 			"   - `python local_model_agent.py` for an interactive bridge-backed chat session",
 			"   - `openclause bridge chat --config ./openclause-bridge.yaml` for a CLI REPL without editing starter code",
-			"   - native LM Studio chat UI by copying either `lmstudio.mcp.example.jsonc` (stdio) or `lmstudio.mcp.remote.example.jsonc` (remote URL) into LM Studio's `mcp.json`",
-			"4. Use the verification links in the console to confirm the event, session, and approval behavior landed correctly.",
+			"   - `lmstudio.mcp.example.jsonc` only if you want LM Studio to launch OpenClause itself over stdio",
+			"5. Use the verification links in the console to confirm the event, session, and approval behavior landed correctly.",
 		}, "\n")
 	}
 
@@ -649,8 +662,9 @@ func runtimeCustomizationChecklist(runtime Runtime) string {
 		)
 	case RuntimeOpenAILocal:
 		base = append(base,
+			"- use `./start-bridge.sh` plus `lmstudio.mcp.remote.example.jsonc` as the default LM Studio handoff",
 			"- use `python local_model_agent.py` or `openclause bridge chat --config ./openclause-bridge.yaml` for a normal chat loop instead of editing the file for every prompt",
-			"- use `lmstudio.mcp.example.jsonc` for the local stdio MCP path or `lmstudio.mcp.remote.example.jsonc` for the remote bridge `/mcp` path if you want native LM Studio chat-UI tool access instead of a separate wrapper runtime",
+			"- treat `lmstudio.mcp.example.jsonc` as the advanced stdio fallback and `lmstudio.mcp.remote.example.jsonc` as the normal LM Studio path",
 			"- treat `openclause.governed_results` as optional bridge metadata when the model mixes governed and client tool calls in one turn; the generated Python starter prints that metadata for you",
 			"- replace the sample smoke prompt with your real domain prompt or point your own chat client at the local bridge",
 			"- keep your system prompt explicit that governed tool execution may return a deny or pending-approval result instead of an immediate write",
@@ -955,7 +969,7 @@ func openAILocalSnippet(req BundleRequest) string {
 import argparse
 import os
 
-from openai import OpenAI
+from openai import APIConnectionError, OpenAI
 
 
 bridge_base_url = os.environ.get("OPENCLAUSE_BRIDGE_URL", "http://127.0.0.1:8787").rstrip("/")
@@ -994,7 +1008,14 @@ def extract_governed_results(completion) -> list[dict]:
 
 
 def request_completion(model: str, messages: list[dict]) -> tuple[str, str, list[dict]]:
-    completion = chat.chat.completions.create(model=model, messages=messages)
+    try:
+        completion = chat.chat.completions.create(model=model, messages=messages)
+    except APIConnectionError as exc:
+        raise SystemExit(
+            f"Could not reach the local OpenClause bridge at {bridge_base_url}/v1. "
+            "Start it with ./start-bridge.sh from this bundle directory, "
+            "or use an installed openclause binary if you prefer."
+        ) from exc
     message = completion.choices[0].message
     return completion.model, assistant_text(message), extract_governed_results(completion)
 
@@ -1070,6 +1091,34 @@ if __name__ == "__main__":
 `, openAILocalUserPrompt(req.Tools[0]))
 }
 
+func bridgeStartScript() string {
+	return `#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/setup-env.sh"
+
+if command -v openclause >/dev/null 2>&1; then
+  exec openclause bridge start --config "$script_dir/openclause-bridge.yaml"
+fi
+
+if [ -f "$script_dir/../go.mod" ] && [ -d "$script_dir/../cmd/openclause" ]; then
+  exec go run "$script_dir/../cmd/openclause" bridge start --config "$script_dir/openclause-bridge.yaml"
+fi
+
+cat >&2 <<EOF
+Could not find the OpenClause CLI.
+
+Do one of the following, then retry:
+  1. Install or build the 'openclause' binary so it is available on PATH
+  2. Run this bundle from inside an OpenClause repo checkout so ../cmd/openclause exists
+  3. Start the bridge manually with:
+     go -C /absolute/path/to/OpenClause run ./cmd/openclause bridge start --config "$script_dir/openclause-bridge.yaml"
+EOF
+exit 1
+`
+}
+
 func bridgeConfigYAML(req BundleRequest) string {
 	lines := []string{
 		fmt.Sprintf("listen: %q", "127.0.0.1:8787"),
@@ -1108,20 +1157,23 @@ func lmStudioMCPSnippet(req BundleRequest) string {
 	return fmt.Sprintf(`{
   "mcpServers": {
     "openclause-%s": {
-      "command": "openclause",
+      "command": "/bin/zsh",
       "args": [
-        "bridge",
-        "mcp",
-        "--config",
-        "/absolute/path/to/openclause-bridge.yaml"
+        "-lc",
+        "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; source /absolute/path/to/setup-env.sh; exec go -C /absolute/path/to/OpenClause run ./cmd/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml"
       ]
     }
   }
 }
 
-// If you do not have the OpenClause CLI installed globally yet, use:
-//   go run ./cmd/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml
-// from the repo root instead.
+// Advanced fallback:
+// Replace both absolute paths:
+// - /absolute/path/to/OpenClause -> the OpenClause repo root containing go.mod
+// - /absolute/path/to/setup-env.sh and /absolute/path/to/openclause-bridge.yaml -> this bundle's files
+//
+// If you already built or installed the OpenClause CLI, you can simplify this to:
+//   "command": "/bin/zsh"
+//   "args": ["-lc", "source /absolute/path/to/setup-env.sh; exec /absolute/path/to/openclause bridge mcp --config /absolute/path/to/openclause-bridge.yaml"]
 `, serverID)
 }
 
@@ -1135,6 +1187,11 @@ func lmStudioRemoteMCPSnippet(req BundleRequest) string {
   }
 }
 
+// Recommended default:
+// 1. Run ./start-bridge.sh from this bundle directory
+// 2. Paste this into LM Studio's mcp.json
+// 3. Chat normally in LM Studio
+//
 // Optional profile routing for multi-profile bridge configs:
 // {
 //   "mcpServers": {

@@ -1,7 +1,5 @@
 # OpenClause
 
-**v0.5** productizes OpenClause around real pilot onboarding, saved integrations, local bridge flows, operator verification, and evidence-grade exports so teams can connect one agent, govern one real tool path, and prove value quickly.
-
 A policy-driven governance layer for AI agent tool calls. Every action an agent takes — posting a Slack message, creating a Jira ticket, querying a database — flows through OpenClause, where it is validated, evaluated against OPA policy, optionally routed for human approval, executed via pluggable connectors, and recorded as tamper-evident audit evidence.
 
 **v0.2** adds a web admin console, self-service tenant onboarding, multi-language SDKs, a connector marketplace, policy simulation, compliance exports, and more.
@@ -10,7 +8,7 @@ A policy-driven governance layer for AI agent tool calls. Every action an agent 
 
 **v0.4** adds a gateway-backed connector catalog in the console, server-tracked console auth sessions with admin revocation, an operator-grade Sessions explorer with exports and attribution, real invite email delivery with absolute links and delivery status, Java Gradle-wrapper builds, console-wide UX polish, and a final correctness pass across API-client behavior, docs, demo flow, and logic/evidence edge cases.
 
-**v0.5** adds opinionated onboarding flows for preview/create/regenerate/regenerate-with-defaults, saved integration history, downloadable runtime bundles, a local bridge for OpenAI-compatible model hosts and LM Studio, stronger pilot-health analytics, and independently verifiable evidence bundles.
+**v0.5** productizes OpenClause around real pilot onboarding, saved integrations, local bridge flows, operator verification, and evidence-grade exports so teams can connect one agent, govern one real tool path, and prove value quickly. It adds opinionated onboarding flows for preview/create/regenerate/regenerate-with-defaults, saved integration history, downloadable runtime bundles, a local bridge for OpenAI-compatible model hosts and LM Studio, stronger pilot-health analytics, and independently verifiable evidence bundles.
 
 ---
 
@@ -171,28 +169,30 @@ OpenClause now has a shared onboarding bundle flow for the current v0.5 golden p
 
 Supported entry points today:
 
-- Overview page `Create Agent Integration` CTA, which routes into the existing Tenants onboarding flow
+- Overview page `Connect Agent` CTA, which routes into the existing Tenants onboarding flow
 - Console create flow from Tenant Detail -> Agents and the Tenants page
-- Console tenant-scoped `Onboard agent` action directly from the Tenants list
-- Console preview flow for an existing tenant
-- Console regenerate flow for an existing tenant + agent
-- Console regenerate-with-defaults flow for an existing tenant + agent when curated defaults are available
+- Console tenant-scoped `Connect agent` action directly from the Tenants list
+- Console review-only preview flow for an existing tenant
+- Console rebuild-last flow for an existing tenant + agent
+- Console safe-default rebuild flow for an existing tenant + agent when curated defaults are available
 - Console saved-integration history plus direct saved/defaults bundle download from Tenant Detail
 - `openclause init-agent --local-only`
-- `openclause auth login --server-url ...` once, then `openclause init-agent --server-url ...` for server-backed create, preview, regenerate, and regenerate-with-defaults
+- `openclause auth login --server-url ...` once, then `openclause init-agent --server-url ...` for server-backed connect, review, rebuild-last, and safe-default rebuild
 
 Important behavior:
 
-- Preview is non-destructive and requires an existing tenant.
-- Create is the only flow that returns a one-time raw API key.
+- The console now defaults to a fast path: choose runtime, choose tenant, name the agent, keep the recommended starter pack, then connect it.
+- `Open Advanced Setup` is only needed when you want to customize tools, posture, metadata, or review files before creating anything.
+- Review starter files is non-destructive and requires an existing tenant.
+- Connect agent is the only flow that returns a one-time raw API key.
 - For `pilot_safe` and `read_only_first`, create now also applies a starter tenant policy config for the selected tools so the first governed call is not blocked by an empty allowlist.
-- Regenerate never recovers a raw API key. It returns key-prefix guidance and generated env files that reference an existing `OPENCLAUSE_API_KEY` value.
-- Regenerate with defaults is explicit. It only uses reviewable curated defaults from the current connector catalog and fails clearly if no safe default tool set is available.
+- Rebuild last setup never recovers a raw API key. It returns key-prefix guidance and generated env files that reference an existing `OPENCLAUSE_API_KEY` value.
+- Rebuild from safe defaults is explicit. It only uses reviewable curated defaults from the current connector catalog and fails clearly if no safe default tool set is available.
 - For LM Studio and other local OpenAI-compatible servers, start the local server first, copy the model id from `curl http://localhost:1234/v1/models`, and set `LOCAL_MODEL_NAME` in the generated env artifacts before running `python local_model_agent.py --smoke` or the interactive `python local_model_agent.py` loop.
-- Local OpenAI-compatible bundles now also include `openclause-bridge.yaml`; start it once with `go run ./cmd/openclause bridge start --config ./openclause-bridge.yaml` so the generated runtime, `openclause bridge chat`, or any OpenAI-compatible chat client can talk to a local OpenClause seam instead of embedding tenant, agent, and API-key wiring into every call.
+- Local OpenAI-compatible bundles now also include `openclause-bridge.yaml` and `start-bridge.sh`; use `./start-bridge.sh` as the default launcher so the generated runtime, `openclause bridge chat`, or any OpenAI-compatible chat client can talk to a local OpenClause seam without manual env wiring. It uses an installed `openclause` CLI when available and otherwise falls back to `go run` when the bundle lives inside an OpenClause repo checkout.
 - `openclause bridge doctor --config ./openclause-bridge.yaml` now gives users a preflight check for bridge config, gateway reachability, API-key auth, upstream model reachability, and MCP readiness before the first request.
 - `openclause bridge chat --config ./openclause-bridge.yaml` now gives you a thin terminal REPL on top of the bridge-hosted chat endpoint, so you can test the governed conversation loop without modifying starter code.
-- Local OpenAI-compatible bundles now also include `lmstudio.mcp.example.jsonc` and `lmstudio.mcp.remote.example.jsonc`; copy either one into LM Studio's `mcp.json` for native LM Studio chat-UI tool access through OpenClause.
+- Local OpenAI-compatible bundles now also include `lmstudio.mcp.remote.example.jsonc` and `lmstudio.mcp.example.jsonc`; use the remote MCP snippet as the recommended default for LM Studio and keep stdio as the advanced fallback.
 - The bridge-hosted `POST /v1/chat/completions` surface now supports governed streaming through the tool loop, so assistant content can continue streaming after governed tool execution.
 - If the bridge needs to report already-executed governed actions during a mixed tool-call turn, it now does so under the namespaced `openclause.governed_results` envelope rather than a raw top-level custom field.
 - The local bridge can now host multiple named tenant and agent profiles from one YAML config, which makes the sidecar/runtime seam more useful for real local multi-agent setups.
@@ -211,10 +211,10 @@ Mode summary:
 
 | Mode | Console/API behavior | CLI shape | Raw API key behavior |
 |---|---|---|---|
-| Preview | Existing tenant only, non-destructive | `init-agent --preview ...` | Never returned |
-| Create | Creates tenant if requested, creates agent + API key | `auth login` once, then `init-agent --server-url ...` or explicit `--auth-token` | Returned once only here |
-| Regenerate | Existing tenant + agent, explicit runtime/tool/posture | `init-agent --regenerate ... --tools ...` | Never reissued |
-| Regenerate with defaults | Existing tenant + agent, explicit curated defaults | `init-agent --regenerate --use-defaults ...` | Never reissued |
+| Review starter files | Existing tenant only, non-destructive | `init-agent --preview ...` | Never returned |
+| Connect agent | Creates tenant if requested, creates agent + API key | `auth login` once, then `init-agent --server-url ... --preset first-pilot` or explicit `--auth-token` | Returned once only here |
+| Rebuild last setup | Existing tenant + agent, reuse saved setup | `init-agent --rebuild-last ...` | Never reissued |
+| Rebuild from safe defaults | Existing tenant + agent, explicit curated defaults | `init-agent --safe-defaults ...` | Never reissued |
 | Local-only | No server mutation, bundle only | `init-agent --local-only ...` | Uses provided key or placeholder only |
 
 No-active-key regenerate behavior:
@@ -425,9 +425,9 @@ Use [`docs/ONBOARDING.md`](docs/ONBOARDING.md) for the current generated-bundle 
 The canonical fastest path is still:
 
 1. Create or choose a tenant.
-2. Launch `Create Agent Integration` or the tenant-scoped `Onboard agent` shortcut.
-3. Preview the bundle.
-4. Create the real integration.
+2. Launch `Connect Agent`.
+3. Stay on the fast path: choose runtime, choose tenant, name the agent, keep the recommended starter pack.
+4. Click `Connect agent`.
 5. Run the smoke test and verify it in Audit Trail, Sessions, and Approvals.
 
 Onboarding metadata is now persisted on the saved agent integration record, which is the canonical source for regenerate/defaulted-regenerate handoffs and saved bundle/history actions.

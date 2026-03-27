@@ -43,7 +43,7 @@ function buildGettingStartedPlan(overview: OverviewData) {
   const hasPendingApprovals = overview.pending_approvals > 0
   const hasPilotSignal = hasTraffic || hasPendingApprovals
   const headline = !hasPilotSignal
-    ? 'Create one governed agent integration first.'
+    ? 'Connect one governed agent first.'
     : !hasTraffic
       ? 'Your pilot is waiting on the first governed call. Send one now.'
       : hasPendingApprovals
@@ -53,10 +53,10 @@ function buildGettingStartedPlan(overview: OverviewData) {
     headline,
     steps: [
       {
-        label: 'Create a governed integration',
+        label: 'Connect one governed agent',
         done: hasPilotSignal,
         path: '/tenants?onboarding=1',
-        actionLabel: hasPilotSignal ? 'Open tenants' : 'Create integration',
+        actionLabel: hasPilotSignal ? 'Open tenants' : 'Connect agent',
       },
       {
         label: 'Send one governed request',
@@ -201,7 +201,7 @@ export default function Overview() {
         actions={(
           <div className="btn-group">
             <Link to="/tenants?onboarding=1" className="btn btn-primary">
-              Create Agent Integration
+              Connect Agent
             </Link>
             <Link to="/tenants" className="btn btn-outline">
               View Tenants

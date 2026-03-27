@@ -9,12 +9,12 @@ OpenClause v0.5 treats onboarding as a generated bundle workflow rather than a l
 
 This guide covers the shipped lifecycle today:
 
-- Console create
-- Console preview
-- Console regenerate
-- Console regenerate with defaults
+- Console fast-path connect
+- Console review-only preview
+- Console rebuild last setup
+- Console rebuild from safe defaults
 - CLI local-only generation
-- CLI server-backed preview, create, regenerate, and regenerate with defaults
+- CLI server-backed review, connect, rebuild-last, and safe-default rebuild
 
 For a concrete first pilot after onboarding, use [PILOTS.md](PILOTS.md). For the current production-shaped deployment and failure-mode guidance, use [PRODUCTION.md](PRODUCTION.md).
 
@@ -24,13 +24,24 @@ The shipped admin/API contract for those flows is documented in [`docs/API_ONBOA
 
 1. Start the stack with `make dev` and finish console setup at `http://localhost:3000`.
 2. Open `Tenants` or a specific tenant detail page.
-   You can also start from `Overview -> Create Agent Integration`, which routes into the same Tenants onboarding flow.
-3. Launch `Create Agent Integration`.
-4. Pick a runtime, choose governed tools, and preview the bundle first.
-5. Create the real integration when the bundle looks right.
+   You can also start from `Overview -> Connect Agent`, which routes into the same Tenants onboarding flow.
+3. Launch `Connect Agent`.
+4. Stay on the fast path:
+   - choose a runtime
+   - choose or confirm the tenant
+   - name the agent
+   - keep the recommended starter pack
+5. Click `Connect agent`.
 6. Download the archive or copy the generated files into your runtime.
 7. Run the generated smoke test.
 8. Verify the first request in Audit Trail, Sessions, and Approvals.
+
+Use `Open Advanced Setup` only if you need to:
+
+- change the starter tools
+- change the approval posture
+- add owner, environment label, or description
+- review starter files before creating anything
 
 If you prefer terminal workflows, use `go run ./cmd/openclause init-agent ...` with either local-only or server-backed mode.
 
@@ -39,26 +50,27 @@ For the local OpenAI-compatible path, treat LM Studio as an OpenAI-style server 
 1. Start LM Studio's local server.
 2. Run `curl http://localhost:1234/v1/models` and copy the returned model id.
 3. Put that id into `LOCAL_MODEL_NAME` in the generated env artifacts.
-4. Start the local bridge with `go run ./cmd/openclause bridge start --config ./openclause-bridge.yaml`.
+4. Start the local bridge with `./start-bridge.sh` from the generated bundle directory. That is the recommended default because it sources the env file, uses an installed `openclause` CLI when available, and can also fall back to `go run` when the bundle lives inside an OpenClause repo checkout.
 5. Either:
+   - copy `lmstudio.mcp.remote.example.jsonc` into LM Studio's `mcp.json` and chat normally in LM Studio, or
    - run `python local_model_agent.py --smoke` for the first governed call,
    - run `python local_model_agent.py` for an interactive chat loop, or
    - run `openclause bridge chat --config ./openclause-bridge.yaml` if you already have the OpenClause CLI installed, or
-   - point your own OpenAI-compatible chat client at `OPENCLAUSE_BRIDGE_URL/v1`, or
-   - copy either `lmstudio.mcp.example.jsonc` (stdio) or `lmstudio.mcp.remote.example.jsonc` (remote URL) into LM Studio's `mcp.json`
+    - point your own OpenAI-compatible chat client at `OPENCLAUSE_BRIDGE_URL/v1`, or
+   - use `lmstudio.mcp.example.jsonc` only when you want the advanced stdio MCP path where LM Studio launches OpenClause directly
 6. Run `python -m pip install --upgrade pip setuptools wheel` followed by `python -m pip install openai && python -m pip install --no-build-isolation -e ../sdk/python`.
 
 If your generated bundle should be used from your host machine instead of inside the Docker network, set `PUBLIC_GATEWAY_URL` on `console-api` so downloaded bundles use a host-reachable `OPENCLAUSE_BASE_URL` such as `http://localhost:8080`. The local Docker compose stack now sets this by default, so downloaded bundles work from the host without editing `setup-env.sh`.
 
 ## Console Lifecycle
 
-### Create
+### Connect Agent (`create`)
 
 Use this when you want OpenClause to create the real tenant context, agent, and API key.
 
 - Entry points:
   - `Tenants` page header action
-  - `Tenants` row-level `Onboard agent` action for a fixed tenant
+  - `Tenants` row-level `Connect agent` action for a fixed tenant
   - `Tenant Detail -> Agents`
 - Result:
   - creates tenant when requested
@@ -70,7 +82,7 @@ Use this when you want OpenClause to create the real tenant context, agent, and 
   - returns a generated artifact bundle and verification links
   - persists the runtime, tools, approval posture, environment label, owner, and description on the agent for future regenerations
 
-### Preview
+### Review Starter Files (`preview`)
 
 Use this when you want to inspect the generated env vars, starter file, README, and smoke test without mutating state.
 
@@ -79,7 +91,7 @@ Use this when you want to inspect the generated env vars, starter file, README, 
 - Never creates credentials
 - Bundle env output uses a placeholder API key value
 
-### Regenerate
+### Rebuild Last Setup (`regenerate`)
 
 Use this when you already have a tenant and agent and want refreshed artifacts without minting new state.
 
@@ -91,7 +103,7 @@ Use this when you already have a tenant and agent and want refreshed artifacts w
 - Revalidates the saved tool selections against the live connector catalog before enabling the flow, so stale hidden tool choices do not sneak into regeneration
 - Refreshes the saved onboarding metadata on the agent so future regenerations start from the latest runtime, tool, and posture choices
 
-### Regenerate With Defaults
+### Rebuild From Safe Defaults (`regenerate-defaults`)
 
 Use this when you want the fastest safe handoff from existing tenant + agent context.
 
@@ -104,7 +116,7 @@ Use this when you want the fastest safe handoff from existing tenant + agent con
   - falls back to up to two curated safe actions from the current connector catalog
 - Fails clearly when curated defaults are unavailable
 
-### Saved Bundle Fetch
+### Download Current Files / View Saved Setup
 
 Use this when you want to come back later, download the latest saved handoff, or inspect recent integration history without mutating anything.
 
@@ -137,6 +149,12 @@ This starter policy is additive. It reuses the existing tenant policy-config sea
 
 `cmd/openclause` reuses the same shared onboarding contracts and artifacts as the console.
 
+For the common first-run case, use the simpler presets before reaching for the full flag set:
+
+- `--preset first-pilot`
+- `--rebuild-last`
+- `--safe-defaults`
+
 ### Local-only bundle generation
 
 ```bash
@@ -146,11 +164,11 @@ go run ./cmd/openclause init-agent \
   --tenant-name "Demo Corp" \
   --agent-name "Support Bot" \
   --runtime typescript \
-  --tools slack:slack.channel.list,slack:slack.msg.post \
+  --preset first-pilot \
   --output-dir ./support-bot
 ```
 
-### Server-backed preview
+### Server-backed review-only preview
 
 ```bash
 go run ./cmd/openclause auth login \
@@ -164,10 +182,10 @@ go run ./cmd/openclause init-agent \
   --tenant-id tenant-123 \
   --agent-name "Support Bot" \
   --runtime python \
-  --tools slack:slack.channel.list
+  --preset first-pilot
 ```
 
-### Server-backed create
+### Server-backed connect
 
 ```bash
 go run ./cmd/openclause init-agent \
@@ -175,30 +193,26 @@ go run ./cmd/openclause init-agent \
   --tenant-id tenant-123 \
   --agent-name "Support Bot" \
   --runtime typescript \
-  --tools slack:slack.channel.list,slack:slack.msg.post \
+  --preset first-pilot \
   --output-dir ./support-bot
 ```
 
-### Server-backed regenerate
+### Server-backed rebuild last setup
 
 ```bash
 go run ./cmd/openclause init-agent \
   --server-url http://localhost:8090 \
-  --regenerate \
+  --rebuild-last \
   --tenant-id tenant-123 \
-  --agent-id agent-123 \
-  --agent-name "Support Bot" \
-  --runtime python \
-  --tools slack:slack.channel.list
+  --agent-id agent-123
 ```
 
-### Server-backed regenerate with defaults
+### Server-backed rebuild from safe defaults
 
 ```bash
 go run ./cmd/openclause init-agent \
   --server-url http://localhost:8090 \
-  --regenerate \
-  --use-defaults \
+  --safe-defaults \
   --tenant-id tenant-123 \
   --agent-id agent-123
 ```
@@ -216,8 +230,9 @@ Writable artifacts currently include:
 - `smoke-test.sh`
 - `package.onboarding.json` for the TypeScript golden path
 - `openclause-bridge.yaml` for the local OpenAI-compatible golden path
-- `lmstudio.mcp.example.jsonc` for the native LM Studio stdio MCP path
-- `lmstudio.mcp.remote.example.jsonc` for the native LM Studio remote MCP path against the local bridge `/mcp` endpoint
+- `start-bridge.sh` for the recommended local-model bridge launcher
+- `lmstudio.mcp.remote.example.jsonc` for the recommended LM Studio remote MCP path against the local bridge `/mcp` endpoint
+- `lmstudio.mcp.example.jsonc` for the advanced LM Studio stdio MCP path
 
 The console can also download the writable artifact set as a zip archive from the onboarding result view.
 
@@ -232,7 +247,7 @@ Each generated bundle now includes:
 
 OpenClause now ships a thin local bridge alpha for the local OpenAI-compatible path.
 
-- Start it with `go run ./cmd/openclause bridge start --config ./openclause-bridge.yaml`
+- Start it with `./start-bridge.sh` from the bundle directory, or `go run ./cmd/openclause bridge start --config ./openclause-bridge.yaml` if you are working from the repo root
 - Generated local-model bundles now include `openclause-bridge.yaml`
 - Generated local-model bundles now also include both `lmstudio.mcp.example.jsonc` and `lmstudio.mcp.remote.example.jsonc` for native LM Studio chat-UI tool access
 - Generated `local_model_agent.py` now behaves as a thin OpenAI-compatible chat client pointed at the bridge and supports both `--smoke` and interactive usage without editing the file
@@ -251,38 +266,39 @@ Use [`LOCAL_BRIDGE.md`](LOCAL_BRIDGE.md) for the exact config shape and local en
 
 The console result view is intentionally explicit about what happened:
 
-- Preview:
+- Review starter files:
   - nothing was created
   - tenant context is reused
   - agent id is synthetic (`preview-*`)
   - API key values are placeholders only
-- Create:
+- Connect agent:
   - tenant is created only if you asked for inline tenant creation
   - agent and API key are real
   - the full raw API key is shown only in that create result, can be copied directly from the result view, and is embedded in the generated env artifacts once
-- Regenerate:
+- Rebuild last setup:
   - tenant and agent are reused
   - raw API key is never reissued
   - the result points to an existing key prefix when one is available
   - the saved integration record for that tenant and agent is refreshed with the latest runtime, tool, posture, and handoff metadata
   - the saved agent setup is updated so the next regenerate flow starts from the latest values
-- Regenerate with defaults:
+- Rebuild from safe defaults:
   - tenant and agent are reused
   - raw API key is never reissued
   - runtime, approval posture, and tool defaults are shown explicitly in the result before handoff
   - the saved integration record is the canonical source for defaults when it is still valid in the current connector catalog
   - otherwise OpenClause falls back to the curated golden-path defaults
-- Saved bundle fetch:
+- Download current files / saved setup:
   - tenant and agent are reused
   - the bundle is rebuilt from the saved integration snapshot without mutating tenant, agent, or API-key state
   - `Tenant Detail` now exposes recent saved integration history plus one-click download of the saved or defaults bundle
 
 Use the result summary first, then work through:
 
-1. Environment
-2. Files
-3. Test call
-4. Verify in console
+1. Copy env
+2. Run first call
+3. Verify
+4. Files
+5. History
 
 ## Raw API Key Rules
 

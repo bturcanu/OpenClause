@@ -285,8 +285,8 @@ function runtimeLabel(runtime?: string) {
 }
 
 function summarizeAgentIntegration(integration: AgentIntegrationRecord | null | undefined) {
-  if (integration === undefined) return 'Loading saved integration summary…'
-  if (!integration) return 'Bare agent record only. Generate an integration bundle to persist runtime, tool, and approval defaults.'
+  if (integration === undefined) return 'Loading saved setup summary…'
+  if (!integration) return 'Bare agent record only. Connect this agent to save a runtime, starter tools, and approval posture.'
   const parts = [runtimeLabel(integration.runtime)]
   if (integration.environment_label) parts.push(integration.environment_label)
   if (integration.tools && integration.tools.length > 0) {
@@ -303,11 +303,11 @@ function summarizeIntegrationTools(tools?: Array<{ tool: string; action: string 
 function integrationRevisionLabel(mode?: string) {
   switch (mode) {
     case 'created':
-      return 'Created'
+      return 'Connected'
     case 'regenerated':
-      return 'Regenerated'
+      return 'Rebuilt last setup'
     case 'regenerated_defaults':
-      return 'Regenerated with defaults'
+      return 'Rebuilt from safe defaults'
     default:
       return 'Saved'
   }
@@ -1034,7 +1034,7 @@ export default function TenantDetail() {
       logTenantDetailIssue('integration-history', err, { agentId: agent.id })
       setIntegrationHistoryErrorByAgent(current => ({
         ...current,
-        [agent.id]: err instanceof Error ? err.message : 'Failed to load integration history',
+        [agent.id]: err instanceof Error ? err.message : 'Failed to load saved setup history',
       }))
     } finally {
       setIntegrationLoadingByAgent(current => ({ ...current, [agent.id]: false }))
@@ -1078,13 +1078,13 @@ export default function TenantDetail() {
           delete next[agent.id]
           return next
         })
-        const message = 'No saved integration bundle exists for this agent yet. Create or regenerate a bundle first.'
+        const message = 'No saved setup files exist for this agent yet. Connect or rebuild this agent first.'
         setError(message)
         clearTenantIssues('integration-bundle')
         return
       }
       logTenantDetailIssue('integration-bundle', err, { agentId: agent.id, useDefaults })
-      setError(err instanceof Error ? err.message : 'Failed to download saved integration bundle')
+      setError(err instanceof Error ? err.message : 'Failed to download saved setup files')
     } finally {
       setIntegrationDownloadByAgent(current => ({ ...current, [agent.id]: false }))
     }
@@ -1619,13 +1619,13 @@ export default function TenantDetail() {
           <div className="section-title section-title-spacious section-title-with-action">
             <span>Agents</span>
             <button className="btn btn-outline btn-sm" type="button" onClick={() => setOnboardingOpen(true)}>
-              Create Agent Integration
+              Connect Agent
             </button>
           </div>
           <div className="form-card">
             <h3>Register Agent</h3>
             <div className="form-helper-text" style={{ marginBottom: 12 }}>
-              Need a full starter bundle instead of a bare agent record? Use <strong>Create Agent Integration</strong> to create the agent, issue an API key, and generate a golden-path snippet.
+              Need a full starter handoff instead of a bare agent record? Use <strong>Connect Agent</strong> to create the agent, issue an API key, and generate the starter files in one flow.
             </div>
             <form onSubmit={createAgent}>
               <div className="form-inline">
@@ -1698,7 +1698,7 @@ export default function TenantDetail() {
                           disabled={!!integrationDownloadByAgent[a.id] || missingSavedIntegration}
                           onClick={() => { void downloadAgentIntegrationBundle(a, false) }}
                         >
-                          {integrationDownloadByAgent[a.id] ? 'Downloading…' : (missingSavedIntegration ? 'No saved bundle yet' : 'Download latest bundle')}
+                          {integrationDownloadByAgent[a.id] ? 'Downloading…' : (missingSavedIntegration ? 'No saved files yet' : 'Download latest files')}
                         </button>
                         <button
                           className="btn btn-sm btn-outline"
@@ -1707,14 +1707,14 @@ export default function TenantDetail() {
                             void openOnboardingForAgent(a)
                           }}
                         >
-                          Regenerate bundle
+                          Rebuild setup
                         </button>
                         <button
                           className="btn btn-sm btn-outline"
                           type="button"
                           onClick={() => { void openAgentIntegrationHistory(a) }}
                         >
-                          {activeIntegrationAgentID === a.id ? 'Hide history' : 'View history'}
+                          {activeIntegrationAgentID === a.id ? 'Hide saved setup' : 'Saved setup'}
                         </button>
                       </td>
                     </tr>
@@ -1727,7 +1727,7 @@ export default function TenantDetail() {
           {activeIntegrationAgentID ? (
             <div className="detail-panel mt-16">
               <div className="section-title section-title-with-action">
-                <h3>Saved Integration</h3>
+                <h3>Saved setup</h3>
                 {(() => {
                   const agent = agents.find(candidate => candidate.id === activeIntegrationAgentID)
                   const missingSavedIntegration = agent ? agentIntegrations[agent.id] === null : false
@@ -1739,7 +1739,7 @@ export default function TenantDetail() {
                         disabled={!!integrationDownloadByAgent[agent.id] || missingSavedIntegration}
                         onClick={() => { void downloadAgentIntegrationBundle(agent, false) }}
                       >
-                        {integrationDownloadByAgent[agent.id] ? 'Downloading…' : (missingSavedIntegration ? 'No saved bundle yet' : 'Download saved bundle')}
+                        {integrationDownloadByAgent[agent.id] ? 'Downloading…' : (missingSavedIntegration ? 'No saved files yet' : 'Download current files')}
                       </button>
                       <button
                         className="btn btn-outline btn-sm"
@@ -1747,14 +1747,14 @@ export default function TenantDetail() {
                         disabled={!!integrationDownloadByAgent[agent.id] || missingSavedIntegration}
                         onClick={() => { void downloadAgentIntegrationBundle(agent, true) }}
                       >
-                        {missingSavedIntegration ? 'No defaults bundle yet' : 'Download defaults bundle'}
+                        {missingSavedIntegration ? 'No safe-default files yet' : 'Download safe-default files'}
                       </button>
                     </div>
                   ) : null
                 })()}
               </div>
               {integrationLoadingByAgent[activeIntegrationAgentID] ? (
-                <div className="table-subtext">Loading the latest saved bundle details…</div>
+                <div className="table-subtext">Loading the latest saved setup details…</div>
               ) : (() => {
                 const integration = agentIntegrations[activeIntegrationAgentID]
                 const revisions = agentIntegrationRevisions[activeIntegrationAgentID] || []
@@ -1763,7 +1763,7 @@ export default function TenantDetail() {
                   return <InlineErrorState message={integrationError} />
                 }
                 if (!integration) {
-                  return <div className="table-subtext">No saved integration record exists for this agent yet. Create or regenerate a bundle first.</div>
+                  return <div className="table-subtext">No saved setup exists for this agent yet. Connect or rebuild this agent first.</div>
                 }
                 return (
                   <>
@@ -1783,9 +1783,9 @@ export default function TenantDetail() {
                       </div>
                     </div>
                     <div className="mt-16">
-                      <h3>Recent revisions</h3>
+                      <h3>Recent rebuilds</h3>
                       {revisions.length === 0 ? (
-                        <div className="table-subtext">No saved revisions yet.</div>
+                        <div className="table-subtext">No saved rebuilds yet.</div>
                       ) : (
                         <table>
                           <thead>

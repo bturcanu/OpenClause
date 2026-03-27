@@ -1,6 +1,29 @@
 import { OpenClauseClient } from "../src/client";
-import { ToolCallEvent, ToolCallRequest, ToolCallResponse } from "../src/models";
+import { ToolCallRequest, ToolCallResponse } from "../src/models";
 import { OpenClauseError, APIError, AuthenticationError, TimeoutError } from "../src/errors";
+
+function mockJSONResponse(
+  payload: unknown,
+  options: {
+    status?: number;
+    statusText?: string;
+    headers?: Record<string, string>;
+  } = {},
+) {
+  const status = options.status ?? 200;
+  const normalizedHeaders = new Map(
+    Object.entries(options.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]),
+  );
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: options.statusText ?? "OK",
+    headers: {
+      get: (name: string) => normalizedHeaders.get(name.toLowerCase()) ?? null,
+    },
+    text: async () => JSON.stringify(payload),
+  };
+}
 
 describe("OpenClauseClient", () => {
   const BASE_URL = "https://api.openclause.dev";
@@ -26,9 +49,19 @@ describe("OpenClauseClient", () => {
         .toThrow(OpenClauseError);
     });
 
-    it("should strip trailing slashes from baseUrl", () => {
+    it("should strip trailing slashes from baseUrl", async () => {
+      const fetchMock = jest.fn().mockResolvedValue(
+        mockJSONResponse({ event_id: "evt-trimmed", decision: "allow" }),
+      );
+      (global as any).fetch = fetchMock;
+
       const client = new OpenClauseClient({ baseUrl: BASE_URL + "///", apiKey: API_KEY });
-      expect(client).toBeInstanceOf(OpenClauseClient);
+      await client.getEvent("evt-trimmed");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${BASE_URL}/v1/toolcalls/evt-trimmed`,
+        expect.objectContaining({ method: "GET" }),
+      );
     });
   });
 
@@ -48,8 +81,13 @@ describe("OpenClauseClient", () => {
     });
   });
 
-  describe("ToolCallRequest serialization", () => {
-    it("should serialize a minimal request correctly", () => {
+  describe("submitToolCall", () => {
+    it("submits a minimal request body without optional fields", async () => {
+      const fetchMock = jest.fn().mockResolvedValue(
+        mockJSONResponse({ event_id: "evt-minimal", decision: "allow" }),
+      );
+      (global as any).fetch = fetchMock;
+
       const request: ToolCallRequest = {
         tenant_id: "t_123",
         agent_id: "agent_abc",
@@ -58,9 +96,17 @@ describe("OpenClauseClient", () => {
         idempotency_key: "key-001",
       };
 
-      const json = JSON.stringify(request);
-      const parsed = JSON.parse(json);
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const response = await client.submitToolCall(request);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const parsed = JSON.parse(String(init.body));
 
+      expect(response.event_id).toBe("evt-minimal");
+      expect(url).toBe(`${BASE_URL}/v1/toolcalls`);
+      expect(init.headers).toMatchObject({
+        "Content-Type": "application/json",
+        "X-API-Key": API_KEY,
+      });
       expect(parsed.tenant_id).toBe("t_123");
       expect(parsed.agent_id).toBe("agent_abc");
       expect(parsed.tool).toBe("email");
@@ -69,7 +115,16 @@ describe("OpenClauseClient", () => {
       expect(parsed.params).toBeUndefined();
     });
 
-    it("should serialize a full request with all optional fields", () => {
+    it("submits optional request fields and parses approval responses", async () => {
+      const fetchMock = jest.fn().mockResolvedValue(
+        mockJSONResponse({
+          event_id: "evt-approve",
+          decision: "approve",
+          approval_url: "https://app.openclause.dev/approve/evt-approve",
+        }),
+      );
+      (global as any).fetch = fetchMock;
+
       const request: ToolCallRequest = {
         tenant_id: "t_123",
         agent_id: "agent_abc",
@@ -89,8 +144,10 @@ describe("OpenClauseClient", () => {
         schema_version: "1.0",
       };
 
-      const json = JSON.stringify(request);
-      const parsed = JSON.parse(json);
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const response = await client.submitToolCall(request);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const parsed = JSON.parse(String(init.body));
 
       expect(parsed.params).toEqual({ table: "users", id: 42 });
       expect(parsed.resource).toBe("users/42");
@@ -103,51 +160,60 @@ describe("OpenClauseClient", () => {
       expect(parsed.trace_id).toBe("trace_789");
       expect(parsed.requested_at).toBe("2026-01-15T10:30:00Z");
       expect(parsed.schema_version).toBe("1.0");
-    });
-  });
-
-  describe("ToolCallResponse deserialization", () => {
-    it("should deserialize an allow response", () => {
-      const raw = JSON.stringify({
-        event_id: "evt_001",
-        decision: "allow",
-        reason: "Policy matched",
-      });
-
-      const response: ToolCallResponse = JSON.parse(raw);
-      expect(response.event_id).toBe("evt_001");
-      expect(response.decision).toBe("allow");
-      expect(response.reason).toBe("Policy matched");
-      expect(response.approval_url).toBeUndefined();
-      expect(response.result).toBeUndefined();
-    });
-
-    it("should deserialize an approve response with approval_url", () => {
-      const raw = JSON.stringify({
-        event_id: "evt_002",
-        decision: "approve",
-        approval_url: "https://app.openclause.dev/approve/evt_002",
-      });
-
-      const response: ToolCallResponse = JSON.parse(raw);
       expect(response.decision).toBe("approve");
-      expect(response.approval_url).toBe(
-        "https://app.openclause.dev/approve/evt_002",
-      );
+      expect(response.approval_url).toBe("https://app.openclause.dev/approve/evt-approve");
     });
 
-    it("should deserialize a response with execution result", () => {
-      const raw = JSON.stringify({
-        event_id: "evt_003",
-        decision: "allow",
-        result: {
-          status: "success",
-          output_json: { rows_affected: 1 },
-          duration_ms: 42,
-        },
+    it("includes risk_score when it is explicitly set to zero", async () => {
+      const fetchMock = jest.fn().mockResolvedValue(
+        mockJSONResponse({
+          event_id: "evt-zero-risk",
+          decision: "allow",
+          reason: "risk score included",
+        }),
+      );
+      (global as any).fetch = fetchMock;
+
+      const request: ToolCallRequest = {
+        tenant_id: "t_123",
+        agent_id: "agent_abc",
+        tool: "slack",
+        action: "msg.post",
+        idempotency_key: "key-000",
+        risk_score: 0,
+      };
+
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      await client.submitToolCall(request);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const parsed = JSON.parse(String(init.body));
+
+      expect(parsed.risk_score).toBe(0);
+    });
+
+    it("parses execution results returned by the API", async () => {
+      const fetchMock = jest.fn().mockResolvedValue(
+        mockJSONResponse({
+          event_id: "evt_003",
+          decision: "allow",
+          result: {
+            status: "success",
+            output_json: { rows_affected: 1 },
+            duration_ms: 42,
+          },
+        }),
+      );
+      (global as any).fetch = fetchMock;
+
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const response = await client.submitToolCall({
+        tenant_id: "t_123",
+        agent_id: "agent_abc",
+        tool: "database",
+        action: "read",
+        idempotency_key: "key-003",
       });
 
-      const response: ToolCallResponse = JSON.parse(raw);
       expect(response.result).toBeDefined();
       expect(response.result!.status).toBe("success");
       expect(response.result!.output_json).toEqual({ rows_affected: 1 });
@@ -155,29 +221,35 @@ describe("OpenClauseClient", () => {
       expect(response.result!.error).toBeUndefined();
     });
 
-    it("should deserialize a response with execution error", () => {
-      const raw = JSON.stringify({
-        event_id: "evt_004",
-        decision: "allow",
-        result: {
-          status: "error",
-          error: "connection refused",
-          duration_ms: 1500,
-        },
-      });
+    it("parses execution errors returned by the API", async () => {
+      const fetchMock = jest.fn().mockResolvedValue(
+        mockJSONResponse({
+          event_id: "evt_004",
+          decision: "allow",
+          result: {
+            status: "error",
+            error: "connection refused",
+            duration_ms: 1500,
+          },
+        }),
+      );
+      (global as any).fetch = fetchMock;
 
-      const response: ToolCallResponse = JSON.parse(raw);
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const response = await client.execute("evt_004");
+
       expect(response.result!.status).toBe("error");
       expect(response.result!.error).toBe("connection refused");
     });
   });
 
-  describe("ToolCallEvent deserialization", () => {
-    it("should deserialize the nested envelope returned by GET /v1/toolcalls/{event_id}", () => {
-      const raw = JSON.stringify({
-        event_id: "evt_005",
-        request: {
-          tenant_id: "t_123",
+  describe("getEvent", () => {
+    it("preserves the nested envelope returned by GET /v1/toolcalls/{event_id}", async () => {
+      const fetchMock = jest.fn().mockResolvedValue(
+        mockJSONResponse({
+          event_id: "evt_005",
+          request: {
+            tenant_id: "t_123",
           agent_id: "agent_abc",
           tool: "slack",
           action: "msg.post",
@@ -193,9 +265,13 @@ describe("OpenClauseClient", () => {
         hash: "hash-1",
         prev_hash: "hash-0",
         received_at: "2026-01-15T10:31:00Z",
-      });
+        }),
+      );
+      (global as any).fetch = fetchMock;
 
-      const event: ToolCallEvent = JSON.parse(raw);
+      const client = new OpenClauseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const event = await client.getEvent("evt_005");
+
       expect(event.event_id).toBe("evt_005");
       expect(event.request.session_id).toBe("sess_456");
       expect(event.request.trace_id).toBe("trace_789");
@@ -206,6 +282,10 @@ describe("OpenClauseClient", () => {
       expect(event.execution_result?.status).toBe("success");
       expect(event.hash).toBe("hash-1");
       expect(event.received_at).toBe("2026-01-15T10:31:00Z");
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${BASE_URL}/v1/toolcalls/evt_005`,
+        expect.objectContaining({ method: "GET" }),
+      );
     });
   });
 

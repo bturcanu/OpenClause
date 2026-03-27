@@ -23,11 +23,11 @@ describe('Overview', () => {
 
     renderRoute(<Overview />, { path: '/', route: '/' })
 
-    const onboardingLink = await screen.findByRole('link', { name: /create agent integration/i })
+    const [onboardingLink, checklistLink] = await screen.findAllByRole('link', { name: /connect agent/i })
     expect(onboardingLink).toHaveAttribute('href', '/tenants?onboarding=1')
     expect(screen.getByRole('link', { name: /view tenants/i })).toHaveAttribute('href', '/tenants')
-    expect(screen.getByText(/create one governed agent integration first/i)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /create integration/i })).toHaveAttribute('href', '/tenants?onboarding=1')
+    expect(screen.getByText(/connect one governed agent first/i)).toBeInTheDocument()
+    expect(checklistLink).toHaveAttribute('href', '/tenants?onboarding=1')
   })
 
   it('adapts the getting-started guidance once traffic and approvals exist', async () => {
@@ -66,8 +66,8 @@ describe('Overview', () => {
 
     renderRoute(<Overview />, { path: '/', route: '/' })
 
-    expect(await screen.findByText(/create one governed agent integration first/i)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /create integration/i })).toHaveAttribute('href', '/tenants?onboarding=1')
+    expect(await screen.findByText(/connect one governed agent first/i)).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /connect agent/i })[0]).toHaveAttribute('href', '/tenants?onboarding=1')
   })
 
   it('pins and unpins chart buckets and links to the audit trail window', async () => {

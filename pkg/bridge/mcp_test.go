@@ -1,11 +1,14 @@
 package bridge
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -107,6 +110,52 @@ func TestServeMCPStdioSupportsInitializeListAndCall(t *testing.T) {
 	}
 }
 
+func TestServeMCPStdioSupportsContentLengthFraming(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(types.ToolCallResponse{
+			EventID:  "evt-framed-1",
+			Decision: types.DecisionAllow,
+		})
+	}))
+	defer upstream.Close()
+
+	cfg, err := ResolveConfig(Config{
+		BaseURL:  upstream.URL,
+		TenantID: "tenant-1",
+		AgentID:  "agent-1",
+		APIKey:   "sk-oc-bridge",
+		Tools: []ToolConfig{
+			{Tool: "postgres", Action: "query.readonly", RiskScore: 2, Description: "List demo users"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	input := framedMCPMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`) +
+		framedMCPMessage(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`) +
+		framedMCPMessage(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"openclause_postgres_query_readonly","arguments":{"sql":"select 1","params":[]}}}`)
+	var output bytes.Buffer
+	if err := server.ServeMCPStdio(context.Background(), strings.NewReader(input), &output); err != nil {
+		t.Fatalf("ServeMCPStdio framed: %v", err)
+	}
+
+	payloads := decodeFramedMCPMessages(t, output.String())
+	if len(payloads) != 3 {
+		t.Fatalf("expected 3 framed stdio responses, got %d body=%s", len(payloads), output.String())
+	}
+	if !strings.Contains(payloads[1], `"openclause_postgres_query_readonly"`) {
+		t.Fatalf("expected tools/list payload, got %s", payloads[1])
+	}
+	if !strings.Contains(payloads[2], `"event_id":"evt-framed-1"`) {
+		t.Fatalf("expected tools/call payload, got %s", payloads[2])
+	}
+}
+
 func TestMCPHTTPEndpointReturnsJSONRPCResponse(t *testing.T) {
 	cfg, err := ResolveConfig(Config{
 		BaseURL:  "http://localhost:8080",
@@ -138,6 +187,48 @@ func TestMCPHTTPEndpointReturnsJSONRPCResponse(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"openclause_slack_msg_post"`) {
 		t.Fatalf("expected slack MCP tool in response, got %s", rec.Body.String())
+	}
+}
+
+func framedMCPMessage(payload string) string {
+	return "Content-Length: " + strconv.Itoa(len(payload)) + "\r\n\r\n" + payload
+}
+
+func decodeFramedMCPMessages(t *testing.T, body string) []string {
+	t.Helper()
+	br := bufio.NewReader(strings.NewReader(body))
+	payloads := []string{}
+	for {
+		headerLine, err := br.ReadString('\n')
+		if err == io.EOF && strings.TrimSpace(headerLine) == "" {
+			return payloads
+		}
+		if err != nil {
+			t.Fatalf("read framed header: %v", err)
+		}
+		headerTrimmed := strings.TrimSpace(headerLine)
+		if headerTrimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(strings.ToLower(headerTrimmed), "content-length:") {
+			t.Fatalf("expected Content-Length header, got %q", headerTrimmed)
+		}
+		length, err := strconv.Atoi(strings.TrimSpace(headerTrimmed[len("Content-Length:"):]))
+		if err != nil {
+			t.Fatalf("parse content length: %v", err)
+		}
+		blankLine, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read framed separator: %v", err)
+		}
+		if strings.TrimSpace(blankLine) != "" {
+			t.Fatalf("expected blank separator line, got %q", blankLine)
+		}
+		payload := make([]byte, length)
+		if _, err := io.ReadFull(br, payload); err != nil {
+			t.Fatalf("read framed payload: %v", err)
+		}
+		payloads = append(payloads, string(payload))
 	}
 }
 

@@ -1865,22 +1865,23 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /create agent integration/i }))
+    await user.click(screen.getByRole('button', { name: /connect agent/i }))
 
-    const modalHeading = await screen.findByRole('heading', { name: /create agent integration/i })
+    const modalHeading = await screen.findByRole('heading', { name: /connect agent/i })
     const modal = modalHeading.closest('.modal') as HTMLElement
     await user.type(within(modal).getByLabelText(/^agent name$/i), 'Onboarded Agent')
-    await user.click(within(modal).getByRole('button', { name: /preview bundle/i }))
+    await user.click(within(modal).getByRole('button', { name: /open advanced setup/i }))
+    await user.click(within(modal).getByRole('button', { name: /review starter files/i }))
 
-    expect(await screen.findByRole('heading', { name: /environment/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /copy env/i })).toBeInTheDocument()
     expect(screen.getByText(/python sdk wrapper starter bundle/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^files$/i }))
     await user.click(screen.getByRole('button', { name: /starter runtime file/i }))
     expect(screen.getByText(/def governed_call/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    await user.click(screen.getByRole('button', { name: /3\. verify/i }))
     expect(screen.getByRole('link', { name: /open audit trail/i })).toHaveAttribute('href', '/events?agent_id=preview-onboarded-agent&tenant_id=tenant-1')
 
-    await user.click(screen.getByRole('button', { name: /create agent and api key/i }))
+    await user.click(within(modal).getByRole('button', { name: /^connect agent$/i }))
     expect((await screen.findAllByText(/sk-oc-onboarded/i)).length).toBeGreaterThan(0)
   }, 10000)
 
@@ -1893,20 +1894,20 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+    await user.click(screen.getAllByRole('button', { name: /rebuild setup/i })[0])
 
-    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modalHeading = await screen.findByRole('heading', { name: /rebuild agent setup/i })
     const modal = modalHeading.closest('.modal') as HTMLElement
     expect(within(modal).getByDisplayValue('Agent Active')).toBeDisabled()
-    await user.click(within(modal).getByRole('button', { name: /^regenerate bundle$/i }))
+    await user.click(within(modal).getByRole('button', { name: /^rebuild last setup$/i }))
 
-    expect(await screen.findByText(/bundle refreshed for an existing agent/i)).toBeInTheDocument()
+    expect(await screen.findByText(/last setup rebuilt for this agent/i)).toBeInTheDocument()
     expect(await screen.findByText(/^Existing key reference$/i)).toBeInTheDocument()
-    expect(screen.getByText(/raw key is not reissued during regeneration/i)).toBeInTheDocument()
+    expect(screen.getByText(/rebuilding never reissues a raw api key/i)).toBeInTheDocument()
     expect(screen.getAllByText(/sk-oc-primary/i).length).toBeGreaterThan(0)
-    await user.click(screen.getByRole('button', { name: /download result bundle/i }))
+    await user.click(screen.getByRole('button', { name: /download starter files/i }))
     expect(downloadSpy).toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    await user.click(screen.getByRole('button', { name: /3\. verify/i }))
     expect(screen.getByText(/reuse an active key matching prefix/i)).toBeInTheDocument()
   }, 10000)
 
@@ -1919,19 +1920,19 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /download latest bundle/i })[0])
+    await user.click(screen.getAllByRole('button', { name: /download latest files/i })[0])
 
     await waitFor(() => expect(getBlobSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/agents/agent-active/integration/bundle?archive=true'))
     expect(downloadSpy).toHaveBeenCalled()
 
-    await user.click(screen.getAllByRole('button', { name: /view history/i })[0])
-    expect(await screen.findByRole('heading', { name: /saved integration/i })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /saved setup/i })[0])
+    expect(await screen.findByRole('heading', { name: /saved setup/i })).toBeInTheDocument()
     expect(screen.getByText(/primary pilot runtime/i)).toBeInTheDocument()
-    expect(screen.getByRole('cell', { name: /^created$/i })).toBeInTheDocument()
-    expect(screen.getByRole('cell', { name: /^regenerated$/i })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: /^connected$/i })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: /^rebuilt last setup$/i })).toBeInTheDocument()
     expect(screen.getAllByText(/slack:slack.channel.list/i).length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('button', { name: /download defaults bundle/i }))
+    await user.click(screen.getByRole('button', { name: /download safe-default files/i }))
     await waitFor(() => expect(getBlobSpy).toHaveBeenCalledWith('/admin/tenants/tenant-1/agents/agent-active/integration/bundle?defaults=true&archive=true'))
   })
 
@@ -1946,12 +1947,12 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /view history/i })[0])
+    await user.click(screen.getAllByRole('button', { name: /saved setup/i })[0])
 
-    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved integration/i })
+    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved setup/i })
     const savedIntegrationPanel = savedIntegrationHeading.closest('.detail-panel') as HTMLElement
     expect(within(savedIntegrationPanel).getByText(/integration history temporarily unavailable/i)).toBeInTheDocument()
-    expect(screen.queryByText(/no saved integration record exists for this agent yet/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/no saved setup exists for this agent yet/i)).not.toBeInTheDocument()
   })
 
   it('shows the honest empty state when no saved integration record exists yet', async () => {
@@ -1961,11 +1962,11 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Disabled')).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /view history/i })[1])
+    await user.click(screen.getAllByRole('button', { name: /saved setup/i })[1])
 
-    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved integration/i })
+    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved setup/i })
     const savedIntegrationPanel = savedIntegrationHeading.closest('.detail-panel') as HTMLElement
-    expect(within(savedIntegrationPanel).getByText(/no saved integration record exists for this agent yet/i)).toBeInTheDocument()
+    expect(within(savedIntegrationPanel).getByText(/no saved setup exists for this agent yet/i)).toBeInTheDocument()
     expect(within(savedIntegrationPanel).queryByText(/primary pilot runtime/i)).not.toBeInTheDocument()
   })
 
@@ -2010,19 +2011,19 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Disabled')).toBeInTheDocument()
-    const initialButtons = screen.getAllByRole('button', { name: /download latest bundle|no saved bundle yet/i })
+    const initialButtons = screen.getAllByRole('button', { name: /download latest files|no saved files yet/i })
     await user.click(initialButtons[1])
 
-    expect(await screen.findByText(/no saved integration bundle exists for this agent yet/i)).toBeInTheDocument()
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /download latest bundle|no saved bundle yet/i })[1]).toBeDisabled())
-    expect(screen.getAllByRole('button', { name: /download latest bundle|no saved bundle yet/i })[1]).toHaveTextContent(/no saved bundle yet/i)
+    expect(await screen.findByText(/no saved setup files exist for this agent yet/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /download latest files|no saved files yet/i })[1]).toBeDisabled())
+    expect(screen.getAllByRole('button', { name: /download latest files|no saved files yet/i })[1]).toHaveTextContent(/no saved files yet/i)
 
-    await user.click(screen.getAllByRole('button', { name: /view history/i })[1])
-    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved integration/i })
+    await user.click(screen.getAllByRole('button', { name: /saved setup/i })[1])
+    const savedIntegrationHeading = await screen.findByRole('heading', { name: /saved setup/i })
     const savedIntegrationPanel = savedIntegrationHeading.closest('.detail-panel') as HTMLElement
-    expect(within(savedIntegrationPanel).getByText(/no saved integration record exists for this agent yet/i)).toBeInTheDocument()
-    expect(within(savedIntegrationPanel).getByRole('button', { name: /no saved bundle yet/i })).toBeDisabled()
-    expect(within(savedIntegrationPanel).getByRole('button', { name: /no defaults bundle yet/i })).toBeDisabled()
+    expect(within(savedIntegrationPanel).getByText(/no saved setup exists for this agent yet/i)).toBeInTheDocument()
+    expect(within(savedIntegrationPanel).getByRole('button', { name: /no saved files yet/i })).toBeDisabled()
+    expect(within(savedIntegrationPanel).getByRole('button', { name: /no safe-default files yet/i })).toBeDisabled()
   })
 
   it('shows operator guidance when regeneration finds no active API key', async () => {
@@ -2072,15 +2073,15 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+    await user.click(screen.getAllByRole('button', { name: /rebuild setup/i })[0])
 
-    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modalHeading = await screen.findByRole('heading', { name: /rebuild agent setup/i })
     const modal = modalHeading.closest('.modal') as HTMLElement
-    await user.click(within(modal).getByRole('button', { name: /^regenerate bundle$/i }))
+    await user.click(within(modal).getByRole('button', { name: /^rebuild last setup$/i }))
 
-    expect(await screen.findByText(/action required before the smoke test/i)).toBeInTheDocument()
+    expect(await screen.findByText(/action required before the first call/i)).toBeInTheDocument()
     expect(await screen.findByText(/no active key found/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    await user.click(screen.getByRole('button', { name: /3\. verify/i }))
     expect(screen.getAllByText(/create or rotate an api key/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/existing key reference/i)).not.toBeInTheDocument()
   }, 10000)
@@ -2092,15 +2093,15 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+    await user.click(screen.getAllByRole('button', { name: /rebuild setup/i })[0])
 
-    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modalHeading = await screen.findByRole('heading', { name: /rebuild agent setup/i })
     const modal = modalHeading.closest('.modal') as HTMLElement
-    await user.click(within(modal).getByRole('button', { name: /regenerate with defaults/i }))
+    await user.click(within(modal).getByRole('button', { name: /rebuild from safe defaults/i }))
 
-    expect(await screen.findByText(/bundle refreshed from explicit defaults/i)).toBeInTheDocument()
+    expect(await screen.findByText(/safe starter rebuilt for this agent/i)).toBeInTheDocument()
     expect(await screen.findByText(/defaults applied/i)).toBeInTheDocument()
-    expect(screen.getByText(/regenerated from defaults/i)).toBeInTheDocument()
+    expect(screen.getByText(/rebuilt from safe defaults/i)).toBeInTheDocument()
     expect(screen.getAllByText(/runtime: python/i).length).toBeGreaterThan(0)
   }, 10000)
 
@@ -2112,12 +2113,13 @@ describe('Tenant detail page', () => {
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
     expect(screen.getByText(/python · dev · slack:slack.channel.list/i)).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+    await user.click(screen.getAllByRole('button', { name: /rebuild setup/i })[0])
 
-    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modalHeading = await screen.findByRole('heading', { name: /rebuild agent setup/i })
     const modal = modalHeading.closest('.modal') as HTMLElement
-    expect(within(modal).getByText(/starting from the last saved onboarding setup for this agent/i)).toBeInTheDocument()
-    expect(within(modal).getByRole('radio', { name: /python service/i })).toBeChecked()
+    expect(within(modal).getByText(/starting from the last saved setup for this agent/i)).toBeInTheDocument()
+    expect(within(modal).getByText(/python service/i)).toBeInTheDocument()
+    await user.click(within(modal).getByRole('button', { name: /open advanced setup/i }))
     expect(within(modal).getByLabelText(/environment label/i)).toHaveValue('dev')
     expect(within(modal).getByLabelText(/owner or team/i)).toHaveValue('AI Platform')
     expect(within(modal).getByRole('radio', { name: /pilot-safe/i })).toBeChecked()
@@ -2146,13 +2148,14 @@ describe('Tenant detail page', () => {
     renderRoute(<TenantDetail />, { path: '/tenants/:id', route: '/tenants/tenant-1?tab=agents' })
 
     expect(await screen.findByText('Agent Active')).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: /regenerate bundle/i })[0])
+    await user.click(screen.getAllByRole('button', { name: /rebuild setup/i })[0])
 
-    const modalHeading = await screen.findByRole('heading', { name: /regenerate agent bundle/i })
+    const modalHeading = await screen.findByRole('heading', { name: /rebuild agent setup/i })
     const modal = modalHeading.closest('.modal') as HTMLElement
+    await user.click(within(modal).getByRole('button', { name: /open advanced setup/i }))
     expect(within(modal).getByRole('checkbox', { name: /slack channel list/i })).toBeChecked()
     expect(within(modal).getByRole('checkbox', { name: /slack message post/i })).toBeChecked()
-    expect(within(modal).getByRole('button', { name: /^regenerate bundle$/i })).toBeEnabled()
+    expect(within(modal).getByRole('button', { name: /^rebuild last setup$/i })).toBeEnabled()
   })
 
   it('shows pilot cockpit health, diagnostics, and next actions in analytics', async () => {

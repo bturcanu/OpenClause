@@ -99,7 +99,7 @@ type ApprovalPostureOption = {
   description: string
 }
 
-type ResultTab = 'environment' | 'files' | 'test' | 'verify'
+type ResultTab = 'copy_env' | 'first_call' | 'verify' | 'files' | 'history'
 
 type OnboardingDraft = {
   runtime: RuntimeOption['value']
@@ -112,6 +112,9 @@ type OnboardingDraft = {
   description: string
   approvalPosture: ApprovalPostureOption['value']
   selectedTools: SelectedTool[]
+  advancedOpen: boolean
+  useRecommendedTools: boolean
+  useRecommendedPosture: boolean
 }
 
 const runtimeOptions: RuntimeOption[] = [
@@ -139,11 +142,37 @@ const curatedToolOrder = [
 ]
 
 const resultTabs: Array<{ id: ResultTab; label: string }> = [
-  { id: 'environment', label: 'Environment' },
+  { id: 'copy_env', label: '1. Copy env' },
+  { id: 'first_call', label: '2. Run first call' },
+  { id: 'verify', label: '3. Verify' },
   { id: 'files', label: 'Files' },
-  { id: 'test', label: 'Test call' },
-  { id: 'verify', label: 'Verify in console' },
+  { id: 'history', label: 'History' },
 ]
+
+const starterPackCandidates: Record<RuntimeOption['value'], SelectedTool[][]> = {
+  python: [
+    [{ tool: 'slack', action: 'slack.channel.list' }, { tool: 'slack', action: 'slack.msg.post' }],
+    [{ tool: 'postgres', action: 'query.readonly' }, { tool: 'github', action: 'issue.create' }],
+    [{ tool: 'jira', action: 'jira.issue.list' }, { tool: 'jira', action: 'jira.issue.create' }],
+  ],
+  typescript: [
+    [{ tool: 'slack', action: 'slack.channel.list' }, { tool: 'slack', action: 'slack.msg.post' }],
+    [{ tool: 'webhook', action: 'post' }, { tool: 'email', action: 'send' }],
+    [{ tool: 'postgres', action: 'query.readonly' }, { tool: 'github', action: 'issue.create' }],
+  ],
+  langchain: [
+    [{ tool: 'jira', action: 'jira.issue.list' }, { tool: 'jira', action: 'jira.issue.create' }],
+    [{ tool: 'slack', action: 'slack.channel.list' }, { tool: 'slack', action: 'slack.msg.post' }],
+    [{ tool: 'postgres', action: 'query.readonly' }, { tool: 'github', action: 'issue.create' }],
+  ],
+  openai_local: [
+    [{ tool: 'postgres', action: 'query.readonly' }, { tool: 'github', action: 'issue.create' }],
+    [{ tool: 'postgres', action: 'query.readonly' }, { tool: 'slack', action: 'slack.msg.post' }],
+    [{ tool: 'github', action: 'issue.create' }],
+  ],
+}
+
+const toolDisplayNames = new Map(curatedToolOrder.map(option => [`${option.tool}:${option.action}`, option.title]))
 
 function formatToolSelection(selection: SelectedTool) {
   return `${selection.tool}:${selection.action}`
@@ -151,6 +180,10 @@ function formatToolSelection(selection: SelectedTool) {
 
 function approvalPostureLabel(value: ApprovalPostureOption['value'] | string) {
   return approvalPostureOptions.find(option => option.value === value)?.label || value
+}
+
+function recommendedApprovalPosture(runtime: RuntimeOption['value']) {
+  return runtime === 'openai_local' ? 'read_only_first' : 'pilot_safe'
 }
 
 function supportedRuntimeOrDefault(value?: string) {
@@ -188,29 +221,60 @@ function resultStatusCopy(result: OnboardingResponse) {
   switch (result.mode) {
     case 'preview':
       return {
-        title: 'Preview only: nothing was created yet.',
-        body: 'You have a synthetic preview agent id and placeholder API key values so you can inspect the bundle safely before minting real credentials.',
+        title: 'Review only: nothing has been created yet.',
+        body: 'This shows the starter files and placeholder credentials before you connect the real agent.',
       }
     case 'regenerated':
       return {
-        title: 'Bundle refreshed for an existing agent.',
+        title: 'Last setup rebuilt for this agent.',
         body: result.api_key?.key_prefix
-          ? 'Tenant and agent records were reused. The bundle now points back at an existing key reference, not a newly issued raw key, and the saved onboarding setup was refreshed for future regenerations.'
-          : 'Tenant and agent records were reused, but no active API key is available to reference yet. Create or rotate a key before handing this bundle off.',
+          ? 'OpenClause reused the tenant, agent, and key reference, then rebuilt the starter files from the saved setup.'
+          : 'OpenClause reused the tenant and agent, but there is still no active API key to reference. Create or rotate one before handing this setup off.',
       }
     case 'regenerated_defaults':
       return {
-        title: 'Bundle refreshed from explicit defaults.',
+        title: 'Safe starter rebuilt for this agent.',
         body: result.api_key?.key_prefix
-          ? 'OpenClause applied the current default runtime, pilot posture, and curated tool set so you can hand off a safe starting point quickly.'
-          : 'OpenClause applied the current default runtime, pilot posture, and curated tool set, but you still need to create or rotate an API key before anyone can use this bundle.',
+          ? 'OpenClause applied the current safe runtime, starter tools, and approval posture so you can hand off a cleaner first-run setup.'
+          : 'OpenClause applied the current safe runtime, starter tools, and approval posture, but you still need to create or rotate an API key first.',
       }
     default:
       return {
-        title: 'Integration created successfully.',
-        body: 'The tenant context, agent, and API key now exist. The full raw key is visible only in this result and the generated env artifacts from this create step. OpenClause also saved the runtime, tools, and approval posture on the agent for future regenerations.',
+        title: 'Agent connected successfully.',
+        body: 'The tenant context, agent, and API key now exist. OpenClause also saved the runtime, starter tools, and approval posture so you can rebuild this setup later.',
       }
   }
+}
+
+function toolKey(selection: SelectedTool) {
+  return `${selection.tool}:${selection.action}`
+}
+
+function sameToolSelections(left: SelectedTool[], right: SelectedTool[]) {
+  if (left.length !== right.length) return false
+  const leftKeys = left.map(toolKey).sort()
+  const rightKeys = right.map(toolKey).sort()
+  return leftKeys.every((value, index) => value === rightKeys[index])
+}
+
+function recommendedToolsForRuntime(runtime: RuntimeOption['value'], connectors: ConnectorInfo[]) {
+  const byTool = new Map(connectors.map(connector => [connector.name, new Set(connector.actions || [])]))
+  const candidatePacks = starterPackCandidates[runtime] || []
+  for (const candidate of candidatePacks) {
+    const resolved = candidate.filter(item => byTool.get(item.tool)?.has(item.action))
+    if (resolved.length > 0 && resolved.length === candidate.length) {
+      return resolved
+    }
+  }
+  return curatedToolOrder
+    .filter(item => byTool.get(item.tool)?.has(item.action))
+    .slice(0, Math.min(2, curatedToolOrder.length))
+    .map(item => ({ tool: item.tool, action: item.action }))
+}
+
+function summarizeStarterPack(tools: SelectedTool[]) {
+  if (tools.length === 0) return 'No governed starter tools available yet'
+  return tools.map(tool => toolDisplayNames.get(toolKey(tool)) || formatToolSelection(tool)).join(' · ')
 }
 
 export default function AgentOnboardingFlow({ open, onClose, presetTenant = null, presetAgent = null, tenantOptions = [], onCreated }: Props) {
@@ -226,12 +290,15 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
   const [approvalPosture, setApprovalPosture] = useState<ApprovalPostureOption['value']>('pilot_safe')
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([])
   const [selectedTools, setSelectedTools] = useState<SelectedTool[]>([])
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [useRecommendedTools, setUseRecommendedTools] = useState(true)
+  const [useRecommendedPosture, setUseRecommendedPosture] = useState(true)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<OnboardingResponse | null>(null)
-  const [activeTab, setActiveTab] = useState<ResultTab>('environment')
+  const [activeTab, setActiveTab] = useState<ResultTab>('copy_env')
   const [selectedArtifactID, setSelectedArtifactID] = useState('')
   const [downloading, setDownloading] = useState(false)
   const isRegenerateFlow = !!presetAgent
@@ -240,12 +307,16 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
   useEffect(() => {
     if (!open) return
     const savedDraft = draftStoreRef.current[draftKey]
+    const nextRuntime = savedDraft?.runtime || supportedRuntimeOrDefault(presetAgent?.onboarding?.runtime)
+    const nextApprovalPosture = savedDraft?.approvalPosture
+      || supportedApprovalPostureOrDefault(presetAgent?.onboarding?.approval_posture)
+      || recommendedApprovalPosture(nextRuntime)
     setError('')
     setResult(null)
-    setActiveTab('environment')
+    setActiveTab('copy_env')
     setSelectedArtifactID('')
     setDownloading(false)
-    setRuntime(savedDraft?.runtime || supportedRuntimeOrDefault(presetAgent?.onboarding?.runtime))
+    setRuntime(nextRuntime)
     setTenantMode(savedDraft?.tenantMode || (presetTenant ? 'existing' : (tenantOptions.length > 0 ? 'existing' : 'create')))
     setTenantID(savedDraft?.tenantID || presetTenant?.id || tenantOptions[0]?.id || '')
     setNewTenantName(savedDraft?.newTenantName || '')
@@ -253,8 +324,11 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
     setEnvironmentLabel(savedDraft?.environmentLabel || presetAgent?.onboarding?.environment_label || 'dev')
     setOwnerName(savedDraft?.ownerName || presetAgent?.onboarding?.owner_name || '')
     setDescription(savedDraft?.description || presetAgent?.onboarding?.description || '')
-    setApprovalPosture(savedDraft?.approvalPosture || supportedApprovalPostureOrDefault(presetAgent?.onboarding?.approval_posture))
+    setApprovalPosture(nextApprovalPosture)
     setSelectedTools(savedDraft?.selectedTools || presetAgent?.onboarding?.tools || [])
+    setAdvancedOpen(savedDraft?.advancedOpen || false)
+    setUseRecommendedTools(savedDraft?.useRecommendedTools ?? !presetAgent?.onboarding?.tools?.length)
+    setUseRecommendedPosture(savedDraft?.useRecommendedPosture ?? !presetAgent?.onboarding?.approval_posture)
   }, [draftKey, open, presetTenant?.id, presetAgent?.id])
 
   useEffect(() => {
@@ -268,18 +342,16 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
         if (!cancelled) {
           const nextConnectors = Array.isArray(data) ? data as ConnectorInfo[] : []
           setConnectors(nextConnectors)
-          const byTool = new Map(nextConnectors.map(connector => [connector.name, new Set(connector.actions || [])]))
-          const defaults = curatedToolOrder
-            .filter(item => byTool.get(item.tool)?.has(item.action))
-            .slice(0, Math.min(2, curatedToolOrder.length))
-            .map(item => ({ tool: item.tool, action: item.action }))
+          const defaults = recommendedToolsForRuntime(runtime, nextConnectors)
           if (defaults.length > 0) {
             setSelectedTools(current => {
+              const byTool = new Map(nextConnectors.map(connector => [connector.name, new Set(connector.actions || [])]))
               const validCurrent = current.filter(item => byTool.get(item.tool)?.has(item.action))
-              if (validCurrent.length > 0) return validCurrent
+              if (validCurrent.length > 0 && !useRecommendedTools) return validCurrent
               return defaults
             })
           } else {
+            const byTool = new Map(nextConnectors.map(connector => [connector.name, new Set(connector.actions || [])]))
             setSelectedTools(current => current.filter(item => byTool.get(item.tool)?.has(item.action)))
           }
         }
@@ -291,7 +363,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
     }
     void fetchCatalog()
     return () => { cancelled = true }
-  }, [open])
+  }, [open, runtime, useRecommendedTools])
 
   useEffect(() => {
     if (!result || result.bundle.artifacts.length === 0) return
@@ -311,18 +383,35 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
       description,
       approvalPosture,
       selectedTools,
+      advancedOpen,
+      useRecommendedTools,
+      useRecommendedPosture,
     }
-  }, [draftKey, open, runtime, tenantMode, tenantID, newTenantName, agentName, environmentLabel, ownerName, description, approvalPosture, selectedTools])
+  }, [draftKey, open, runtime, tenantMode, tenantID, newTenantName, agentName, environmentLabel, ownerName, description, approvalPosture, selectedTools, advancedOpen, useRecommendedTools, useRecommendedPosture])
 
   const curatedOptions = useMemo(() => {
     const byTool = new Map(connectors.map(connector => [connector.name, new Set(connector.actions || [])]))
     return curatedToolOrder.filter(item => byTool.get(item.tool)?.has(item.action))
   }, [connectors])
 
+  useEffect(() => {
+    if (!open) return
+    if (useRecommendedPosture) {
+      setApprovalPosture(recommendedApprovalPosture(runtime))
+    }
+  }, [open, runtime, useRecommendedPosture])
+
+  useEffect(() => {
+    if (!open || !useRecommendedTools || connectors.length === 0) return
+    const nextTools = recommendedToolsForRuntime(runtime, connectors)
+    setSelectedTools(current => sameToolSelections(current, nextTools) ? current : nextTools)
+  }, [connectors, open, runtime, useRecommendedTools])
+
   const effectiveTenantID = presetTenant?.id || tenantID || tenantOptions[0]?.id || ''
   const trimmedAgentName = agentName.trim()
   const trimmedNewTenantName = newTenantName.trim()
   const hasToolSelection = selectedTools.length > 0
+  const starterPackSummary = summarizeStarterPack(selectedTools)
   const canPreview = !!(presetTenant?.id || (tenantMode === 'existing' && effectiveTenantID))
   const previewBlockedReason = !canPreview
     ? 'Preview uses an existing tenant only. Create the tenant on submit, then regenerate or preview future updates against that tenant.'
@@ -392,6 +481,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
   }
 
   function toggleTool(tool: string, action: string) {
+    setUseRecommendedTools(false)
     setSelectedTools(current =>
       isToolSelected(tool, action)
         ? current.filter(item => !(item.tool === tool && item.action === action))
@@ -435,7 +525,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
       }
       const next = await api.post('/admin/onboarding/bundles/preview', payload) as OnboardingResponse
       setResult(next)
-      setActiveTab('environment')
+      setActiveTab('copy_env')
     } catch (err: any) {
       setError(err?.message || 'Failed to preview onboarding bundle')
     } finally {
@@ -449,7 +539,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
     try {
       const next = await api.post('/admin/onboarding/integrations', buildPayload()) as OnboardingResponse
       setResult(next)
-      setActiveTab('environment')
+      setActiveTab('copy_env')
       onCreated?.(next)
     } catch (err: any) {
       setError(err?.message || 'Failed to create onboarding bundle')
@@ -474,7 +564,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
         tools: selectedTools,
       }) as OnboardingResponse
       setResult(next)
-      setActiveTab('environment')
+      setActiveTab('copy_env')
     } catch (err: any) {
       setError(err?.message || 'Failed to regenerate onboarding bundle')
     } finally {
@@ -495,7 +585,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
         description,
       }) as OnboardingResponse
       setResult(next)
-      setActiveTab('environment')
+      setActiveTab('copy_env')
     } catch (err: any) {
       setError(err?.message || 'Failed to regenerate onboarding bundle with defaults')
     } finally {
@@ -505,7 +595,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
 
   function resetResult() {
     setResult(null)
-    setActiveTab('environment')
+    setActiveTab('copy_env')
     setSelectedArtifactID('')
   }
 
@@ -526,13 +616,13 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
   function resultModeLabel(nextResult: OnboardingResponse) {
     switch (nextResult.mode) {
       case 'preview':
-        return 'Preview bundle'
+        return 'Review starter files'
       case 'regenerated':
-        return 'Regenerated bundle'
+        return 'Rebuilt last setup'
       case 'regenerated_defaults':
-        return 'Regenerated from defaults'
+        return 'Rebuilt from safe defaults'
       default:
-        return 'Created bundle'
+        return 'Connected agent'
     }
   }
 
@@ -541,11 +631,11 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
       <div className="modal onboarding-modal" onClick={event => event.stopPropagation()}>
         <div className="flex-between mb-16">
           <div>
-            <h3>{isRegenerateFlow ? 'Regenerate Agent Bundle' : 'Create Agent Integration'}</h3>
+            <h3>{isRegenerateFlow ? 'Rebuild Agent Setup' : 'Connect Agent'}</h3>
             <p className="table-subtext">
               {isRegenerateFlow
-                ? 'Refresh onboarding artifacts for an existing agent without minting a new API key.'
-                : 'Start the v0.5 golden path by previewing a bundle, then creating a real agent and API key when the generated shape looks right.'}
+                ? 'Reuse the saved setup for this agent and rebuild starter files without minting a new raw API key.'
+                : 'Get one working governed call first. OpenClause will create the agent, issue the API key, and hand you starter files in one flow.'}
             </p>
           </div>
           <button className="btn btn-outline btn-sm" type="button" onClick={onClose}>
@@ -564,12 +654,11 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
           <div>
             {isRegenerateFlow ? (
               <>
-                <strong>Regeneration is non-destructive.</strong> It reuses the persisted tenant and agent, and it does not reissue a raw API key.
+                <strong>Rebuild is non-destructive.</strong> It reuses the saved tenant, agent, and key reference. Rebuilding never reissues a raw API key.
               </>
             ) : (
               <>
-                <strong>Preview is non-destructive.</strong> It reuses an existing tenant and generates a synthetic preview agent id.
-                Creating the integration is what mints the real agent record and API key.
+                <strong>Fast path:</strong> choose a runtime, name the agent, keep the recommended starter pack, then connect it. Review files first only if you want to inspect the output before creating anything.
               </>
             )}
           </div>
@@ -577,7 +666,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
 
         {isRegenerateFlow && presetAgent?.onboarding ? (
           <div className="form-helper-text mb-16">
-            Starting from the last saved onboarding setup for this agent{presetAgent.onboarding.updated_at ? ` (updated ${presetAgent.onboarding.updated_at})` : ''}. You can adjust any field before regenerating.
+            Starting from the last saved setup for this agent{presetAgent.onboarding.updated_at ? ` (updated ${presetAgent.onboarding.updated_at})` : ''}. Open Advanced Setup only if you want to change the runtime, starter tools, or posture before rebuilding.
           </div>
         ) : null}
 
@@ -612,12 +701,12 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
                 <div className="detail-label">What to do next</div>
                 <div className="detail-value">
                   {result.mode === 'preview'
-                    ? 'Review the generated files, then use Create agent and API key when you are ready to mint the real credentials.'
+                    ? 'Review the starter files, then connect the real agent when you are ready to mint credentials.'
                     : result.mode === 'created'
-                      ? 'Load the generated environment, run the smoke test, and verify the first event and session before sharing the bundle.'
+                      ? 'Copy the environment, run the first call, and verify the first event and session before sharing the setup.'
                       : result.api_key?.key_prefix
-                        ? `Load the generated environment, point OPENCLAUSE_API_KEY at the active key matching ${result.api_key.key_prefix}, and rerun the smoke test.`
-                        : 'Create or rotate an API key from Tenant Detail -> API Keys, then rerun regenerate before handing this bundle off.'}
+                        ? `Copy the environment, point OPENCLAUSE_API_KEY at the active key matching ${result.api_key.key_prefix}, and rerun the first call.`
+                        : 'Create or rotate an API key from Tenant Detail -> API Keys, then rebuild this setup again before handing it off.'}
                 </div>
               </div>
             </div>
@@ -663,24 +752,24 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
 
             {result.mode === 'created' && result.api_key?.raw_key ? (
               <div className="form-card mt-16">
-                <div className="flex-between">
-                  <h3>One-time API key</h3>
-                  <CopyIconButton text={result.api_key.raw_key} label="Onboarding API key" />
-                </div>
-                <div className="form-helper-text">
-                  This full key is only returned during create. Copy it now or download the bundle before leaving this result because it will not be shown again.
-                </div>
-                <pre className="code-block">{result.api_key.raw_key}</pre>
+              <div className="flex-between">
+                <h3>One-time API key</h3>
+                <CopyIconButton text={result.api_key.raw_key} label="Onboarding API key" />
               </div>
-            ) : null}
+              <div className="form-helper-text">
+                  This full key is only returned during connect. Copy it now or download the starter files before leaving this result because it will not be shown again.
+              </div>
+              <pre className="code-block">{result.api_key.raw_key}</pre>
+            </div>
+          ) : null}
 
             {(result.mode === 'regenerated' || result.mode === 'regenerated_defaults') && !result.api_key ? (
               <div className="banner-note banner-note-compact mt-16">
-                <div>
-                  <strong>Action required before the smoke test.</strong> This tenant has no active API key to reuse yet. Create or rotate one from the tenant API Keys tab, then regenerate the bundle again.
-                </div>
+              <div>
+                  <strong>Action required before the first call.</strong> This tenant has no active API key to reuse yet. Create or rotate one from the tenant API Keys tab, then rebuild this setup again.
               </div>
-            ) : null}
+            </div>
+          ) : null}
 
             {result.bundle.applied_defaults && result.bundle.applied_defaults.length > 0 ? (
               <div className="banner-note banner-note-compact mt-16">
@@ -704,17 +793,17 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
               ))}
             </div>
 
-	            {activeTab === 'environment' ? (
+	            {activeTab === 'copy_env' ? (
 	              <div className="form-card mt-16">
-                <h3>Environment</h3>
+                <h3>Copy env</h3>
                 <div className="form-helper-text">
                   {result.mode === 'regenerated'
-                    ? 'Generated export script references an existing API key variable because raw keys are only shown at creation time.'
+                    ? 'These exports reference an existing API key variable because raw keys are only shown at connect time.'
                     : result.mode === 'regenerated_defaults'
-                      ? 'This bundle was regenerated from explicit safe defaults. Review the assumed runtime, tools, and approval posture before handing it off.'
+                      ? 'This setup was rebuilt from explicit safe defaults. Review the assumed runtime, starter tools, and posture before handing it off.'
                     : result.mode === 'preview'
-                      ? 'Preview uses placeholder API key values and does not create credentials.'
-                      : 'Generated export script for quick local testing. This create result includes the one-time raw key shown above.'}
+                      ? 'Review mode uses placeholder API key values and does not create credentials.'
+                      : 'Use these exports for quick local testing. This connect result includes the one-time raw key shown above.'}
                 </div>
                 <pre className="code-block">{result.bundle.environment_script}</pre>
                 <div className="form-helper-text mt-16">Generated <code className="mono">.env.example</code> content.</div>
@@ -729,7 +818,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
 
             {activeTab === 'files' ? (
               <div className="form-card mt-16">
-                <h3>Files</h3>
+                <h3>Extra files</h3>
                 <div className="onboarding-artifact-grid">
                   <div className="onboarding-artifact-list">
                     {result.bundle.artifacts.map(artifact => (
@@ -758,10 +847,10 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
               </div>
             ) : null}
 
-            {activeTab === 'test' ? (
+            {activeTab === 'first_call' ? (
               <div className="form-card mt-16">
-                <h3>Test call</h3>
-                <div className="form-helper-text">Use this smoke test once you have the generated environment loaded. Success looks like one event, one session, and an approval record only when the selected action is gated.</div>
+                <h3>Run first call</h3>
+                <div className="form-helper-text">Use this first-run call once you have the generated environment loaded. Success looks like one event, one session, and an approval record only when the selected action is gated.</div>
                 <pre className="code-block">{result.bundle.sample_call}</pre>
               </div>
             ) : null}
@@ -790,16 +879,37 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
               </div>
             ) : null}
 
+            {activeTab === 'history' ? (
+              <div className="form-card mt-16">
+                <h3>Rebuild later</h3>
+                <div className="form-helper-text">
+                  {result.mode === 'preview'
+                    ? 'Preview does not save anything yet. Connect the agent first if you want OpenClause to remember this setup for later rebuilds.'
+                    : 'Open Tenant Detail to rebuild the last working setup, rebuild from safe defaults, or download the latest saved files again later.'}
+                </div>
+                <div className="btn-group mt-16">
+                  <Link to={`/tenants/${result.tenant.id}?tab=agents`} className="btn btn-outline btn-sm">
+                    Open tenant agents
+                  </Link>
+                  {result.mode !== 'preview' ? (
+                    <Link to={`/tenants/${result.tenant.id}?tab=agents`} className="btn btn-outline btn-sm">
+                      Open saved setup
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
 	            <div className="row-actions row-actions-end mt-16">
 	              <button className="btn btn-outline" type="button" onClick={() => void handleDownloadBundle()} disabled={downloading}>
-	                {downloading ? 'Downloading…' : 'Download result bundle'}
+	                {downloading ? 'Downloading…' : 'Download starter files'}
 	              </button>
 	              <button className="btn btn-outline" type="button" onClick={resetResult}>
-	                Back to form
+	                Adjust setup
 	              </button>
               {result.mode === 'preview' ? (
                 <button className="btn btn-primary" type="button" onClick={() => void handleCreate()} disabled={creating}>
-                  {creating ? 'Creating…' : 'Create agent and API key'}
+                  {creating ? 'Connecting…' : 'Connect agent'}
                 </button>
               ) : null}
             </div>
@@ -807,29 +917,43 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
         ) : (
           <>
             <div className="form-card">
-              <h3>1. Choose integration type</h3>
+              <h3>{isRegenerateFlow ? 'Last working setup' : '1. Choose runtime'}</h3>
               <div className="form-helper-text mb-16">
-                Start with the runtime that already owns tool execution. Python and TypeScript are the strongest golden paths when you control the tool loop directly.
+                {isRegenerateFlow
+                  ? 'Keep the saved runtime and starter pack unless you know you need to change them. Advanced Setup lets you change the runtime, starter tools, posture, and metadata.'
+                  : 'Start with the runtime that already owns tool execution. Python and TypeScript are still the simplest first-run paths when you control the tool loop directly.'}
               </div>
-              <div className="onboarding-choice-grid">
-                {runtimeOptions.map(option => (
-                  <label key={option.value} className={`choice-card ${runtime === option.value ? 'is-selected' : ''}`}>
-                    <input
-                      type="radio"
-                      name="runtime"
-                      value={option.value}
-                      checked={runtime === option.value}
-                      onChange={() => setRuntime(option.value)}
-                    />
-                    <span className="choice-card-title">{option.label}</span>
-                    <span className="choice-card-body">{option.description}</span>
-                  </label>
-                ))}
-              </div>
+              {isRegenerateFlow ? (
+                <div className="detail-panel">
+                  <div className="detail-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+                    <div className="detail-label">Current runtime</div>
+                    <div className="detail-value">
+                      <strong>{runtimeOptions.find(option => option.value === runtime)?.label || runtime}</strong>
+                      <div className="form-helper-text">Open Advanced Setup if you want to switch runtimes before rebuilding.</div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="onboarding-choice-grid">
+                  {runtimeOptions.map(option => (
+                    <label key={option.value} className={`choice-card ${runtime === option.value ? 'is-selected' : ''}`}>
+                      <input
+                        type="radio"
+                        name="runtime"
+                        value={option.value}
+                        checked={runtime === option.value}
+                        onChange={() => setRuntime(option.value)}
+                      />
+                      <span className="choice-card-title">{option.label}</span>
+                      <span className="choice-card-body">{option.description}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="form-card mt-16">
-              <h3>2. Choose tenant</h3>
+              <h3>{isRegenerateFlow ? 'Tenant' : '2. Choose tenant'}</h3>
               {presetTenant ? (
                 <div className="detail-panel">
                   <div className="detail-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
@@ -837,7 +961,7 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
                     <div className="detail-value">
                       <strong>{presetTenant.name}</strong>
                       <div className="table-subtext mono">{presetTenant.id}</div>
-                      <div className="form-helper-text">Tenant is fixed because you launched onboarding from an existing tenant context. Runtime, tool, and posture drafts are still preserved while this page stays open.</div>
+                      <div className="form-helper-text">Tenant is fixed because you launched setup from an existing tenant context.</div>
                     </div>
                   </div>
                 </div>
@@ -863,26 +987,26 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
                           <option key={option.id} value={option.id}>{option.name}</option>
                         ))}
                       </select>
-                      <div className="form-helper-text">Preview and create both work here because the tenant already exists.</div>
+                      <div className="form-helper-text">Use an existing tenant when you want the fastest path to one working governed call.</div>
                     </div>
                   ) : (
                     <div className="form-group mt-16">
                       <label htmlFor="onboarding-new-tenant-name">New tenant name</label>
                       <input id="onboarding-new-tenant-name" value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="e.g., Demo Corp" />
-                      <div className="form-helper-text">Creating a new tenant is only applied when you submit the real integration.</div>
+                      <div className="form-helper-text">The tenant is only created when you connect the real agent.</div>
                     </div>
                   )}
-                  <div className="form-helper-text mt-16">Runtime, selected tools, and approval posture stay prefilled while this onboarding modal remains open on the page.</div>
+                  <div className="form-helper-text mt-16">Your runtime, starter tools, and posture stay prefilled while this setup window remains open.</div>
                 </>
               )}
             </div>
 
             <div className="form-card mt-16">
-              <h3>{isRegenerateFlow ? '3. Use existing agent identity' : '3. Create agent identity'}</h3>
+              <h3>{isRegenerateFlow ? 'Agent' : '3. Name agent'}</h3>
               <div className="form-helper-text mb-16">
                 {isRegenerateFlow
-                  ? 'This bundle targets a persisted agent. You can adjust runtime/tool metadata without recreating the agent.'
-                  : 'Agent name is user-provided. Agent id is generated for preview and minted for real on create.'}
+                  ? 'This setup targets a persisted agent. Rebuilding does not recreate the agent.'
+                  : 'The agent name is the main thing a teammate will recognize later when they rebuild or download this setup again.'}
               </div>
               <div className="form-grid form-grid-2">
                 <div className="form-group">
@@ -890,88 +1014,197 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
                   <input id="onboarding-agent-name" value={agentName} onChange={e => setAgentName(e.target.value)} placeholder="e.g., Support Bot" disabled={isRegenerateFlow} />
                   {isRegenerateFlow ? <div className="form-helper-text">Persisted agent id: <code className="mono">{presetAgent?.id}</code></div> : null}
                 </div>
-                <div className="form-group">
-                  <label htmlFor="onboarding-env-label">Environment label</label>
-                  <input id="onboarding-env-label" value={environmentLabel} onChange={e => setEnvironmentLabel(e.target.value)} placeholder="dev" />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="onboarding-owner-name">Owner or team</label>
-                  <input id="onboarding-owner-name" value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="AI Platform" />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="onboarding-description">Description</label>
-                  <input id="onboarding-description" value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional integration note" />
-                </div>
               </div>
             </div>
 
             <div className="form-card mt-16">
-              <h3>4. Choose first governed tools</h3>
+              <h3>{isRegenerateFlow ? 'Starter plan' : '4. Pick starter plan'}</h3>
               <div className="form-helper-text mb-16">
-                Pick one safe read path and one write or approval path when possible. The bundle stays disabled until at least one governed tool is selected.
+                {isRegenerateFlow
+                  ? 'Rebuild uses the saved starter pack by default. Open Advanced Setup only if you want to customize the tools or approval posture first.'
+                  : 'Start with the recommended pack: one safe read path and one write or approval path when possible. You can customize it later.'}
               </div>
               {loadingCatalog ? (
                 <div className="loading">Loading connector catalog…</div>
               ) : curatedOptions.length === 0 ? (
                 <div className="form-helper-text">
-                  No curated golden-path tools are currently available in the connector catalog.
-                  Connect one of the supported pilot actions first, or expect defaults regeneration to stay unavailable until the catalog exposes a compatible action.
+                  No recommended starter pack is available yet because the live connector catalog does not expose a compatible pilot action.
                 </div>
               ) : (
-                <div className="onboarding-choice-grid">
-                  {curatedOptions.map(option => (
-                    <label key={`${option.tool}:${option.action}`} className={`choice-card ${isToolSelected(option.tool, option.action) ? 'is-selected' : ''}`}>
-                      <input
-                        type="checkbox"
-                        checked={isToolSelected(option.tool, option.action)}
-                        onChange={() => toggleTool(option.tool, option.action)}
-                      />
-                      <span className="choice-card-title">{option.title}</span>
-                      <span className="choice-card-body">
-                        <code className="mono">{option.tool}.{option.action}</code>
-                        <br />
-                        {option.hint}
-                      </span>
-                    </label>
-                  ))}
+                <div className="detail-panel">
+                  <div className="detail-row">
+                    <div className="detail-label">Starter tools</div>
+                    <div className="detail-value">
+                      <strong>{starterPackSummary}</strong>
+                      <div className="form-helper-text mt-8">
+                        {useRecommendedTools
+                          ? 'Open Advanced Setup if you want to replace the recommended starter pack.'
+                          : 'You are using a custom starter pack from Advanced Setup.'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="detail-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+                    <div className="detail-label">Approval posture</div>
+                    <div className="detail-value">
+                      <strong>{approvalPostureLabel(approvalPosture)}</strong>
+                      <div className="form-helper-text mt-8">
+                        {useRecommendedPosture
+                          ? 'This is the recommended starting posture for this runtime.'
+                          : 'You are using a custom posture from Advanced Setup.'}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
               {!loadingCatalog && curatedOptions.length > 0 && !hasToolSelection ? (
-                <div className="form-helper-text mt-16">Select at least one tool before previewing, creating, or regenerating a bundle.</div>
+                <div className="form-helper-text mt-16">Pick at least one governed tool in Advanced Setup before continuing.</div>
               ) : null}
             </div>
 
             <div className="form-card mt-16">
-              <h3>5. Choose approval posture</h3>
-              <div className="form-helper-text mb-16">
-                This changes the starter guidance only. Your real tenant policy still decides whether the final call is allowed, denied, or sent to approval.
+              <button className="btn btn-outline btn-sm" type="button" onClick={() => setAdvancedOpen(openValue => !openValue)}>
+                {advancedOpen ? 'Hide Advanced Setup' : 'Open Advanced Setup'}
+              </button>
+              <div className="form-helper-text mt-8">
+                Use this only if you want to customize the starter tools, approval posture, metadata, or review files before connecting the agent.
               </div>
-              <div className="onboarding-choice-grid">
-                {approvalPostureOptions.map(option => (
-                  <label key={option.value} className={`choice-card ${approvalPosture === option.value ? 'is-selected' : ''}`}>
-                    <input
-                      type="radio"
-                      name="approval-posture"
-                      checked={approvalPosture === option.value}
-                      onChange={() => setApprovalPosture(option.value)}
-                    />
-                    <span className="choice-card-title">{option.label}</span>
-                    <span className="choice-card-body">{option.description}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
 
-            {!canPreview ? <div className="form-helper-text mt-16">{previewBlockedReason}</div> : null}
-            {!isRegenerateFlow ? <div className="form-helper-text mt-16">{previewActionHint}</div> : null}
-            {isRegenerateFlow ? (
-              <>
-                <div className="form-helper-text mt-8">{regenerateActionHint}</div>
-                <div className="form-helper-text mt-8">{regenerateDefaultsHint}</div>
-              </>
-            ) : (
-              <div className="form-helper-text mt-8">{createActionHint}</div>
-            )}
+              {advancedOpen ? (
+                <>
+                  <div className="form-grid form-grid-2 mt-16">
+                    <div className="form-group">
+                      <label htmlFor="onboarding-env-label">Environment label</label>
+                      <input id="onboarding-env-label" value={environmentLabel} onChange={e => setEnvironmentLabel(e.target.value)} placeholder="dev" />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="onboarding-owner-name">Owner or team</label>
+                      <input id="onboarding-owner-name" value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="AI Platform" />
+                    </div>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                      <label htmlFor="onboarding-description">Description</label>
+                      <input id="onboarding-description" value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional integration note" />
+                    </div>
+                  </div>
+
+                  {isRegenerateFlow ? (
+                    <div className="form-card mt-16">
+                      <h3>Change runtime</h3>
+                      <div className="onboarding-choice-grid">
+                        {runtimeOptions.map(option => (
+                          <label key={option.value} className={`choice-card ${runtime === option.value ? 'is-selected' : ''}`}>
+                            <input
+                              type="radio"
+                              name="runtime"
+                              value={option.value}
+                              checked={runtime === option.value}
+                              onChange={() => setRuntime(option.value)}
+                            />
+                            <span className="choice-card-title">{option.label}</span>
+                            <span className="choice-card-body">{option.description}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="form-card mt-16">
+                    <div className="flex-between">
+                      <h3>Starter tools</h3>
+                      {curatedOptions.length > 0 ? (
+                        <button
+                          className="btn btn-outline btn-sm"
+                          type="button"
+                          onClick={() => {
+                            setUseRecommendedTools(true)
+                            setSelectedTools(recommendedToolsForRuntime(runtime, connectors))
+                          }}
+                        >
+                          Reset to recommended
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="form-helper-text mb-16">
+                      Pick at least one governed tool. The primary path stays disabled until this list has at least one valid action.
+                    </div>
+                    {loadingCatalog ? (
+                      <div className="loading">Loading connector catalog…</div>
+                    ) : curatedOptions.length === 0 ? (
+                      <div className="form-helper-text">
+                        No curated starter actions are currently available in the connector catalog.
+                      </div>
+                    ) : (
+                      <div className="onboarding-choice-grid">
+                        {curatedOptions.map(option => (
+                          <label key={`${option.tool}:${option.action}`} className={`choice-card ${isToolSelected(option.tool, option.action) ? 'is-selected' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={isToolSelected(option.tool, option.action)}
+                              onChange={() => toggleTool(option.tool, option.action)}
+                            />
+                            <span className="choice-card-title">{option.title}</span>
+                            <span className="choice-card-body">
+                              <code className="mono">{option.tool}.{option.action}</code>
+                              <br />
+                              {option.hint}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="form-card mt-16">
+                    <div className="flex-between">
+                      <h3>Approval posture</h3>
+                      <button
+                        className="btn btn-outline btn-sm"
+                        type="button"
+                        onClick={() => {
+                          setUseRecommendedPosture(true)
+                          setApprovalPosture(recommendedApprovalPosture(runtime))
+                        }}
+                      >
+                        Reset to recommended
+                      </button>
+                    </div>
+                    <div className="form-helper-text mb-16">
+                      This changes the starter guidance only. Your real tenant policy still decides whether the final call is allowed, denied, or sent to approval.
+                    </div>
+                    <div className="onboarding-choice-grid">
+                      {approvalPostureOptions.map(option => (
+                        <label key={option.value} className={`choice-card ${approvalPosture === option.value ? 'is-selected' : ''}`}>
+                          <input
+                            type="radio"
+                            name="approval-posture"
+                            checked={approvalPosture === option.value}
+                            onChange={() => {
+                              setUseRecommendedPosture(false)
+                              setApprovalPosture(option.value)
+                            }}
+                          />
+                          <span className="choice-card-title">{option.label}</span>
+                          <span className="choice-card-body">{option.description}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!isRegenerateFlow ? (
+                    <div className="form-card mt-16">
+                      <div className="flex-between">
+                        <div>
+                          <h3>Review files first</h3>
+                          <div className="form-helper-text mt-8">{previewActionHint}</div>
+                        </div>
+                        <button className="btn btn-outline" type="button" onClick={() => void handlePreview()} disabled={!canSubmitPreview}>
+                          {previewing ? 'Reviewing…' : 'Review starter files'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
 
             <div className="row-actions row-actions-end mt-16">
               <button className="btn btn-outline" type="button" onClick={onClose}>
@@ -980,23 +1213,27 @@ export default function AgentOnboardingFlow({ open, onClose, presetTenant = null
               {isRegenerateFlow ? (
                 <>
                   <button className="btn btn-outline" type="button" onClick={() => void handleRegenerateDefaults()} disabled={!canSubmitRegenerateDefaults}>
-                    {creating ? 'Regenerating…' : 'Regenerate with defaults'}
+                    {creating ? 'Rebuilding…' : 'Rebuild from safe defaults'}
                   </button>
                   <button className="btn btn-primary" type="button" onClick={() => void handleRegenerate()} disabled={!canSubmitRegenerate}>
-                    {creating ? 'Regenerating…' : 'Regenerate bundle'}
+                    {creating ? 'Rebuilding…' : 'Rebuild last setup'}
                   </button>
                 </>
               ) : (
-                <>
-                  <button className="btn btn-outline" type="button" onClick={() => void handlePreview()} disabled={!canSubmitPreview}>
-                    {previewing ? 'Previewing…' : 'Preview bundle'}
-                  </button>
-                  <button className="btn btn-primary" type="button" onClick={() => void handleCreate()} disabled={!canSubmitCreate}>
-                    {creating ? 'Creating…' : 'Create agent and API key'}
-                  </button>
-                </>
+                <button className="btn btn-primary" type="button" onClick={() => void handleCreate()} disabled={!canSubmitCreate}>
+                  {creating ? 'Connecting…' : 'Connect agent'}
+                </button>
               )}
             </div>
+            {!canPreview ? <div className="form-helper-text mt-16">{previewBlockedReason}</div> : null}
+            {isRegenerateFlow ? (
+              <>
+                <div className="form-helper-text mt-8">{regenerateActionHint}</div>
+                <div className="form-helper-text mt-8">{regenerateDefaultsHint}</div>
+              </>
+            ) : (
+              <div className="form-helper-text mt-8">{createActionHint}</div>
+            )}
           </>
         )}
       </div>

@@ -32,6 +32,7 @@ type cliConfig struct {
 	agentName        string
 	agentID          string
 	runtime          string
+	preset           string
 	toolsArg         string
 	approvalPosture  string
 	environmentLabel string
@@ -45,6 +46,8 @@ type cliConfig struct {
 	preview          bool
 	regenerate       bool
 	useDefaults      bool
+	rebuildLast      bool
+	safeDefaults     bool
 }
 
 func main() {
@@ -1081,8 +1084,9 @@ func parseInitAgentConfig(args []string, stderr io.Writer) (*cliConfig, error) {
 	fs.StringVar(&cfg.agentName, "agent-name", "", "Agent name")
 	fs.StringVar(&cfg.agentID, "agent-id", "", "Existing or planned agent ID for local-only generation")
 	fs.StringVar(&cfg.runtime, "runtime", string(onboarding.RuntimePython), "Runtime: python|typescript|langchain|openai_local")
+	fs.StringVar(&cfg.preset, "preset", "", "Starter preset: first-pilot")
 	fs.StringVar(&cfg.toolsArg, "tools", "", "Comma-separated governed tools in tool:action form")
-	fs.StringVar(&cfg.approvalPosture, "approval-posture", "pilot_safe", "Approval posture hint")
+	fs.StringVar(&cfg.approvalPosture, "approval-posture", "", "Approval posture hint (defaults to the recommended value for the runtime)")
 	fs.StringVar(&cfg.environmentLabel, "environment-label", "dev", "Environment label")
 	fs.StringVar(&cfg.ownerName, "owner-name", "", "Owner or team hint")
 	fs.StringVar(&cfg.description, "description", "", "Optional integration description")
@@ -1094,9 +1098,24 @@ func parseInitAgentConfig(args []string, stderr io.Writer) (*cliConfig, error) {
 	fs.BoolVar(&cfg.preview, "preview", false, "Call the server-backed non-destructive onboarding preview flow")
 	fs.BoolVar(&cfg.regenerate, "regenerate", false, "Call the server-backed bundle regeneration flow for an existing agent")
 	fs.BoolVar(&cfg.useDefaults, "use-defaults", false, "Use explicit server-side onboarding defaults when regenerating an existing tenant + agent bundle")
+	fs.BoolVar(&cfg.rebuildLast, "rebuild-last", false, "Friendly alias for --regenerate")
+	fs.BoolVar(&cfg.safeDefaults, "safe-defaults", false, "Friendly alias for --regenerate --use-defaults")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
+	}
+	if cfg.safeDefaults {
+		cfg.regenerate = true
+		cfg.useDefaults = true
+	}
+	if cfg.rebuildLast {
+		cfg.regenerate = true
+	}
+	if err := applyInitAgentPreset(cfg); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.approvalPosture) == "" {
+		cfg.approvalPosture = defaultApprovalPostureForRuntime(cfg.runtime)
 	}
 	if cfg.preview && cfg.regenerate {
 		return nil, fmt.Errorf("--preview and --regenerate cannot be combined")
@@ -1139,6 +1158,48 @@ func parseInitAgentConfig(args []string, stderr io.Writer) (*cliConfig, error) {
 		return nil, fmt.Errorf("--tenant-id or --new-tenant-name is required")
 	}
 	return cfg, nil
+}
+
+func applyInitAgentPreset(cfg *cliConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("cli config required")
+	}
+	switch strings.TrimSpace(cfg.preset) {
+	case "":
+		return nil
+	case "first-pilot":
+		if strings.TrimSpace(cfg.toolsArg) == "" && !(cfg.regenerate && cfg.useDefaults) {
+			cfg.toolsArg = suggestedToolsForRuntime(cfg.runtime)
+		}
+		if strings.TrimSpace(cfg.approvalPosture) == "" {
+			cfg.approvalPosture = defaultApprovalPostureForRuntime(cfg.runtime)
+		}
+		return nil
+	default:
+		return fmt.Errorf("--preset must be one of: first-pilot")
+	}
+}
+
+func suggestedToolsForRuntime(runtime string) string {
+	switch strings.TrimSpace(runtime) {
+	case string(onboarding.RuntimeTypeScript):
+		return "slack:slack.channel.list,slack:slack.msg.post"
+	case string(onboarding.RuntimeLangChain):
+		return "jira:jira.issue.list,jira:jira.issue.create"
+	case string(onboarding.RuntimeOpenAILocal):
+		return "postgres:query.readonly,github:issue.create"
+	case "", string(onboarding.RuntimePython):
+		fallthrough
+	default:
+		return "slack:slack.channel.list,slack:slack.msg.post"
+	}
+}
+
+func defaultApprovalPostureForRuntime(runtime string) string {
+	if strings.TrimSpace(runtime) == string(onboarding.RuntimeOpenAILocal) {
+		return "read_only_first"
+	}
+	return "pilot_safe"
 }
 
 func useServerMode(cfg *cliConfig) bool {
@@ -1414,15 +1475,15 @@ func printVerificationLinks(stdout io.Writer, links []onboarding.VerificationLin
 func humanMode(mode string) string {
 	switch strings.TrimSpace(mode) {
 	case "preview":
-		return "Server preview"
+		return "Review starter files"
 	case "regenerated":
-		return "Server regenerate"
+		return "Rebuilt last setup"
 	case "regenerated_defaults":
-		return "Server regenerate with defaults"
+		return "Rebuilt from safe defaults"
 	case "created":
-		return "Server create"
+		return "Connected agent"
 	case "local":
-		return "Local-only generation"
+		return "Local starter files"
 	default:
 		if strings.TrimSpace(mode) == "" {
 			return "Unknown"
@@ -1577,7 +1638,10 @@ func chatContentText(content any) string {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  openclause init-agent [--server-url URL [--auth-token TOKEN|--auth-profile NAME]] [--preview|--regenerate [--use-defaults]] [--local-only] --tenant-id TENANT|--new-tenant-name NAME --agent-name NAME --runtime python|typescript|langchain|openai_local --tools tool:action[,tool:action]")
+	fmt.Fprintln(w, "  openclause init-agent --server-url URL --tenant-id TENANT --agent-name NAME --preset first-pilot")
+	fmt.Fprintln(w, "  openclause init-agent --server-url URL --tenant-id TENANT --agent-id AGENT --rebuild-last")
+	fmt.Fprintln(w, "  openclause init-agent --server-url URL --tenant-id TENANT --agent-id AGENT --safe-defaults")
+	fmt.Fprintln(w, "  openclause init-agent [--server-url URL [--auth-token TOKEN|--auth-profile NAME]] [--preview|--regenerate [--use-defaults]|--rebuild-last|--safe-defaults] [--local-only] [--preset first-pilot] --tenant-id TENANT|--new-tenant-name NAME --agent-name NAME --runtime python|typescript|langchain|openai_local [--tools tool:action[,tool:action]]")
 	fmt.Fprintln(w, "  openclause auth login [--server-url URL] [--profile NAME] [--email EMAIL] [--password PASSWORD|--password-stdin]")
 	fmt.Fprintln(w, "  openclause auth whoami [--server-url URL|--profile NAME]")
 	fmt.Fprintln(w, "  openclause auth logout [--server-url URL|--profile NAME]")

@@ -109,12 +109,15 @@ describe('Tenants page', () => {
     renderRoute(<Tenants />, { path: '/tenants', route: '/tenants' })
 
     expect(await screen.findByText(/no tenants yet/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /create agent integration/i }))
+    await user.click(screen.getByRole('button', { name: 'Connect Agent' }))
 
-    expect(screen.getByLabelText(/new tenant name/i)).toBeInTheDocument()
-    expect(screen.queryByLabelText(/^tenant$/i)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /preview bundle/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /create agent and api key/i })).toBeDisabled()
+    const modalHeading = await screen.findByRole('heading', { name: /connect agent/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+
+    expect(within(modal).getByLabelText(/new tenant name/i)).toBeInTheDocument()
+    expect(within(modal).queryByLabelText(/^tenant$/i)).not.toBeInTheDocument()
+    expect(within(modal).queryByRole('button', { name: /review starter files/i })).not.toBeInTheDocument()
+    expect(within(modal).getByRole('button', { name: /^connect agent$/i })).toBeDisabled()
   })
 
   it('opens the onboarding flow, previews artifacts, and renders verification links', async () => {
@@ -215,14 +218,17 @@ describe('Tenants page', () => {
     renderRoute(<Tenants />, { path: '/tenants', route: '/tenants' })
 
     expect(await screen.findByText('Alpha Corp')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /create agent integration/i }))
-    expect(screen.getByRole('button', { name: /preview bundle/i })).toBeDisabled()
-    await user.selectOptions(screen.getByLabelText(/^tenant$/i), 'tenant-a')
-    await user.type(screen.getByLabelText(/agent name/i), 'Support Bot')
-    await user.click(screen.getByRole('button', { name: /preview bundle/i }))
+    await user.click(screen.getByRole('button', { name: 'Connect Agent' }))
+    const modalHeading = await screen.findByRole('heading', { name: /connect agent/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    expect(within(modal).queryByRole('button', { name: /review starter files/i })).not.toBeInTheDocument()
+    await user.selectOptions(within(modal).getByLabelText(/^tenant$/i), 'tenant-a')
+    await user.type(within(modal).getByLabelText(/agent name/i), 'Support Bot')
+    await user.click(within(modal).getByRole('button', { name: /open advanced setup/i }))
+    await user.click(within(modal).getByRole('button', { name: /review starter files/i }))
 
-    expect(await screen.findByRole('heading', { name: /environment/i })).toBeInTheDocument()
-    expect(screen.getByText(/preview only: nothing was created yet/i)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /copy env/i })).toBeInTheDocument()
+    expect(screen.getByText(/review only: nothing has been created yet/i)).toBeInTheDocument()
     expect(screen.getByText(/python sdk wrapper starter bundle/i)).toBeInTheDocument()
     expect(screen.getByText(/goal: send one call, see one event, see one session/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^files$/i }))
@@ -230,24 +236,24 @@ describe('Tenants page', () => {
     await user.click(screen.getByRole('button', { name: /starter runtime file/i }))
     expect(screen.getByText(/def governed_call/i)).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    await user.click(screen.getByRole('button', { name: /3\. verify/i }))
     expect(screen.getByRole('link', { name: /open audit trail/i })).toHaveAttribute('href', '/events?agent_id=preview-support-bot&tenant_id=tenant-a')
     expect(screen.getByRole('link', { name: /open sessions/i })).toHaveAttribute('href', '/sessions?agent_id=preview-support-bot&tenant_id=tenant-a')
     expect(screen.getByRole('link', { name: /open approvals/i })).toHaveAttribute('href', '/approvals?tenant_id=tenant-a')
 
-    await user.click(screen.getByRole('button', { name: /download result bundle/i }))
+    await user.click(screen.getByRole('button', { name: /download starter files/i }))
     expect(downloadSpy).toHaveBeenCalled()
 
-    await user.click(screen.getByRole('button', { name: /create agent and api key/i }))
+    await user.click(within(modal).getByRole('button', { name: /^connect agent$/i }))
     expect(await screen.findByRole('heading', { name: /one-time api key/i })).toBeInTheDocument()
-    expect(screen.getByText(/this full key is only returned during create/i)).toBeInTheDocument()
+    expect(screen.getByText(/this full key is only returned during connect/i)).toBeInTheDocument()
     expect(screen.getByText(/sk-oc-demo-raw/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /copy onboarding api key/i }))
     expect(writeTextSpy).toHaveBeenCalledWith('sk-oc-demo-raw')
 
-    await user.click(screen.getByRole('button', { name: /back to form/i }))
-    expect(screen.getByLabelText(/agent name/i)).toHaveValue('Support Bot')
-    expect(screen.getByRole('checkbox', { name: /slack channel list/i })).toBeChecked()
+    await user.click(screen.getByRole('button', { name: /adjust setup/i }))
+    expect(within(modal).getByLabelText(/agent name/i)).toHaveValue('Support Bot')
+    expect(within(modal).getAllByText(/slack channel list/i).length).toBeGreaterThan(0)
   }, 20000)
 
   it('explains when curated tools are unavailable and keeps bundle actions disabled', async () => {
@@ -266,13 +272,15 @@ describe('Tenants page', () => {
     renderRoute(<Tenants />, { path: '/tenants', route: '/tenants' })
 
     expect(await screen.findByText('Alpha Corp')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /create agent integration/i }))
-    await user.selectOptions(screen.getByLabelText(/^tenant$/i), 'tenant-a')
-    await user.type(screen.getByLabelText(/agent name/i), 'Support Bot')
+    await user.click(screen.getByRole('button', { name: 'Connect Agent' }))
+    const modalHeading = await screen.findByRole('heading', { name: /connect agent/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    await user.selectOptions(within(modal).getByLabelText(/^tenant$/i), 'tenant-a')
+    await user.type(within(modal).getByLabelText(/agent name/i), 'Support Bot')
 
-    expect(screen.getByText(/no curated golden-path tools are currently available/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /preview bundle/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /create agent and api key/i })).toBeDisabled()
+    expect(screen.getByText(/no recommended starter pack is available yet/i)).toBeInTheDocument()
+    expect(within(modal).queryByRole('button', { name: /review starter files/i })).not.toBeInTheDocument()
+    expect(within(modal).getByRole('button', { name: /^connect agent$/i })).toBeDisabled()
   })
 
   it('opens onboarding directly from the overview query shortcut and does not reopen after close', async () => {
@@ -292,10 +300,10 @@ describe('Tenants page', () => {
 
     renderRoute(<Tenants />, { path: '/tenants', route: '/tenants?onboarding=1' })
 
-    expect(await screen.findByRole('heading', { name: /create agent integration/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /connect agent/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^close$/i }))
-    await waitFor(() => expect(screen.queryByRole('heading', { name: /create agent integration/i })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('heading', { name: /connect agent/i })).not.toBeInTheDocument())
   })
 
   it('supports the TypeScript golden path in the onboarding preview flow', async () => {
@@ -355,11 +363,14 @@ describe('Tenants page', () => {
     renderRoute(<Tenants />, { path: '/tenants', route: '/tenants' })
 
     expect(await screen.findByText('Alpha Corp')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /create agent integration/i }))
-    await user.click(screen.getByRole('radio', { name: /typescript \/ node service/i }))
-    await user.selectOptions(screen.getByLabelText(/^tenant$/i), 'tenant-a')
-    await user.type(screen.getByLabelText(/agent name/i), 'Node Bot')
-    await user.click(screen.getByRole('button', { name: /preview bundle/i }))
+    await user.click(screen.getByRole('button', { name: 'Connect Agent' }))
+    const modalHeading = await screen.findByRole('heading', { name: /connect agent/i })
+    const modal = modalHeading.closest('.modal') as HTMLElement
+    await user.click(within(modal).getByRole('radio', { name: /typescript \/ node service/i }))
+    await user.selectOptions(within(modal).getByLabelText(/^tenant$/i), 'tenant-a')
+    await user.type(within(modal).getByLabelText(/agent name/i), 'Node Bot')
+    await user.click(within(modal).getByRole('button', { name: /open advanced setup/i }))
+    await user.click(within(modal).getByRole('button', { name: /review starter files/i }))
 
     expect(await screen.findByText(/typescript sdk wrapper starter bundle/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^files$/i }))
@@ -432,19 +443,20 @@ describe('Tenants page', () => {
     expect(await screen.findByText('Alpha Corp')).toBeInTheDocument()
     const betaRow = screen.getByRole('link', { name: 'Beta Works' }).closest('tr')
     expect(betaRow).not.toBeNull()
-    await user.click(within(betaRow as HTMLElement).getByRole('button', { name: /onboard agent/i }))
+    await user.click(within(betaRow as HTMLElement).getByRole('button', { name: /connect agent/i }))
 
-    const modal = screen.getByRole('heading', { name: /create agent integration/i }).closest('.modal')
+    const modal = screen.getByRole('heading', { name: /connect agent/i }).closest('.modal')
     expect(modal).not.toBeNull()
     expect(screen.getByText(/using current tenant/i)).toBeInTheDocument()
     expect(within(modal as HTMLElement).getByText('Beta Works')).toBeInTheDocument()
     expect(screen.queryByLabelText(/^tenant$/i)).not.toBeInTheDocument()
 
     await user.type(screen.getByLabelText(/agent name/i), 'Beta Bot')
-    await user.click(screen.getByRole('button', { name: /preview bundle/i }))
+    await user.click(screen.getByRole('button', { name: /open advanced setup/i }))
+    await user.click(screen.getByRole('button', { name: /review starter files/i }))
 
     expect(await screen.findByText(/python sdk wrapper starter bundle/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /verify in console/i }))
+    await user.click(screen.getByRole('button', { name: /3\. verify/i }))
     expect(screen.getByRole('link', { name: /open sessions/i })).toHaveAttribute('href', '/sessions?agent_id=preview-beta-bot&tenant_id=tenant-b')
   })
 })
